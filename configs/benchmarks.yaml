@@ -1,0 +1,34 @@
+# Per-benchmark dataset settings. Copy into a generate_setting_*.yaml or pass
+# fields directly via CLI overrides.
+#
+# Default split is the one most commonly evaluated; override with --split.
+# field_overrides lets you patch the column names if a HF mirror diverges.
+
+deepmath:
+  dataset: deepmath
+  default_split: train         # used for both training and the cooling-off holdout
+
+math500:
+  dataset: math500
+  default_split: test
+
+aime2024:
+  dataset: aime2024
+  default_split: train         # the 30-problem set; HF mirror has only one split
+
+amc:
+  dataset: amc
+  default_split: train
+
+olympiadbench:
+  dataset: olympiadbench
+  default_split: train
+  dataset_config: OE_TO_maths_en_COMP    # English math, open-ended, competition
+
+minerva:
+  dataset: minerva
+  default_split: test
+
+college_math:
+  dataset: college_math
+  default_split: test

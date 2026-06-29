@@ -1,0 +1,22 @@
+dataset: squad
+split: train
+start_index: 0
+max_samples: 1500
+central_model: Qwen/Qwen3-4B-Instruct-2507
+peer_models:
+  - google/gemma-3-4b-it
+  - microsoft/Phi-4-mini-instruct
+  - Qwen/Qwen2.5-Coder-7B-Instruct
+# Gemma is kept context-deprived for RAG: it answers SQuAD questions WITHOUT the
+# passage, so it stays weak at RAG while strong at math -> per-task reliability
+# differences for the trust memory to discover.
+deprive_context_models:
+  - gemma
+generation_batch_size: 4
+max_new_tokens: 256
+temperature: 0.2
+top_p: 0.95
+use_vllm: true
+dtype: bfloat16
+device: cuda:0
+adversarial_rate: 0.0

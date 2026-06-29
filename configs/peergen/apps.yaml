@@ -1,0 +1,20 @@
+dataset: apps
+split: train
+start_index: 0
+# Filtered pool (stdin-style + short solution) is ~1149; cap generously so we keep >=1000
+# after execution-grading drops any unparmeable records.
+max_samples: 1150
+central_model: Qwen/Qwen3-4B-Instruct-2507
+peer_models:
+  - google/gemma-3-4b-it
+  - microsoft/Phi-4-mini-instruct
+  - Qwen/Qwen2.5-Coder-7B-Instruct
+deprive_context_models: []
+generation_batch_size: 4
+max_new_tokens: 768
+temperature: 0.2
+top_p: 0.95
+use_vllm: true
+dtype: bfloat16
+device: cuda:0
+adversarial_rate: 0.0

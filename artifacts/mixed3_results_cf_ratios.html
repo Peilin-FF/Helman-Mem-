@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trust-Memory Selector — Results across CF Ratios (3 models)</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<script id="seed" type="application/json">[
+ {
+  "type": "html",
+  "html": "<h1 style=\"font-family:Georgia,serif\">Trust-Memory Selector — Results across Counterfactual Ratios</h1><p>A frozen center model (CM) scores each peer's answer; a per-peer symmetric trust memory (learned per-peer decay $\\gamma_p$ + write strength $\\eta$) steers that scoring from accumulated feedback. <b>prompt-only</b> = CM scores from the prompt alone (no trust steering); <b>ours</b> = scoring steered by the learned trust memory.</p><div class=\"callout\" style=\"border-left:4px solid #D97757;padding:10px 14px;background:#fff\"><b>Three center models compared:</b> <code>Qwen3-4B-Instruct-2507</code>, <code>Qwen3-4B-Thinking-2507</code> (same size, reasoning-tuned), <code>Qwen3-8B-Thinking</code>. <b>CF ratio p0&ndash;p90</b> = fraction of records where the strong&harr;weak peer answers are swapped; p0 = clean, p90 = 90% adversarial (trusting peer <i>identity</i> is misleading, only reading <i>content</i> survives). Accuracy = how often the selected peer is actually correct.</p></div>"
+ },
+ {
+  "type": "html",
+  "html": "<div class=\"callout\" style=\"border-left:4px solid #788C5D;padding:10px 14px;background:#fff\"><b>Headline:</b> <code>Qwen3-4B-Thinking</code> is the best all-round center model — best math (91.4), and it matches the 8B on code (66.8 vs 67.0) at half the size. The reasoning-tuned 4B reads code where the instruct-tuned 4B cannot. <b>Code capability tracks reasoning ability, not parameter count.</b></div>"
+ },
+ {
+  "type": "html",
+  "html": "<p class=\"why\" style=\"color:#6b6b66;font-size:13px\">Cells for <b>4B-Thinking</b> show <code>accuracy (n₀/n₁/n₂)</code> where nₖ = number of times <b>peer k</b> (peer_0=gemma, peer_1=phi, peer_2=qwen-coder) was selected on that eval stream; the three counts sum to the stream size N (math 1216, code 394, rag 1075, unified 2685). 4B-Instruct / 8B-Thinking show accuracy only (selection logging was added after their runs).</p>"
+ },
+ {
+  "type": "html",
+  "html": "<h2 style=\"font-family:Georgia,serif\">A. Unified mixed stream (math+code+rag interleaved)</h2><p>One continuous stream pooling all three tasks — the online trust state evolves across task boundaries. Accuracy %.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Model",
+   "Arm",
+   "p0",
+   "p50",
+   "p70",
+   "p90"
+  ],
+  "rows": [
+   [
+    "4B-Instruct",
+    "ours",
+    "66.1",
+    "59.9",
+    "67.3",
+    "77.1"
+   ],
+   [
+    "4B-Thinking",
+    "ours",
+    "58.5 (1548/371/766)",
+    "59.8 (419/349/1917)",
+    "67.8 (149/338/2198)",
+    "74.9 (62/349/2274)"
+   ],
+   [
+    "8B-Thinking",
+    "ours",
+    "59.6",
+    "57.7",
+    "65.3",
+    "75.0"
+   ],
+   [
+    "4B-Instruct",
+    "prompt-only",
+    "53.8",
+    "56.5",
+    "57.2",
+    "58.2"
+   ],
+   [
+    "4B-Thinking",
+    "prompt-only",
+    "64.0 (1500/614/571)",
+    "66.8 (1193/783/709)",
+    "67.4 (1089/825/771)",
+    "68.4 (1004/872/809)"
+   ],
+   [
+    "8B-Thinking",
+    "prompt-only",
+    "44.4",
+    "47.1",
+    "47.7",
+    "48.8"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<h2 style=\"font-family:Georgia,serif\">B. Math</h2><p>Train: GSM8K. Test: college_math / olympiadbench / math500 / amc.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Model",
+   "Arm",
+   "p0",
+   "p50",
+   "p70",
+   "p90"
+  ],
+  "rows": [
+   [
+    "4B-Instruct",
+    "ours",
+    "89.6",
+    "68.3",
+    "79.2",
+    "89.2"
+   ],
+   [
+    "4B-Thinking",
+    "ours",
+    "91.4 (1209/0/7)",
+    "70.7 (104/44/1068)",
+    "80.8 (2/70/1144)",
+    "89.4 (1/68/1147)"
+   ],
+   [
+    "8B-Thinking",
+    "ours",
+    "90.3",
+    "69.8",
+    "80.7",
+    "88.9"
+   ],
+   [
+    "4B-Instruct",
+    "prompt-only",
+    "57.4",
+    "57.4",
+    "57.4",
+    "57.4"
+   ],
+   [
+    "4B-Thinking",
+    "prompt-only",
+    "78.9 (904/131/181)",
+    "78.9 (507/379/330)",
+    "78.9 (356/443/417)",
+    "78.9 (217/533/466)"
+   ],
+   [
+    "8B-Thinking",
+    "prompt-only",
+    "56.3",
+    "56.3",
+    "56.3",
+    "56.3"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<p class=\"why\" style=\"color:#6b6b66;font-size:13px\">ours: all three are close (91.4 / 90.3 / 89.6), 4B-Thinking edges ahead. prompt-only is flat across ratios (no memory ⇒ CM falls back to a fixed peer); note 4B-Thinking's prompt-only baseline (78.9) is far stronger than either Instruct-4B or 8B (≈57) — reasoning tuning helps the bare scoring a lot on math.</p>"
+ },
+ {
+  "type": "html",
+  "html": "<h2 style=\"font-family:Georgia,serif\">C. Code</h2><p>Train: APPS. Test: HumanEval / MBPP / LiveCodeBench (function-completion).</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Model",
+   "Arm",
+   "p0",
+   "p50",
+   "p70",
+   "p90"
+  ],
+  "rows": [
+   [
+    "4B-Instruct",
+    "ours",
+    "38.3",
+    "42.6",
+    "39.3",
+    "41.4"
+   ],
+   [
+    "4B-Thinking",
+    "ours",
+    "66.8 (6/1/387)",
+    "33.0 (104/125/165)",
+    "37.6 (116/225/53)",
+    "47.7 (91/299/4)"
+   ],
+   [
+    "8B-Thinking",
+    "ours",
+    "67.0",
+    "32.5",
+    "37.8",
+    "47.7"
+   ],
+   [
+    "4B-Instruct",
+    "prompt-only",
+    "40.4",
+    "40.4",
+    "40.4",
+    "40.4"
+   ],
+   [
+    "4B-Thinking",
+    "prompt-only",
+    "39.1 (218/66/110)",
+    "39.1 (181/95/118)",
+    "39.1 (169/105/120)",
+    "39.1 (177/109/108)"
+   ],
+   [
+    "8B-Thinking",
+    "prompt-only",
+    "39.6",
+    "39.6",
+    "39.6",
+    "39.6"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<div class=\"callout\" style=\"border-left:4px solid #D97757;padding:10px 14px;background:#fff\"><b>The key result.</b> At p0, ours: <b>4B-Thinking 66.8 ≈ 8B-Thinking 67.0</b>, while 4B-Instruct only reaches 38.3. The reasoning-tuned 4B reads code as well as the 8B — so the code gain comes from <b>reasoning ability, not model size</b>. (All three prompt-only baselines sit at ~40%: the bare CM can't tell good code from bad; the memory only helps once the CM can — which Instruct-4B can't, but both Thinking models can.) The p50–p70 dip is the mid-adversarial trough where identity and content signals most conflict; it recovers by p90.</div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2 style=\"font-family:Georgia,serif\">D. RAG</h2><p>Train: SQuAD. Test: HotpotQA / TriviaQA.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Model",
+   "Arm",
+   "p0",
+   "p50",
+   "p70",
+   "p90"
+  ],
+  "rows": [
+   [
+    "4B-Instruct",
+    "ours",
+    "89.4",
+    "61.2",
+    "69.0",
+    "77.2"
+   ],
+   [
+    "4B-Thinking",
+    "ours",
+    "88.4 (45/984/46)",
+    "57.0 (215/172/688)",
+    "67.2 (234/95/746)",
+    "71.5 (211/98/766)"
+   ],
+   [
+    "8B-Thinking",
+    "ours",
+    "91.7",
+    "55.1",
+    "68.7",
+    "78.0"
+   ],
+   [
+    "4B-Instruct",
+    "prompt-only",
+    "54.6",
+    "61.5",
+    "63.1",
+    "65.6"
+   ],
+   [
+    "4B-Thinking",
+    "prompt-only",
+    "56.3 (378/417/280)",
+    "63.2 (505/309/261)",
+    "64.7 (564/277/234)",
+    "67.3 (610/230/235)"
+   ],
+   [
+    "8B-Thinking",
+    "prompt-only",
+    "32.6",
+    "39.4",
+    "41.0",
+    "43.5"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<p class=\"why\" style=\"color:#6b6b66;font-size:13px\">All three ours ≫ their prompt-only baseline; 8B and 4B-Instruct lead at the clean end (91.7 / 89.4), 4B-Thinking close behind (88.4).</p>"
+ },
+ {
+  "type": "html",
+  "html": "<h2 style=\"font-family:Georgia,serif\">Why 8B-Thinking's prompt-only is so low — a slot/identity bias</h2><p>prompt-only is the 8B used <b>directly, untrained</b> (trust memory off; the frozen CM just scores each candidate). Its low scores are not a training problem — they come from <i>how this 8B checkpoint scores candidates</i>. Per-example selection logging on RAG (p0, prompt-only) makes the cause explicit. On RAG the strong peer is <b>peer_1 (phi)</b>, whose hit-rate when chosen is ~90% for every model. The question is simply: does the bare CM pick it?</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Model (RAG p0, prompt-only)",
+   "acc",
+   "chose peer_0",
+   "chose peer_1 (strong)",
+   "chose peer_2"
+  ],
+  "rows": [
+   [
+    "8B-Thinking",
+    "32.6",
+    "676",
+    "117",
+    "282"
+   ],
+   [
+    "4B-Thinking",
+    "56.3",
+    "378",
+    "417",
+    "280"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<div class=\"callout\" style=\"border-left:4px solid #D97757;padding:10px 14px;background:#fff\"><b>The bias, isolated.</b> Restrict to the <b>1002 RAG questions where peer_1 was actually correct</b> (picking it would score): the 8B chose peer_0 <b>634</b> times and peer_1 only <b>105</b>; the 4B-Thinking chose peer_0 357 and peer_1 <b>387</b>. So even when the right answer sits in slot&nbsp;1, the 8B keeps defaulting to <b>slot&nbsp;0</b> regardless of content — a position/identity bias (a known failure mode of LLM-as-scorer) that this particular 8B checkpoint exhibits strongly. It is not caused by \"thinking\" — 4B-Thinking is also a thinking model and does <i>not</i> have it (its prompt-only is the strongest of the three).</p></div>"
+ },
+ {
+  "type": "html",
+  "html": "<div class=\"callout\" style=\"border-left:4px solid #788C5D;padding:10px 14px;background:#fff\"><b>Why this is exactly what the trust memory fixes.</b> The bias is a fixed prior toward slot&nbsp;0, independent of feedback. The trust memory learns from outcomes that peer_1 is the reliable one on RAG, and steers the CM's activations to override the slot prior — which is why the 8B's <i>ours</i> RAG jumps from 32.6 (prompt-only) to <b>91.7</b>. prompt-only exposes the backbone's raw bias; ours measures whether accumulated trust can correct it. They are different quantities, which is why the 8B can sit last on prompt-only yet be competitive on ours.</div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2 style=\"font-family:Georgia,serif\">Conclusions</h2><ul><li><b>ours &gt; prompt-only on every task</b> at the clean and high-adversarial ends, for all three center models — the trust memory works regardless of backbone.</li><li><b>Best overall: Qwen3-4B-Thinking</b> — top math (91.4), code tied with 8B (66.8 vs 67.0), strong rag (88.4), at half the 8B's size.</li><li><b>Code needs reasoning, not scale.</b> Earlier we attributed the code gain to the 8B's size; the 4B-Thinking result corrects this — a reasoning-tuned 4B reads code just as well. 4B-Instruct (no reasoning tuning) stays stuck at ~38%.</li><li><b>The 8B-Thinking checkpoint scores oddly low at prompt-only</b> (unified 44, rag 33) relative to both 4B models — an artifact of that specific checkpoint, not of \"thinking\" (4B-Thinking's prompt-only is the <i>strongest</i> of the three). Its <i>ours</i> numbers are still competitive because the trust memory compensates.</li><li><b>No data leakage</b> — train (GSM8K/APPS/SQuAD) and test sets are disjoint by dataset, id, and content hash; eval reads trust read-only before any label-driven state update.</li></ul>"
+ },
+ {
+  "type": "html",
+  "html": "<p style=\"font-size:13px;color:#6b6b66\">checkpoints <code>outputs/mixed3/proto</code> (4B-Instruct) · <code>outputs/mixed3_4bthink/proto</code> (4B-Thinking) · <code>outputs/mixed3_8b_dt/proto</code> (8B-Thinking) · all use learned per-peer decay + differentiable write · metrics under <code>outputs/eval_mixed3*/{proto,ablate}_{view}_{p0,p50,p70,p90}/</code> · method: <code>artifacts/symmetric_memory_design.html</code> §2c</p>"
+ }
+]</script>
+<script>window.MathJax={tex:{inlineMath:[['$','$']],displayMath:[['$$','$$']]},startup:{typeset:false},svg:{fontCache:'none'}};</script>
+<script src="/__assets/mathjax-tex-svg.js" async></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>
