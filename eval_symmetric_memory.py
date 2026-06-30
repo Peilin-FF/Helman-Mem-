@@ -29,6 +29,7 @@ from feedback_state.newarch_loader import apply_torch_fp8_shim, load_central_mod
 
 apply_torch_fp8_shim()
 
+from peft import PeftModel
 from transformers import AutoTokenizer
 
 from feedback_state.data import JsonlDataset
@@ -52,6 +53,8 @@ def parse_args():
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--checkpoint", type=Path, default=None)
     p.add_argument("--central_model", default=None)
+    p.add_argument("--center_lora_checkpoint", type=Path, default=None,
+                   help="Optional LoRA selector checkpoint to attach to the central model.")
     p.add_argument("--offline_data", type=Path, default=None)
     p.add_argument("--init_state", choices=["warm", "cold"], default="cold")
     p.add_argument("--reset_state", choices=["stream", "example"], default="stream")
@@ -64,6 +67,8 @@ def parse_args():
     p.add_argument("--peer_mode", choices=["joint", "one"], default=None,
                    help="joint: all peers in one prompt, CM compares (default). "
                         "one: each peer scored alone in its own prompt (no cross-comparison).")
+    p.add_argument("--max_examples", type=int, default=None,
+                   help="Optional cap for quick diagnostic evals; full eval by default.")
     p.add_argument("--output", type=Path, default=None)
     return p.parse_args()
 
@@ -85,6 +90,7 @@ def main():
     dtype = dtype_from_name(str(cfg.get("dtype", "bfloat16")))
     ckpt = Path(cfg["checkpoint"]) if cfg.get("checkpoint") else None
     model_name = str(cfg.get("central_model", "Qwen/Qwen3-0.6B"))
+    lora_ckpt = Path(cfg["center_lora_checkpoint"]) if cfg.get("center_lora_checkpoint") else None
     num_peers = int(cfg.get("num_peers", 3))
     max_len = int(cfg.get("max_length", 8192))
     init_state = str(cfg.get("init_state", "cold")).lower()
@@ -101,7 +107,8 @@ def main():
     peer_mode = str(cfg.get("peer_mode", "joint"))   # joint (compare all) | one (score each alone)
     whiten = as_bool(cfg.get("whiten"), write_mode == "carry")
 
-    tok = AutoTokenizer.from_pretrained(model_name, local_files_only=bool(cfg.get("local_files_only", False)))
+    tok_src = str(lora_ckpt) if lora_ckpt is not None and (lora_ckpt / "tokenizer_config.json").exists() else model_name
+    tok = AutoTokenizer.from_pretrained(tok_src, local_files_only=bool(cfg.get("local_files_only", False)))
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     if PEER_SEP not in tok.get_vocab():
@@ -112,6 +119,15 @@ def main():
     base = load_central_model(model_name, dtype=dtype, local_files_only=bool(cfg.get("local_files_only", False)),
                               device_map=device_map, max_memory=max_memory)
     base.resize_token_embeddings(len(tok))
+    if lora_ckpt is not None:
+        adapter_dir = lora_ckpt / "lora_adapter"
+        if not adapter_dir.exists():
+            raise FileNotFoundError(f"LoRA adapter not found: {adapter_dir}")
+        base = PeftModel.from_pretrained(
+            base, str(adapter_dir), is_trainable=False,
+            local_files_only=bool(cfg.get("local_files_only", False)),
+        )
+        print(f"[eval_sym] attached center LoRA from {adapter_dir}", flush=True)
     if device_map is None:
         base = base.to(device=device, dtype=dtype)
     else:
@@ -167,6 +183,9 @@ def main():
 
     cand_ids = candidate_token_ids(tok, num_peers)
     records = JsonlDataset(cfg["offline_data"]).records
+    max_examples = cfg.get("max_examples")
+    if max_examples is not None:
+        records = records[:int(max_examples)]
     correct = total = 0
     selections = []  # per-example: which peer was picked, was it right, per-peer scores+labels
     with torch.no_grad():
@@ -261,7 +280,7 @@ def main():
         for s in selections:
             f.write(json.dumps(s) + "\n")
     print(f"[eval_sym/steer/{phi_mode}] {cfg['offline_data']}: accuracy={acc*100:.2f} over {total} "
-          f"(ablate={ablate}, reset={reset_state}, joint={use_joint})")
+          f"(ablate={ablate}, reset={reset_state}, peer_mode={peer_mode}, use_joint={use_joint})")
     steerer.remove()
 
 

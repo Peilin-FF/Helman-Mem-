@@ -1,0 +1,47 @@
+# Joint training: LoRA-AR center + Sigma Mem/ActivationSteerer in one run.
+# Train at 4096 tokens; eval remains driven by configs/symmetric_memory.yaml (8192).
+central_model: /mnt/data/peilin/HF_MODEL/Qwen3-0.6B
+num_peers: 3
+peer_models:
+  - google/gemma-3-4b-it
+  - microsoft/Phi-4-mini-instruct
+  - Qwen/Qwen2.5-Coder-7B-Instruct
+
+rank: 16
+task_types: [math, code, rag]
+phi_mode: proto
+proto_tau: 0.1
+phi_layer_frac: 0.5
+eta_init: 0.3
+gamma_init: 0.9
+use_joint: off
+write_mode: addr
+decay_mode: scalar
+per_peer_decay: true
+diff_write: true
+
+identity_mode: anon
+peer_mode: one
+include_context: true
+max_length: 4096
+offline_data: data/mixed_train_labeled.jsonl
+
+train_center_lora: true
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target_modules: [q_proj, v_proj]
+lora_learning_rate: 0.0001
+
+learning_rate: 0.001
+weight_decay: 0.0
+gradient_accumulation_steps: 4
+warmup_ratio: 0.03
+max_grad_norm: 1.0
+logging_steps: 50
+gradient_checkpointing: false
+
+freeze_backbone: true
+dtype: bfloat16
+device: cuda:0
+local_files_only: true

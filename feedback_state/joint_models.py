@@ -24,14 +24,16 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 VARIANT_AR = "ar_shared_state_selector"
+VARIANT_BCE = "joint_bce_shared_state_selector"
 
 
 @dataclass
 class JointSelectionOutput:
     loss: torch.Tensor | None
-    logits: torch.Tensor | None = None          # reserved
+    logits: torch.Tensor | None = None          # [B, P] for BCE
     candidate_logprobs: torch.Tensor | None = None  # [B, P] (AR eval)
 
 
@@ -79,6 +81,7 @@ class JointDeltaMemSelector(nn.Module):
         self.model_variant = str(model_variant)
         self.use_shared_state = bool(use_shared_state)
         hidden_size = int(base_model.config.hidden_size)
+        self.peer_head = nn.Linear(hidden_size, 1)
         # Identity trust-readout head: maps a peer's per-peer state S_s (content-free,
         # identity-keyed) to a scalar trust bias added to that candidate's logp. This is
         # the "selection stays anonymous, identity only feeds the feedback channel" path
@@ -288,8 +291,12 @@ class JointDeltaMemSelector(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor | None = None,
+        peer_target: torch.Tensor | None = None,
+        peer_spans: torch.Tensor | None = None,
         **kwargs: Any,
     ):
+        if self.model_variant == VARIANT_BCE:
+            return self._bce_forward(input_ids, attention_mask, peer_target, peer_spans)
         return self._ar_forward(input_ids, attention_mask, labels)
 
     def _ar_forward(self, input_ids, attention_mask, labels):
@@ -298,6 +305,41 @@ class JointDeltaMemSelector(nn.Module):
             labels=labels, use_cache=False, return_dict=True,
         )
         return JointSelectionOutput(loss=out.loss, logits=None)
+
+    def _pool_peer_spans(self, hidden: torch.Tensor, peer_spans: torch.Tensor) -> torch.Tensor:
+        """Mean-pool hidden states over each peer response token span."""
+        B, P, _ = peer_spans.shape
+        H = hidden.size(-1)
+        pooled = hidden.new_zeros(B, P, H)
+        T = hidden.size(1)
+        idx = torch.arange(T, device=hidden.device)
+        for p in range(P):
+            start = peer_spans[:, p, 0].clamp(min=0, max=T)
+            end = peer_spans[:, p, 1].clamp(min=0, max=T)
+            mask = (idx.unsqueeze(0) >= start.unsqueeze(1)) & (idx.unsqueeze(0) < end.unsqueeze(1))
+            mask = mask.to(hidden.dtype).unsqueeze(-1)
+            denom = mask.sum(dim=1).clamp_min(1.0)
+            pooled[:, p] = (hidden * mask).sum(dim=1) / denom
+        return pooled
+
+    def _bce_forward(self, input_ids, attention_mask, peer_target, peer_spans):
+        out = self.base_model(
+            input_ids=input_ids, attention_mask=attention_mask,
+            output_hidden_states=True, use_cache=False, return_dict=True,
+        )
+        hidden = out.hidden_states[-1]
+        if peer_spans is not None:
+            pooled = self._pool_peer_spans(hidden, peer_spans.to(hidden.device))
+        else:
+            m = attention_mask.unsqueeze(-1).to(hidden.dtype)
+            pooled = ((hidden * m).sum(1) / m.sum(1).clamp_min(1.0)).unsqueeze(1).expand(-1, self.num_peers, -1)
+        logits = self.peer_head(pooled.to(self.peer_head.weight.dtype)).squeeze(-1)
+        loss = None
+        if peer_target is not None:
+            loss = F.binary_cross_entropy_with_logits(
+                logits.float(), peer_target.to(logits.device, torch.float32)
+            )
+        return JointSelectionOutput(loss=loss, logits=logits)
 
     # ---- evaluation: AR candidate scoring --------------------------------------
     def score_one_candidate(
@@ -369,7 +411,8 @@ class JointDeltaMemSelector(nn.Module):
         if hasattr(self.base_model, "peft_config"):
             self.base_model.save_pretrained(output / "lora_adapter")
         torch.save(
-            {"num_peers": self.num_peers, "model_variant": self.model_variant,
+            {"peer_head": self.peer_head.state_dict(),
+             "num_peers": self.num_peers, "model_variant": self.model_variant,
              "use_shared_state": self.use_shared_state},
             output / "joint_selector_head.pt",
         )
@@ -388,3 +431,8 @@ class JointDeltaMemSelector(nn.Module):
             self.base_model = PeftModel.from_pretrained(
                 self.base_model, str(lora_dir), is_trainable=False
             ).to(next(self.base_model.parameters()).device)
+        head_path = ckpt / "joint_selector_head.pt"
+        if head_path.exists():
+            payload = torch.load(head_path, map_location=map_location)
+            if "peer_head" in payload:
+                self.peer_head.load_state_dict(payload["peer_head"])

@@ -426,7 +426,7 @@ class ActivationSteerer(nn.Module):
         self.gain = nn.Parameter(torch.tensor(0.0))   # sigmoid-free scalar gain, learned
         self.steer_vec = None  # rank-dim tensor, set by caller per candidate; None = off
         self._handles = []
-        layers = base_model.model.layers
+        layers = _decoder_layers(base_model)
         start = max(0, int(len(layers) * layer_frac))
         for layer in layers[start:]:
             self._handles.append(layer.register_forward_hook(self._hook))
@@ -448,3 +448,20 @@ class ActivationSteerer(nn.Module):
             h.remove()
         self._handles = []
 
+
+def _decoder_layers(model):
+    """Return the underlying decoder layer list, unwrapping PEFT/LoRA wrappers."""
+    seen = set()
+    stack = [model]
+    while stack:
+        cur = stack.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        if hasattr(cur, "layers"):
+            return cur.layers
+        for attr in ("model", "base_model"):
+            nxt = getattr(cur, attr, None)
+            if nxt is not None and nxt is not cur:
+                stack.append(nxt)
+    raise AttributeError("Could not locate decoder layers on central model")

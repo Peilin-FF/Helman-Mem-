@@ -29,7 +29,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, get_cosine_schedul
 
 from feedback_state.data import JsonlDataset, counterfactual_filter_kwargs, filter_records
 from feedback_state.generation import dtype_from_name
-from feedback_state.joint_data import VARIANT_AR, JointInputCollator, candidate_token_ids
+from feedback_state.joint_data import VARIANT_AR, VARIANT_BCE, JointInputCollator, candidate_token_ids
 from feedback_state.joint_models import JointDeltaMemSelector
 from feedback_state.joint_prompt import PEER_SEP, build_joint_prompt
 from feedback_state.joint_write import resolve_write_policy, run_write_policy
@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--offline_data", type=Path, default=None)
     p.add_argument("--output_dir", type=Path, default=None)
-    p.add_argument("--model_variant", choices=[VARIANT_AR], default=None)
+    p.add_argument("--model_variant", choices=[VARIANT_AR, VARIANT_BCE], default=None)
     p.add_argument("--use_shared_state", type=str, default=None)
     p.add_argument("--use_lora", type=str, default=None,
                    help="Attach LoRA to the central model. Default: true iff "
@@ -207,7 +207,7 @@ def main() -> None:
     per_peer = as_bool(cfg.get("per_peer_state"), False)
     peer_models_cfg = [str(x) for x in (cfg.get("peer_models") or [])]
     if per_peer:
-        assert variant == VARIANT_AR, "per_peer_state supports the AR variant"
+        assert variant == VARIANT_AR, "per_peer_state supports only the AR variant"
         assert use_shared, "per_peer_state requires use_shared_state=true"
     per_peer_ar = per_peer and variant == VARIANT_AR
     cand_ids = candidate_token_ids(tokenizer, model.num_peers) if per_peer_ar else None

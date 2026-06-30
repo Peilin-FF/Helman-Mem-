@@ -5,7 +5,7 @@ configs/local/
 # logs/*
 outputs/*
 data/
-
+logs/
 # Python caches
 __pycache__/
 *.pyc

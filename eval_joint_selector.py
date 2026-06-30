@@ -33,7 +33,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from feedback_state.data import JsonlDataset, counterfactual_filter_kwargs, filter_records
 from feedback_state.generation import dtype_from_name
-from feedback_state.joint_data import VARIANT_AR, JointInputCollator, candidate_token_ids
+from feedback_state.joint_data import VARIANT_AR, VARIANT_BCE, JointInputCollator, candidate_token_ids, char_to_token_spans
 from feedback_state.joint_models import JointDeltaMemSelector
 from feedback_state.joint_prompt import PEER_SEP, ar_target_text, peer_response_char_spans
 from feedback_state.joint_write import assert_scoring_readonly, build_short_answers, resolve_write_policy, run_write_policy
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--checkpoint", type=Path, default=None)
     p.add_argument("--offline_data", type=Path, default=None)
-    p.add_argument("--model_variant", choices=[VARIANT_AR], default=None)
+    p.add_argument("--model_variant", choices=[VARIANT_AR, VARIANT_BCE], default=None)
     p.add_argument("--use_shared_state", type=str, default=None)
     p.add_argument("--per_peer_state", type=str, default=None,
                    help="Per-peer state matrices (each peer identity has its own state). "
@@ -201,7 +201,7 @@ def main() -> None:
     bucket_pred = _bkt == "pred"
     peer_models_cfg = [str(x) for x in (cfg.get("peer_models") or [])]
     if per_peer:
-        assert variant == VARIANT_AR, "per_peer_state eval supports the AR variant"
+        assert variant == VARIANT_AR, "per_peer_state eval supports only the AR variant"
         print("[eval_joint] per_peer_state mode: per-peer state matrices, per-candidate scoring passes")
 
     def canon_peer(slot_name: str, slot: int) -> int:
@@ -419,18 +419,30 @@ def main() -> None:
             _task_conf[(rec_task_true, rec_task)] += 1
         else:
             rec_task = rec_task_true
-        prompt, _ = peer_response_char_spans(
+        prompt, char_spans = peer_response_char_spans(
             v["question"], v["slot_names"], v["slot_texts"],
             context=v["context"] or None, include_identity=collator.include_identity, real=real)
         enc = tok(prompt, add_special_tokens=True,
+                  return_offsets_mapping=(variant == VARIANT_BCE),
                   truncation=True, max_length=collator.max_length)
         ids = torch.tensor([enc["input_ids"]], device=device)
         mask = torch.ones_like(ids)
+        peer_spans = None
+        if variant == VARIANT_BCE:
+            spans = char_to_token_spans(list(enc.get("offset_mapping", [])), char_spans)
+            peer_spans = torch.zeros(1, num_peers, 2, dtype=torch.long, device=device)
+            for s in range(min(num_peers, len(spans))):
+                peer_spans[0, s, 0], peer_spans[0, s, 1] = spans[s]
         # 1) CANDIDATE SCORING — always read-only (write_enabled=False inside
         #    score_candidates). Verify S is unchanged when debugging.
         norm_before = model.state_norm() if debug_write else 0.0
         with torch.no_grad():
-            if per_peer:
+            if variant == VARIANT_BCE:
+                out = model(input_ids=ids, attention_mask=mask, peer_spans=peer_spans)
+                logps = out.logits[0]
+                if real < num_peers:
+                    logps = logps.clone(); logps[real:] = float("-inf")
+            elif per_peer:
                 # per-peer AR: score each candidate " Peer s" with peer-s's OWN state
                 rec_task_pp = task_type_of(record)
                 model.set_write_enabled(False)

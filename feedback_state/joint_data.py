@@ -26,11 +26,31 @@ from feedback_state.joint_prompt import (
 from feedback_state.permutations import apply_perm, canonical_peer_view, invert_perm, named_order
 
 VARIANT_AR = "ar_shared_state_selector"
+VARIANT_BCE = "joint_bce_shared_state_selector"
 
 
 def candidate_token_ids(tokenizer, num_peers: int) -> list[list[int]]:
     """Token ids for ' Peer 0' .. ' Peer {N-1}' continuations (AR eval scoring)."""
     return [tokenizer.encode(" " + s, add_special_tokens=False) for s in candidate_peer_strings(num_peers)]
+
+
+def char_to_token_spans(offsets: list[tuple[int, int]], char_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Map [char_start, char_end) response spans to [tok_start, tok_end) spans."""
+    out = []
+    for cstart, cend in char_spans:
+        if cstart < 0:
+            out.append((0, 0))
+            continue
+        tok_start, tok_end = -1, -1
+        for ti, (a, b) in enumerate(offsets):
+            if a == b:
+                continue
+            if b > cstart and a < cend:
+                if tok_start < 0:
+                    tok_start = ti
+                tok_end = ti + 1
+        out.append((tok_start if tok_start >= 0 else 0, tok_end if tok_end >= 0 else 0))
+    return out
 
 
 class JointInputCollator:
@@ -118,30 +138,39 @@ class JointInputCollator:
                     target_floats=target)
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        rows, labels_rows, peer_targets, slot_to_peer = [], [], [], []
+        rows, labels_rows, span_rows, peer_targets, slot_to_peer = [], [], [], [], []
         write_meta: list[dict[str, Any]] = []  # per-example data for the separate WRITE pass
         for feature in features:
             v = self.record_views(feature)
-            prompt, _ = peer_response_char_spans(
+            prompt, char_spans = peer_response_char_spans(
                 v["question"], v["slot_names"], v["slot_texts"],
                 context=v["context"] or None, include_identity=self.include_identity, real=v["real"],
             )
-            # AR target = the SLOT holding the canonical correct peer.
-            tgt_peer = canonical_target_peer_id(v["correctness_by_peer"])
-            tgt_slot = invert_perm(v["perm"])[tgt_peer] if tgt_peer is not None else 0
-            tgt_ids = self.tok.encode(" " + ar_target_text([tgt_slot]), add_special_tokens=False)
-            # Reserve room for the target so the joint prompt is truncated (tail
-            # dropped, head kept) WITHOUT ever clipping the 'Peer j' target. The
-            # prompt ends with 'Answer:', so the surviving structure is always
-            # [Question ... peers ... Answer:] + [ Peer j].
-            prompt_budget = max(1, self.max_length - len(tgt_ids))
-            enc = self.tok(prompt, add_special_tokens=True,
-                           truncation=True, max_length=prompt_budget)
-            prompt_ids = list(enc["input_ids"])
-            ids = prompt_ids + tgt_ids
-            lbl = [-100] * len(prompt_ids) + tgt_ids
-            rows.append(ids)
-            labels_rows.append(lbl)
+            if self.variant == VARIANT_AR:
+                # AR target = the SLOT holding the canonical correct peer.
+                tgt_peer = canonical_target_peer_id(v["correctness_by_peer"])
+                tgt_slot = invert_perm(v["perm"])[tgt_peer] if tgt_peer is not None else 0
+                tgt_ids = self.tok.encode(" " + ar_target_text([tgt_slot]), add_special_tokens=False)
+                # Reserve room for the target so the joint prompt is truncated (tail
+                # dropped, head kept) WITHOUT ever clipping the 'Peer j' target. The
+                # prompt ends with 'Answer:', so the surviving structure is always
+                # [Question ... peers ... Answer:] + [ Peer j].
+                prompt_budget = max(1, self.max_length - len(tgt_ids))
+                enc = self.tok(prompt, add_special_tokens=True,
+                               truncation=True, max_length=prompt_budget)
+                prompt_ids = list(enc["input_ids"])
+                ids = prompt_ids + tgt_ids
+                lbl = [-100] * len(prompt_ids) + tgt_ids
+                rows.append(ids)
+                labels_rows.append(lbl)
+            elif self.variant == VARIANT_BCE:
+                enc = self.tok(prompt, add_special_tokens=True, return_offsets_mapping=True,
+                               truncation=True, max_length=self.max_length)
+                rows.append(list(enc["input_ids"]))
+                offsets = list(enc.get("offset_mapping", []))
+                span_rows.append(char_to_token_spans(offsets, char_spans))
+            else:
+                raise ValueError(f"unknown joint selector variant: {self.variant}")
             peer_targets.append([1.0 if c else 0.0 for c in v["correctness_by_slot"]])
             slot_to_peer.append(list(v["perm"]))
             # Per-example data the trainer needs to build the separate write pass
@@ -165,7 +194,15 @@ class JointInputCollator:
             "write_meta": write_meta,
         }
         batch.update(self._pad(rows))
-        batch["labels"] = self._pad_labels(labels_rows, len(batch["input_ids"][0]))
+        if self.variant == VARIANT_BCE:
+            P = self.num_peers
+            spans = torch.zeros(len(span_rows), P, 2, dtype=torch.long)
+            for b, sr in enumerate(span_rows):
+                for p in range(min(P, len(sr))):
+                    spans[b, p, 0], spans[b, p, 1] = sr[p][0], sr[p][1]
+            batch["peer_spans"] = spans
+        else:
+            batch["labels"] = self._pad_labels(labels_rows, len(batch["input_ids"][0]))
         return batch
 
     def _pad(self, rows: list[list[int]]) -> dict[str, torch.Tensor]:
