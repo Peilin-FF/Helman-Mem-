@@ -105,11 +105,24 @@ def main():
         tok.pad_token = tok.eos_token
     if PEER_SEP not in tok.get_vocab():
         tok.add_special_tokens({"additional_special_tokens": [PEER_SEP]})
-    base = load_central_model(model_name, dtype=dtype, local_files_only=bool(cfg.get("local_files_only", False)))
+    device_map = cfg.get("device_map") or None  # e.g. "auto" to shard a big model across GPUs
+    # max_memory: per-device cap to force an even split (e.g. {0:"40GiB",1:"40GiB",...}).
+    # Config gives it as a {gpu_index: "NNGiB"} map; keys may be str, coerce to int.
+    _mm = cfg.get("max_memory") or None
+    max_memory = {int(k): v for k, v in _mm.items()} if isinstance(_mm, dict) else None
+    base = load_central_model(model_name, dtype=dtype, local_files_only=bool(cfg.get("local_files_only", False)),
+                              device_map=device_map, max_memory=max_memory)
     base.resize_token_embeddings(len(tok))
-    base = base.to(device=device, dtype=dtype)
+    if device_map is None:
+        base = base.to(device=device, dtype=dtype)
+    else:
+        # device_map already placed shards across GPUs. Drive I/O from the input-embedding's
+        # device so cm_context_vector / score_one_candidate put tensors where the model expects.
+        device = base.get_input_embeddings().weight.device
     model = JointDeltaMemSelector(base, num_peers=num_peers, model_variant=VARIANT_AR,
-                                  use_shared_state=False, delta_cfg=cfg, freeze_backbone=True).to(device)
+                                  use_shared_state=False, delta_cfg=cfg, freeze_backbone=True)
+    if device_map is None:
+        model = model.to(device)  # device_map: base shards stay placed; selector has no own params here
     model.eval()  # backbone frozen; we never train it
 
     # phi source: soft task-centroid address (the only mode); centroids computed below.

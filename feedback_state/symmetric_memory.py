@@ -436,7 +436,9 @@ class ActivationSteerer(nn.Module):
             return output
         hs = output[0] if isinstance(output, tuple) else output
         add = self.gain * self.proj(self.steer_vec.to(self.proj.weight.dtype))  # [hidden]
-        hs = hs + add.to(hs.dtype)
+        # .to(hs.device) makes this safe under device_map sharding (the hooked layer may live
+        # on a different GPU than the steerer's proj). No-op when everything is on one device.
+        hs = hs + add.to(device=hs.device, dtype=hs.dtype)
         if isinstance(output, tuple):
             return (hs,) + tuple(output[1:])
         return hs

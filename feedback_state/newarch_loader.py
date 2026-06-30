@@ -29,10 +29,15 @@ def _model_type(config: Any) -> str:
     return str(getattr(config, "model_type", "") or "")
 
 
-def load_central_model(model_name: str, dtype, local_files_only: bool):
+def load_central_model(model_name: str, dtype, local_files_only: bool, device_map=None, max_memory=None):
     """Return a text-only CausalLM for `model_name`, handling the multimodal-packaged
     Ministral-3 / Qwen3.5 checkpoints. Falls back to plain AutoModelForCausalLM for every
-    ordinary model (Qwen3, SmolLM3, ...), so behaviour is unchanged on the main env."""
+    ordinary model (Qwen3, SmolLM3, ...), so behaviour is unchanged on the main env.
+
+    device_map: passed to from_pretrained for multi-GPU sharding (e.g. "auto" splits a big
+    model across visible GPUs). Default None = single-device (caller does .to(device)).
+    max_memory: optional per-device cap dict (e.g. {0:"40GiB",1:"40GiB"}) to force an even
+    split so one GPU does not get loaded to OOM during the backward of diff_write."""
     apply_torch_fp8_shim()
     from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -60,6 +65,9 @@ def load_central_model(model_name: str, dtype, local_files_only: bool):
     # Qwen3.5 (qwen3_5) registers a *ForCausalLM and loads directly (hybrid: only the
     # full-attention layers are Delta-Mem-wrappable; the GatedDeltaNet layers are left
     # untouched). Everything else also goes through the plain loader.
-    return AutoModelForCausalLM.from_pretrained(
-        model_name, dtype=dtype, local_files_only=local_files_only
-    )
+    kw = {"dtype": dtype, "local_files_only": local_files_only}
+    if device_map is not None:
+        kw["device_map"] = device_map
+    if max_memory is not None:
+        kw["max_memory"] = max_memory
+    return AutoModelForCausalLM.from_pretrained(model_name, **kw)

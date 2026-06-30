@@ -106,12 +106,21 @@ def main():
         tok.pad_token = tok.eos_token
     if PEER_SEP not in tok.get_vocab():
         tok.add_special_tokens({"additional_special_tokens": [PEER_SEP]})
-    base = load_central_model(model_name, dtype=dtype, local_files_only=bool(cfg.get("local_files_only", False)))
+    device_map = cfg.get("device_map") or None  # "auto" to shard a big model (e.g. 9B) across GPUs
+    _mm = cfg.get("max_memory") or None
+    max_memory = {int(k): v for k, v in _mm.items()} if isinstance(_mm, dict) else None
+    base = load_central_model(model_name, dtype=dtype, local_files_only=bool(cfg.get("local_files_only", False)),
+                              device_map=device_map, max_memory=max_memory)
     base.resize_token_embeddings(len(tok))
-    base = base.to(device=device, dtype=dtype)
+    if device_map is None:
+        base = base.to(device=device, dtype=dtype)
+    else:
+        device = base.get_input_embeddings().weight.device
     # use_shared_state=False: the frozen CM does the scoring; trust enters via the memory, not delta-mem.
     model = JointDeltaMemSelector(base, num_peers=num_peers, model_variant=VARIANT_AR,
-                                  use_shared_state=False, delta_cfg=cfg, freeze_backbone=True).to(device)
+                                  use_shared_state=False, delta_cfg=cfg, freeze_backbone=True)
+    if device_map is None:
+        model = model.to(device)
     model.eval()
 
     if phi_mode != "proto":
