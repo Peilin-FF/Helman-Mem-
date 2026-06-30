@@ -13,7 +13,8 @@ set -u
 cd "$(dirname "$0")/.."
 HFM=/workspace/cloud_android/fengpeilin/HF_Models
 OVERLAY=/workspace/cloud_android/fengpeilin/tf5_overlay
-CFG=configs/symmetric_memory.yaml
+TRAIN_CFG=configs/symmetric_memory_train4096.yaml  # train at 4096
+EVAL_CFG=configs/symmetric_memory.yaml             # eval at 8192
 TRAIN=data/v3/mixed_train_labeled.jsonl
 read -r -a GPUS <<< "${GPUS:-2 3 4 5 7}"   # 0/1/6 hold leaked mem
 LOGD=logs/m5; mkdir -p "$LOGD"
@@ -40,7 +41,7 @@ for entry in "${MODELS[@]}"; do
   PP=$(pp_prefix "$ov")
   HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH="$PP" CUDA_VISIBLE_DEVICES="$gpu" \
     python -u train_symmetric_memory.py \
-      --config "$CFG" --central_model "$mdir" \
+      --config "$TRAIN_CFG" --central_model "$mdir" \
       --phi_mode proto --use_joint off --per_peer_decay on --diff_write on \
       --offline_data "$TRAIN" --output_dir "outputs/m5_${tag}/proto" \
       > "$LOGD/train_${tag}.log" 2>&1 &
@@ -71,7 +72,7 @@ for job in "${jobs[@]}"; do
   extra=""; [ "$arm" = ablate ] && extra="--ablate_memory"
   HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH="$PP" CUDA_VISIBLE_DEVICES="$gpu" \
     python -u eval_symmetric_memory.py \
-      --config "$CFG" --central_model "$mdir" \
+      --config "$EVAL_CFG" --central_model "$mdir" \
       --checkpoint "outputs/m5_${tag}/proto" --phi_mode proto --use_joint off --per_peer_decay on $extra \
       --offline_data "$data" --output "outputs/eval_m5_${tag}/${arm}_${v}_${p}" \
       > "$LOGD/eval_${tag}_${arm}_${v}_${p}.log" 2>&1 &

@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symmetric Trust Memory — Interactive Visualization</title>
+<style>
+  :root{
+    --ivory:#FAF9F5; --ink:#3D3D3A; --clay:#D97757; --slate:#141413;
+    --olive:#788C5D; --teal:#5A8C96; --line:#D1CFC5; --soft:#E8E6DE;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ivory);color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.55;}
+  .page{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  h1{font-family:Georgia,serif;font-size:1.9em;margin:0 0 6px}
+  h2{font-family:Georgia,serif;font-size:1.32em;margin:38px 0 4px;border-bottom:1.5px solid var(--line);padding-bottom:6px}
+  h3{font-family:Georgia,serif;font-size:1.05em;margin:0 0 8px}
+  p{margin:8px 0}
+  .lede{font-size:1.05em;color:#55534d}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#efeee8;
+    padding:1px 5px;border-radius:5px;font-size:0.9em}
+  .card{background:#fff;border:1.5px solid var(--line);border-radius:13px;padding:18px 20px;margin:16px 0}
+  .callout{border-left:4px solid var(--clay);background:#fff;border:1.5px solid var(--line);
+    border-radius:10px;padding:12px 16px;margin:14px 0}
+  .callout.olive{border-left-color:var(--olive)}
+  .tag{display:inline-block;font-size:0.72em;letter-spacing:.04em;text-transform:uppercase;
+    color:#fff;background:var(--clay);padding:2px 8px;border-radius:6px;font-weight:600}
+  .tag.olive{background:var(--olive)}
+  .tag.slate{background:var(--slate)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:780px){.grid2{grid-template-columns:1fr}}
+  .ctrls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
+  button{font:inherit;font-size:.9em;border:1.5px solid var(--line);background:#fff;color:var(--ink);
+    padding:6px 12px;border-radius:8px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--clay);color:var(--clay)}
+  button.primary{background:var(--clay);color:#fff;border-color:var(--clay)}
+  button.primary:hover{background:#c5663f;color:#fff}
+  button.olive{background:var(--olive);color:#fff;border-color:var(--olive)}
+  button.olive:hover{background:#67794f;color:#fff}
+  button.ghost{background:transparent}
+  label.sl{display:flex;align-items:center;gap:8px;font-size:.85em;min-width:200px}
+  input[type=range]{accent-color:var(--clay);flex:1}
+  .mono{font-family:ui-monospace,monospace;font-size:.85em}
+  .pill{display:inline-block;background:#efeee8;border-radius:6px;padding:2px 9px;margin:2px;
+    font-family:ui-monospace,monospace;font-size:.82em}
+  .pill b{color:var(--clay)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.8em;color:#666;margin-top:6px}
+  .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;margin-right:4px}
+  canvas{display:block;max-width:100%}
+  .cap{font-size:.82em;color:#777;margin-top:6px}
+  table{width:100%;border-collapse:collapse;font-size:.88em;margin-top:8px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--soft)}
+  th{border-bottom:1.5px solid var(--line)}
+  .flex{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+  .center{display:flex;justify-content:center;align-items:center}
+  .stat{font-family:ui-monospace,monospace;font-size:.95em}
+  .good{color:var(--olive);font-weight:600}
+  .bad{color:var(--clay);font-weight:600}
+  .muted{color:#999}
+  ul.why{margin:6px 0 0;padding-left:20px}
+  ul.why li{margin:3px 0}
+  .eq{text-align:center;font-family:ui-monospace,monospace;font-size:1.02em;background:#1c1b19;color:#E8E6DE;
+    padding:10px 14px;border-radius:9px;margin:10px 0;overflow-x:auto}
+  .eq b{color:#E8A37C}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Symmetric Trust Memory — what the model actually learns</h1>
+  <p class="lede">Three interactive panels for the per-peer state <code>M_p</code>, its update rule, and the address
+  vector <code>φ</code>. Everything is computed <b>live in the browser</b> — the eigenvalues, eigenvectors and
+  matrices you see are real (Jacobi eigensolver), not pre-rendered numbers. Drag, feed events, and watch the
+  spectrum move. Companion to <code>symmetric_memory_design.html</code>.</p>
+
+  <div class="callout">
+    <span class="tag slate">the object</span>
+    <p style="margin:8px 0 0">Each peer carries a symmetric matrix <code>M_p = M_pᵀ</code>, updated once per outcome event:</p>
+    <div class="eq">M_p &nbsp;←&nbsp; <b>γ</b>·M_p &nbsp;+&nbsp; <b>η</b>·<b>s</b>·<b>φ</b><b>φ</b>ᵀ</div>
+    <p style="margin:6px 0 0;font-size:.92em">
+      <code>γ∈(0,1]</code> decay (how long memory lasts) · <code>η</code> write strength ·
+      <code>s∈[-1,1]</code> "how good" (the judge's verdict) · <code>φ</code> "good at <i>what</i>" (the task/aspect address).
+      The read at decision time is the steering direction <code>steer_p = M_p·φ*</code>.</p>
+    <p style="margin:8px 0 0;font-size:.85em;color:#777"><b>Note on size.</b> In the real method <code>M_p</code> is
+      <b>16×16</b> (<code>rank: 16</code> in <code>configs/symmetric_memory.yaml</code>). The panels below use 4–8 dims
+      <i>only so the heatmaps and spectra are legible</i> — every property (symmetry, Weyl bound, boundedness, eigenvector
+      recovery) is dimension-independent; the small size is a teaching scale, not the method.</p>
+  </div>
+
+  <!-- ============================ PANEL 1 ============================ -->
+  <h2>1 · The learned state <code>M_p</code> — a matrix, not a score</h2>
+  <p>A scalar reputation collapses everything into one number. The matrix keeps a <b>direction</b>: its
+  top eigenvector is "the kind of task this peer is reliably good at", and the eigenvalue is "how strongly".
+  Feed events and watch the spectrum separate.</p>
+
+  <div class="card">
+    <div class="ctrls">
+      <button class="olive" onclick="P1.feed('signal')">+ success on competence A</button>
+      <button onclick="P1.feed('signal2')">+ success on competence B (2nd direction)</button>
+      <button class="ghost" onclick="P1.feed('noise')">+ random-direction event (noise)</button>
+      <button class="ghost" onclick="P1.feed('flip')">+ inconsistent ± (flip)</button>
+      <button onclick="P1.idle()">idle step (decay only)</button>
+      <button onclick="P1.auto()">▶ auto-run 40 signal</button>
+      <button class="ghost" onclick="P1.reset()">reset</button>
+    </div>
+    <div class="ctrls">
+      <label class="sl">γ decay <input type="range" id="p1g" min="0.5" max="1.0" step="0.01" value="0.92" oninput="P1.draw()"><span class="mono" id="p1gv">0.92</span></label>
+      <label class="sl">η write <input type="range" id="p1e" min="0.05" max="0.6" step="0.01" value="0.3" oninput="P1.draw()"><span class="mono" id="p1ev">0.30</span></label>
+    </div>
+
+    <div class="flex">
+      <div>
+        <h3>M_p &nbsp;<span class="muted mono" style="font-weight:400">(6×6, symmetric)</span></h3>
+        <canvas id="p1mat" width="240" height="240"></canvas>
+        <div class="cap">diverging colormap — <span class="sw" style="background:#D97757"></span>positive
+          <span class="sw" style="background:#FAF9F5;border:1px solid #ccc"></span>0
+          <span class="sw" style="background:#5A8C96"></span>negative. Note it stays symmetric (mirror across the diagonal) for free.</div>
+      </div>
+      <div style="flex:1;min-width:300px">
+        <h3>Eigenvalues &nbsp;<span class="muted mono" style="font-weight:400">(spectrum)</span></h3>
+        <canvas id="p1eig" width="430" height="180"></canvas>
+        <div class="cap">The <span style="color:#788C5D;font-weight:600">top eigenvalue</span> is the dominant "trust strength".
+          A clean separation top-vs-bulk = a real, recovered competence direction.</div>
+        <div style="margin-top:10px">
+          <span class="pill">events fed: <b id="p1n">0</b></span>
+          <span class="pill">‖M‖₂ = <b id="p1norm">0.00</b></span>
+          <span class="pill">bound η/(1−γ) = <b id="p1bound">—</b></span>
+          <span class="pill">top λ = <b id="p1top">0.00</b></span>
+          <span class="pill">align(v₁, signal) = <b id="p1align">—</b></span>
+        </div>
+      </div>
+    </div>
+    <div class="callout olive" style="margin-top:14px">
+      <p style="margin:0;font-size:.92em"><b>Try this:</b> spam "+ aligned success" — the top λ climbs roughly linearly and the top
+      eigenvector locks onto the signal (align → 1.0). Then spam "noise" — λ creeps up only as ~√N and stays in the bulk.
+      "flip" cancels to nothing. Drop γ toward 0.9 and the norm stops growing: it can never exceed
+      <span class="mono">η/(1−γ)</span> — that's why the state is provably bounded.</p>
+    </div>
+  </div>
+
+  <!-- ============================ PANEL 2 ============================ -->
+  <h2>2 · The update rule, dissected</h2>
+  <p>One event = <b>decay the old</b> + <b>add a rank-1 evidence imprint</b>. The imprint <code>η·s·φφᵀ</code> is the
+  outcome "stamped" along the competence direction φ: it's literally the matrix you get by writing φ down a column and across
+  a row and multiplying — so it's <b>always the same fixed pattern</b>, just scaled by how good the outcome was
+  (<code>η·s</code>, positive deepens it, negative carves the opposite). It is symmetric for
+  <i>any</i> φ (that's why M stays symmetric with zero enforcement cost). Set φ, s, γ, η and watch the three terms combine.</p>
+
+  <div class="card">
+    <div class="ctrls">
+      <span class="mono">φ =</span>
+      <label class="sl" style="min-width:150px">φ₁ <input type="range" id="f0" min="-1" max="1" step="0.05" value="0.9" oninput="P2.draw()"></label>
+      <label class="sl" style="min-width:150px">φ₂ <input type="range" id="f1" min="-1" max="1" step="0.05" value="0.4" oninput="P2.draw()"></label>
+      <label class="sl" style="min-width:150px">φ₃ <input type="range" id="f2" min="-1" max="1" step="0.05" value="-0.2" oninput="P2.draw()"></label>
+      <label class="sl" style="min-width:150px">φ₄ <input type="range" id="f3" min="-1" max="1" step="0.05" value="0.1" oninput="P2.draw()"></label>
+    </div>
+    <div class="ctrls">
+      <span class="mono">s =</span>
+      <button id="p2sp" class="olive" onclick="P2.setS(1)">+1 correct</button>
+      <button id="p2sn" class="ghost" onclick="P2.setS(-1)">−1 wrong</button>
+      <label class="sl">γ <input type="range" id="p2g" min="0.5" max="1" step="0.01" value="0.9" oninput="P2.draw()"><span class="mono" id="p2gv">0.90</span></label>
+      <label class="sl">η <input type="range" id="p2e" min="0.05" max="0.6" step="0.01" value="0.35" oninput="P2.draw()"><span class="mono" id="p2ev">0.35</span></label>
+    </div>
+    <div class="flex" style="justify-content:space-around;align-items:flex-start;margin-top:6px">
+      <div class="center" style="flex-direction:column">
+        <h3 style="margin:0 0 4px">γ·M <span class="muted">(decayed old)</span></h3>
+        <canvas id="p2A" width="150" height="150"></canvas>
+      </div>
+      <div class="center" style="flex-direction:column;align-self:center"><div style="font-size:1.8em;color:#999">+</div></div>
+      <div class="center" style="flex-direction:column">
+        <h3 style="margin:0 0 4px">η·s·φφᵀ <span class="muted">(rank-1 imprint)</span></h3>
+        <canvas id="p2B" width="150" height="150"></canvas>
+      </div>
+      <div class="center" style="flex-direction:column;align-self:center"><div style="font-size:1.8em;color:#999">=</div></div>
+      <div class="center" style="flex-direction:column">
+        <h3 style="margin:0 0 4px">M′ <span class="muted">(new state)</span></h3>
+        <canvas id="p2C" width="150" height="150"></canvas>
+      </div>
+    </div>
+    <div class="ctrls" style="justify-content:center;margin-top:12px">
+      <button class="primary" onclick="P2.apply()">▶ apply this event (M ← M′)</button>
+      <button class="ghost" onclick="P2.reset()">reset M to 0</button>
+      <span class="pill">‖imprint‖₂ = η = <b id="p2bn">0.35</b></span>
+      <span class="pill">rank(imprint) = <b>1</b></span>
+    </div>
+    <div class="callout" style="margin-top:8px">
+      <p style="margin:0;font-size:.92em"><b>Two things to notice.</b> (1) The imprint is always a perfect ± copy of the same
+      pattern <code>φφᵀ</code> — it only ever pushes along the φ direction. Two events with the <i>same</i> φ stack;
+      two with different φ build off-diagonal structure. (2) Apply the same event repeatedly: M′ does <b>not</b> run away —
+      decay pulls it back, converging to the bounded steady state. This is <b>Weyl's inequality</b> in action: one event
+      moves every eigenvalue by at most <code>‖imprint‖ = η</code>.</p>
+    </div>
+  </div>
+
+  <!-- ============================ PANEL 3 ============================ -->
+  <h2>3 · <code>φ</code> — the soft-prototype address</h2>
+  <p>φ answers "good at <i>what</i>". It must <b>collide</b> (same task → same direction, or no eigenvalue ever
+  accumulates) yet stay <b>open</b> (an unseen task still lands somewhere meaningful, so trust transfers). The fix:
+  fixed per-task centroids <code>C</code>, and φ = soft-mixture of them by similarity. Drag the query.</p>
+
+  <div class="card">
+    <div class="flex">
+      <div>
+        <svg id="p3svg" width="340" height="300" style="touch-action:none;border:1px solid var(--soft);border-radius:10px;background:#fff"></svg>
+        <div class="cap">Drag the <b style="color:var(--clay)">●</b> query. Dots = fixed task centroids
+          <code>C</code> (the CM's mean hidden per training task). The address is a <b>softmax over cosine similarity</b>.</div>
+      </div>
+      <div style="flex:1;min-width:260px">
+        <label class="sl" style="min-width:100%">temperature τ
+          <input type="range" id="p3t" min="0.05" max="1.2" step="0.01" value="0.25" oninput="P3.draw()">
+          <span class="mono" id="p3tv">0.25</span></label>
+        <h3 style="margin-top:14px">softmax weights = the address</h3>
+        <canvas id="p3bar" width="380" height="150"></canvas>
+        <div id="p3verdict" style="margin-top:10px"></div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <div class="callout olive">
+        <span class="tag olive">collide</span>
+        <p style="margin:6px 0 0;font-size:.9em">Drag onto a centroid (low τ): one weight → 1.0, the rest → 0.
+        A <b>seen</b> task resolves to its own direction, so repeated successes reinforce <i>one</i> eigenvector. This recovers
+        the reliable per-(peer,task) behaviour.</p>
+      </div>
+      <div class="callout">
+        <span class="tag">stay open</span>
+        <p style="margin:6px 0 0;font-size:.9em">Drag <b>between</b> centroids: the address is a mixture. An <b>unseen /
+        related</b> task borrows trust from neighbours — that's the +23pt held-out-task transfer. Raise τ to see it
+        smear; lower τ to sharpen (the open-work knob).</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ PANEL 4 ============================ -->
+  <h2>4 · The payoff a scalar can't match — recover signal from noise</h2>
+  <p>A stream that is <b>⅓ consistent signal</b> (same φ) and <b>⅔ noise</b> (random φ, random sign). A scalar EMA averages
+  signal and noise into one muddy number. The matrix sorts them: signal → top eigenpair, noise → bulk. Watch it happen.</p>
+
+  <div class="card">
+    <div class="ctrls">
+      <button class="primary" onclick="P4.run()">▶ run 240-event stream</button>
+      <button class="ghost" onclick="P4.reset()">reset</button>
+      <label class="sl">γ <input type="range" id="p4g" min="0.8" max="1" step="0.005" value="0.97" oninput="P4.relabel()"><span class="mono" id="p4gv">0.97</span></label>
+      <label class="sl">signal fraction <input type="range" id="p4f" min="0.1" max="0.6" step="0.05" value="0.33"><span class="mono" id="p4fv">0.33</span></label>
+    </div>
+    <canvas id="p4chart" width="640" height="240"></canvas>
+    <div class="legend">
+      <span><span class="sw" style="background:#788C5D"></span>top eigenvalue (the signal)</span>
+      <span><span class="sw" style="background:#D97757"></span>largest bulk eigenvalue (the noise floor)</span>
+      <span><span class="sw" style="background:#141413"></span>alignment of v₁ with true signal direction →</span>
+    </div>
+    <div style="margin-top:8px">
+      <span class="pill">top λ = <b id="p4top">—</b></span>
+      <span class="pill">bulk λ = <b id="p4bulk">—</b></span>
+      <span class="pill">separation = <b id="p4sep">—</b></span>
+      <span class="pill">align(v₁, signal) = <b id="p4al">—</b></span>
+    </div>
+    <div class="callout olive" style="margin-top:10px">
+      <p style="margin:0;font-size:.92em"><b>The result:</b> even buried 2:1 in noise, the top eigenvector locks onto the true
+      reliability direction (alignment → ~1.0) and the top eigenvalue lifts clear of the bulk. <b>This is the one thing a
+      scalar reputation can never do</b> — it has no eigenvectors to separate "good at X" from "random luck".</p>
+    </div>
+  </div>
+
+  <!-- ============================ SUGGESTIONS ============================ -->
+  <!-- ============================ PANEL 5 ============================ -->
+  <h2>5 · The steering read — how <code>M_p·φ*</code> bends the CM's choice</h2>
+  <p>This is the step that actually <b>drives selection</b>, and the one text explains worst. The trust matrix is
+  <i>not</i> a number added to a logit. It produces a <b>direction</b> <code>steer_p = M_p·φ*</code>; a trainable
+  <code>W_up</code> lifts it to hidden size, a learned gain <code>g</code> scales it, and <code>δ = g·W_up·steer_p</code>
+  is added to the frozen CM's residual stream — so the CM <b>re-scores the candidates itself</b> under the nudge.</p>
+
+  <div class="card">
+    <p style="margin:0 0 6px;font-size:.92em">Three candidate peers on the current task <code>φ*</code>. Each peer has
+    accumulated a different matrix; raise the gain and watch the CM's endorsement log-probs re-rank. <span class="muted">(Matches
+    <code>ActivationSteerer</code> in <code>symmetric_memory.py</code>: <code>add = gain·proj(steer_vec)</code>, gain inits at 0.)</span></p>
+    <div class="ctrls">
+      <label class="sl" style="min-width:280px">gain g <input type="range" id="p5g" min="-2" max="3" step="0.05" value="0" oninput="P5.draw()"><span class="mono" id="p5gv">0.00</span></label>
+      <button class="ghost" onclick="P5.setG(0)">g=0 (frozen base)</button>
+      <button class="olive" onclick="P5.anim()">▶ ramp gain 0→2</button>
+      <button class="ghost" onclick="P5.setG(-1.5)">g&lt;0 (invert)</button>
+    </div>
+    <div class="flex">
+      <div style="flex:1;min-width:300px">
+        <h3>endorsement log-probs &nbsp;<span class="muted mono" style="font-weight:400">log p("Peer j" | steered)</span></h3>
+        <canvas id="p5bars" width="430" height="210"></canvas>
+        <div class="cap">At g=0 the steered CM is bit-for-bit the frozen base (its raw prior). As g rises, each peer's
+          bar moves by <code>g · ⟨w_endorse_j , W_up·M_p·φ*⟩</code> — the peer whose matrix aligns with φ* climbs.
+          <b>g&lt;0 inverts the read</b>: the same evidence now pushes the aligned peer <i>down</i>. gain is an
+          unconstrained learned scalar (init 0), so its sign is learned too.</div>
+      </div>
+      <div style="min-width:230px">
+        <h3>the three peers' evidence</h3>
+        <table style="font-size:.84em">
+          <tr><th>peer</th><th>good at</th><th>‖M·φ*‖</th></tr>
+          <tr><td><b style="color:#788C5D">Gemma</b></td><td>this task's competence</td><td class="mono" id="p5n0">—</td></tr>
+          <tr><td><b style="color:#5A8C96">Qwen</b></td><td>a different competence</td><td class="mono" id="p5n1">—</td></tr>
+          <tr><td><b style="color:#c98a3f">Phi</b></td><td>weak / little evidence</td><td class="mono" id="p5n2">—</td></tr>
+        </table>
+        <div style="margin-top:8px">
+          <span class="pill">argmax = <b id="p5pick">—</b></span>
+        </div>
+        <p style="font-size:.85em;color:#666;margin:8px 0 0">φ* is fixed to "this task's competence direction" — Gemma's matrix has a big
+        eigenvalue there, Qwen's points elsewhere, Phi's is near-empty. So as the nudge turns on, the CM's own choice
+        flips from its flat prior toward Gemma.</p>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:8px">
+      <p style="margin:0;font-size:.92em"><b>Why a direction beats a scalar bias.</b> Because RMSNorm sits before Q/K/V,
+      adding a constant <code>δ</code> to the residual is <b>not</b> a uniform logit offset — it re-centres and re-scales
+      per token, so one learned direction yields a <i>context-sensitive</i> re-ranking. The dropped scalar
+      <code>φ*ᵀM_pφ*</code> bias could only push every score by a fixed amount, and proved too weak (§6).</p>
+    </div>
+  </div>
+
+  <!-- ============================ PANEL 6 ============================ -->
+  <h2>6 · Joint matrix <code>G</code> over agents <span style="font-size:.6em;vertical-align:middle"><span class="tag">proposed</span></span></h2>
+  <div class="callout clay" style="border-left-color:var(--clay)">
+    <p style="margin:0;font-size:.9em"><b>Status — read this first.</b> The shipping method is <b>independent per-peer</b>
+    <code>M_p</code>. G exists in code (<code>update_joint</code>, <code>joint_redundancy</code> in
+    <code>symmetric_memory.py</code>) but is an <b>ablation switch, default <code>use_joint: off</code></b>, and the current
+    K-choose-1 endorsement read never consumes it. It is <b>simulation-validated, not yet a run-vs-run result</b>. This panel
+    shows what G <i>would</i> capture if turned on — it is the genuinely-multi-agent claim, not current behaviour.</p>
+  </div>
+  <p>Per-peer <code>M_p</code> lives in context space (<i>"is p good at this task?"</i>). G lives in <b>agent space</b> —
+  the CM's private coordination memory: <code>G ← γ·G + η·ooᵀ</code>, where <code>o[p]∈{+1,−1,0}</code> is each peer's
+  outcome. Off-diagonal entries are the thing a per-peer matrix (or a scalar) <b>cannot</b> represent.</p>
+
+  <div class="card">
+    <div class="ctrls">
+      <button class="olive" onclick="P6.feed('redundant')">+ event: 0&amp;1 agree (redundant)</button>
+      <button onclick="P6.feed('complementary')">+ event: 0&amp;2 opposite (complementary)</button>
+      <button class="ghost" onclick="P6.feed('indep')">+ event: agent 3 random (independent)</button>
+      <button onclick="P6.auto()">▶ auto-run mixed stream</button>
+      <button class="ghost" onclick="P6.reset()">reset</button>
+    </div>
+    <div class="flex">
+      <div>
+        <h3>G &nbsp;<span class="muted mono" style="font-weight:400">(4×4 agents, symmetric)</span></h3>
+        <canvas id="p6mat" width="220" height="220"></canvas>
+        <div class="cap"><span class="sw" style="background:#D97757"></span>+ redundant (right/wrong together) ·
+          <span class="sw" style="background:#5A8C96"></span>− complementary (errors cancel) ·
+          <span class="sw" style="background:#FAF9F5;border:1px solid #ccc"></span>≈0 independent</div>
+      </div>
+      <div style="flex:1;min-width:280px">
+        <h3>read-out</h3>
+        <table style="font-size:.86em">
+          <tr><th>pair</th><th>G value</th><th>means</th></tr>
+          <tr><td class="mono">G[0,1]</td><td class="mono" id="g01">—</td><td id="t01" class="muted">—</td></tr>
+          <tr><td class="mono">G[0,2]</td><td class="mono" id="g02">—</td><td id="t02" class="muted">—</td></tr>
+          <tr><td class="mono">G[0,3]</td><td class="mono" id="g03">—</td><td id="t03" class="muted">—</td></tr>
+        </table>
+        <div class="callout olive" style="margin-top:10px">
+          <p style="margin:0;font-size:.88em"><b>Team objective on G:</b> pick subset S maximizing
+          <code>Σ trust(p) − λ·Σ G[p,q]</code> — reward reliable agents, penalize redundant pairs, favour complementary
+          ones. That turns "who defers to whom / redundancy / disagreement" into a computable objective. Weyl still holds
+          (G symmetric), so one odd joint outcome shifts the relationship structure by ≤ η.</p>
+        </div>
+        <p style="font-size:.82em;color:#999;margin:6px 0 0"><b>Honest caveat:</b> <code>ooᵀ</code> captures only
+        <i>pairwise</i> (2nd-order) structure; true 3-way coalitions need a tensor (skipped). On i.i.d. task streams the
+        off-diagonal stays ≈0 — it only wakes up when agents have <i>real</i> complementarity, which is exactly the
+        multi-aspect world below.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ PANEL 7 ============================ -->
+  <h2>7 · The multi-aspect world — where the matrix finally earns its keep <span style="font-size:.6em;vertical-align:middle"><span class="tag">proposed direction</span></span></h2>
+  <p>The reason §15 found <code>M_p ≡ a scalar bank</code>: three task-types give no <b>latent, overlapping</b> sub-structure
+  for eigenvectors to discover. A real swarm has exactly that — the CM <b>decomposes</b> a task into aspects
+  (<i>search / revise / file / verify</i>), routes peers per-aspect, and each (peer, aspect) outcome is its own event.
+  Aspects <b>overlap and recur</b> across tasks, so the eigenvectors discover real competence axes.</p>
+
+  <div class="card">
+    <p style="margin:0 0 6px;font-size:.92em">Each peer specializes in some aspects. Feed decomposed tasks and watch each
+    peer's matrix grow a top eigenvector that <i>names the aspect they're reliably good at</i> — a learned specialization a
+    scalar reputation cannot hold.</p>
+    <div class="ctrls">
+      <button class="primary" onclick="P7.run()">▶ run 30 decomposed tasks</button>
+      <button class="ghost" onclick="P7.reset()">reset</button>
+      <span class="muted" style="font-size:.85em">aspects:
+        <span class="pill">search</span><span class="pill">revise</span><span class="pill">file</span><span class="pill">verify</span></span>
+    </div>
+    <div class="flex" id="p7row" style="gap:22px"></div>
+    <div class="callout olive" style="margin-top:12px">
+      <p style="margin:0;font-size:.92em"><b>The discovery:</b> after the stream, each peer's top eigenvector points at the
+      aspect they handle well (the highlighted bar), and the eigenvalue says how strongly. At decision time, a task needing
+      aspect φ* steers up the peer whose eigenvector aligns — <b>per-aspect routing</b>, not one global score. This is also
+      where joint G (panel 6) wakes up: search→revise→file are genuinely <b>complementary</b> roles, so G's off-diagonal
+      finally carries signal. <span class="muted">All four pieces (s, φ, the read, G) upgrade together — the open build cost
+      is a dataset with aspect-decomposed tasks + per-aspect quality labels.</span></p>
+    </div>
+  </div>
+
+  <h2>Suggestions — what's left to add</h2>
+  <div class="card">
+    <p style="margin-top:0">Panels now cover state · update · φ · steering read · joint G · multi-aspect. Remaining
+    high-value additions:</p>
+    <table>
+      <tr><th>idea</th><th>what it makes visible</th><th>effort</th></tr>
+      <tr><td><b>Delta-Mem vs symmetric</b> side-by-side</td><td>token-axis 0.982⁸⁰⁰→10⁻⁷ overwrite vs event-axis
+        bounded decay — one chart kills the old primitive</td><td>low</td></tr>
+      <tr><td><b>"What training actually learned"</b> (real data)</td><td>wire the logged checkpoints: per-peer
+        γ=[gemma .878, phi .891, qwen .886], η 0.30→0.40 drift, the 4B/8B-fixed/8B-learned accuracy table — real trends, not
+        synthetic streams</td><td>medium (read logs)</td></tr>
+      <tr><td><b>Circularity trap</b></td><td>s = CM judging its own pick → a <i>false</i> eigenvalue grows; switch to an
+        independent verifier and it sign-cancels away (§5)</td><td>low–medium</td></tr>
+      <tr><td><b>Agent-count invariance</b> demo</td><td>train-3 → test-5: drop the P-shaped buffers, η/φ_proj identical, a
+        4th M_p spins up from zero</td><td>low</td></tr>
+    </table>
+    <p style="font-size:.9em;color:#666;margin-bottom:0">Say the word and I'll wire panel "what training actually learned"
+    to your real checkpoints (the γ_p / η / accuracy numbers) instead of synthetic streams — that's the one that turns this
+    from an intuition tool into an evidence figure.</p>
+  </div>
+
+</div>
+
+<script>
+/* ---------- shared linear algebra (real, live) ---------- */
+function zeros(n){return Array.from({length:n},()=>new Array(n).fill(0));}
+function outer(v,sc){const n=v.length,M=zeros(n);for(let i=0;i<n;i++)for(let j=0;j<n;j++)M[i][j]=sc*v[i]*v[j];return M;}
+function addInto(M,E,g){const n=M.length;for(let i=0;i<n;i++)for(let j=0;j<n;j++)M[i][j]=g*M[i][j]+E[i][j];}
+function norm2vec(v){let s=0;for(const x of v)s+=x*x;return Math.sqrt(s);}
+function unit(v){const n=norm2vec(v)||1;return v.map(x=>x/n);}
+function randUnit(n){const v=Array.from({length:n},()=>Math.random()*2-1);return unit(v);}
+function maxAbs(M){let m=1e-9;for(const r of M)for(const x of r)m=Math.max(m,Math.abs(x));return m;}
+function dot(a,b){let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s;}
+
+/* Jacobi eigen-decomposition for symmetric matrices */
+function jacobi(Ain,sweeps){
+  const n=Ain.length; let A=Ain.map(r=>r.slice());
+  let V=zeros(n); for(let i=0;i<n;i++)V[i][i]=1;
+  sweeps=sweeps||60;
+  for(let s=0;s<sweeps;s++){
+    let off=0; for(let p=0;p<n;p++)for(let q=p+1;q<n;q++)off+=A[p][q]*A[p][q];
+    if(off<1e-14)break;
+    for(let p=0;p<n;p++)for(let q=p+1;q<n;q++){
+      if(Math.abs(A[p][q])<1e-16)continue;
+      const phi=0.5*Math.atan2(2*A[p][q],A[q][q]-A[p][p]);
+      const c=Math.cos(phi),si=Math.sin(phi);
+      for(let k=0;k<n;k++){const akp=A[k][p],akq=A[k][q];A[k][p]=c*akp-si*akq;A[k][q]=si*akp+c*akq;}
+      for(let k=0;k<n;k++){const apk=A[p][k],aqk=A[q][k];A[p][k]=c*apk-si*aqk;A[q][k]=si*apk+c*aqk;}
+      for(let k=0;k<n;k++){const vkp=V[k][p],vkq=V[k][q];V[k][p]=c*vkp-si*vkq;V[k][q]=si*vkp+c*vkq;}
+    }
+  }
+  const eig=[]; for(let i=0;i<n;i++)eig.push({val:A[i][i],vec:V.map(r=>r[i])});
+  eig.sort((a,b)=>b.val-a.val); return eig;
+}
+function spec2(M){const e=jacobi(M);return e.length?e[0].val:0;} // top eigenvalue (=‖M‖2 for PSD-ish)
+
+/* ---------- colormap ---------- */
+function cmap(v,m){
+  let t=Math.max(-1,Math.min(1,v/m));
+  if(t>=0){const r=250+(217-250)*t,g=249+(119-249)*t,b=245+(87-245)*t;return `rgb(${r|0},${g|0},${b|0})`;}
+  const u=-t;const r=250+(90-250)*u,g=249+(140-249)*u,b=245+(150-245)*u;return `rgb(${r|0},${g|0},${b|0})`;
+}
+function drawMat(cv,M,m){
+  const ctx=cv.getContext('2d'),n=M.length,W=cv.width,cell=W/n;
+  m=m||maxAbs(M);
+  for(let i=0;i<n;i++)for(let j=0;j<n;j++){
+    ctx.fillStyle=cmap(M[i][j],m);
+    ctx.fillRect(j*cell,i*cell,cell-1,cell-1);
+  }
+}
+
+/* ================= PANEL 1 ================= */
+const P1={n:6,M:null,sig:null,sig2:null,count:0,flipState:1,
+  init(){this.M=zeros(this.n);this.sig=unit([1,.6,.3,0,0,0]);this.sig2=unit([0,0,.3,1,.6,0]);this.draw();},
+  g(){return +document.getElementById('p1g').value;},
+  e(){return +document.getElementById('p1e').value;},
+  feed(kind){
+    let phi,s=1;const eta=this.e();
+    if(kind==='signal'){phi=this.sig;s=1;}
+    else if(kind==='signal2'){phi=this.sig2;s=1;}
+    else if(kind==='noise'){phi=randUnit(this.n);s=Math.random()<.5?1:-1;}
+    else if(kind==='flip'){phi=this.sig;s=this.flipState;this.flipState*=-1;}
+    addInto(this.M,outer(phi,eta*s),this.g());this.count++;this.draw();
+  },
+  idle(){const n=this.n,g=this.g();for(let i=0;i<n;i++)for(let j=0;j<n;j++)this.M[i][j]*=g;this.draw();},
+  auto(){let k=0;const t=setInterval(()=>{this.feed('signal');if(++k>=40)clearInterval(t);},35);},
+  reset(){this.M=zeros(this.n);this.count=0;this.flipState=1;this.draw();},
+  draw(){
+    document.getElementById('p1gv').textContent=this.g().toFixed(2);
+    document.getElementById('p1ev').textContent=this.e().toFixed(2);
+    drawMat(document.getElementById('p1mat'),this.M);
+    const eig=jacobi(this.M);
+    // eigen bar chart
+    const cv=document.getElementById('p1eig'),ctx=cv.getContext('2d');
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const top=Math.max(0.5,...eig.map(x=>Math.abs(x.val)));
+    const bw=cv.width/this.n, base=cv.height-22;
+    eig.forEach((x,i)=>{
+      const h=(Math.abs(x.val)/top)*(base-10);
+      ctx.fillStyle=i===0?'#788C5D':'#c9b8a8';
+      ctx.fillRect(i*bw+6,base-h,bw-12,h);
+      ctx.fillStyle='#777';ctx.font='10px ui-monospace';
+      ctx.fillText(x.val.toFixed(2),i*bw+6,base+13);
+    });
+    ctx.strokeStyle='#bbb';ctx.beginPath();ctx.moveTo(0,base);ctx.lineTo(cv.width,base);ctx.stroke();
+    // stats
+    const g=this.g(),e=this.e();
+    document.getElementById('p1n').textContent=this.count;
+    document.getElementById('p1norm').textContent=spec2(this.M).toFixed(2);
+    document.getElementById('p1bound').textContent=g<1?(e/(1-g)).toFixed(2):'∞';
+    document.getElementById('p1top').textContent=eig[0].val.toFixed(2);
+    const al=Math.abs(dot(unit(eig[0].vec),this.sig));
+    document.getElementById('p1align').textContent=this.count?al.toFixed(3):'—';
+  }
+};
+
+/* ================= PANEL 2 ================= */
+const P2={n:4,M:null,s:1,
+  init(){this.M=zeros(this.n);this.draw();},
+  phi(){return ['f0','f1','f2','f3'].map(id=>+document.getElementById(id).value);},
+  setS(v){this.s=v;
+    document.getElementById('p2sp').className=v===1?'olive':'ghost';
+    document.getElementById('p2sn').className=v===-1?'primary':'ghost';
+    this.draw();},
+  apply(){
+    const g=+document.getElementById('p2g').value,e=+document.getElementById('p2e').value;
+    const phi=unit(this.phi());addInto(this.M,outer(phi,e*this.s),g);this.draw();
+  },
+  reset(){this.M=zeros(this.n);this.draw();},
+  draw(){
+    const g=+document.getElementById('p2g').value,e=+document.getElementById('p2e').value;
+    document.getElementById('p2gv').textContent=g.toFixed(2);
+    document.getElementById('p2ev').textContent=e.toFixed(2);
+    document.getElementById('p2bn').textContent=e.toFixed(2);
+    const phi=unit(this.phi());
+    const A=this.M.map(r=>r.map(x=>g*x));
+    const B=outer(phi,e*this.s);
+    const C=A.map((r,i)=>r.map((x,j)=>x+B[i][j]));
+    const m=Math.max(maxAbs(A),maxAbs(B),maxAbs(C),0.2);
+    drawMat(document.getElementById('p2A'),A,m);
+    drawMat(document.getElementById('p2B'),B,m);
+    drawMat(document.getElementById('p2C'),C,m);
+  }
+};
+
+/* ================= PANEL 3 ================= */
+const P3={
+  C:[{x:90,y:80,name:'math',col:'#788C5D'},{x:250,y:75,name:'rag',col:'#5A8C96'},
+     {x:80,y:220,name:'code',col:'#c98a3f'},{x:255,y:215,name:'search',col:'#9a6fb0'}],
+  q:{x:170,y:150},dragging:false,
+  init(){
+    const svg=document.getElementById('p3svg');
+    const pt=(ev)=>{const r=svg.getBoundingClientRect();const t=ev.touches?ev.touches[0]:ev;
+      return {x:Math.max(15,Math.min(325,t.clientX-r.left)),y:Math.max(15,Math.min(285,t.clientY-r.top))};};
+    const down=(ev)=>{this.dragging=true;this.q=pt(ev);this.draw();ev.preventDefault();};
+    const move=(ev)=>{if(this.dragging){this.q=pt(ev);this.draw();ev.preventDefault();}};
+    const up=()=>{this.dragging=false;};
+    svg.addEventListener('mousedown',down);window.addEventListener('mousemove',move);window.addEventListener('mouseup',up);
+    svg.addEventListener('touchstart',down);svg.addEventListener('touchmove',move);svg.addEventListener('touchend',up);
+    this.draw();
+  },
+  weights(){
+    const tau=+document.getElementById('p3t').value;
+    // cosine similarity between (q-center) and (C-center); center = svg middle
+    const cx=170,cy=150;
+    const qv=unit([this.q.x-cx,this.q.y-cy]);
+    const sims=this.C.map(c=>{const cv=unit([c.x-cx,c.y-cy]);return dot(qv,cv);});
+    const ex=sims.map(s=>Math.exp(s/tau));const Z=ex.reduce((a,b)=>a+b,0);
+    return ex.map(v=>v/Z);
+  },
+  draw(){
+    document.getElementById('p3tv').textContent=(+document.getElementById('p3t').value).toFixed(2);
+    const w=this.weights();
+    const svg=document.getElementById('p3svg');
+    let h='';
+    // address point = weighted combo of centroids
+    let ax=0,ay=0;this.C.forEach((c,i)=>{ax+=w[i]*c.x;ay+=w[i]*c.y;});
+    // lines query->centroids, opacity by weight
+    this.C.forEach((c,i)=>{h+=`<line x1="${this.q.x}" y1="${this.q.y}" x2="${c.x}" y2="${c.y}" stroke="${c.col}" stroke-width="${1+w[i]*7}" opacity="${0.15+w[i]*0.7}"/>`;});
+    // centroids
+    this.C.forEach((c,i)=>{
+      h+=`<circle cx="${c.x}" cy="${c.y}" r="${9+w[i]*10}" fill="${c.col}" opacity="0.9"/>`;
+      h+=`<text x="${c.x}" y="${c.y-16-w[i]*8}" font-size="11" text-anchor="middle" fill="#3D3D3A" font-family="system-ui">${c.name}</text>`;
+    });
+    // address (soft mixture location)
+    h+=`<circle cx="${ax}" cy="${ay}" r="5" fill="none" stroke="#141413" stroke-dasharray="3 2" stroke-width="1.5"/>`;
+    h+=`<text x="${ax+8}" y="${ay+3}" font-size="9" fill="#141413" font-family="ui-monospace">φ address</text>`;
+    // query
+    h+=`<circle cx="${this.q.x}" cy="${this.q.y}" r="8" fill="#D97757" stroke="#fff" stroke-width="2"/>`;
+    svg.innerHTML=h;
+    // bar chart
+    const cv=document.getElementById('p3bar'),ctx=cv.getContext('2d');
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const bw=cv.width/this.C.length,base=cv.height-20;
+    w.forEach((val,i)=>{const ht=val*(base-8);ctx.fillStyle=this.C[i].col;
+      ctx.fillRect(i*bw+10,base-ht,bw-20,ht);
+      ctx.fillStyle='#3D3D3A';ctx.font='11px system-ui';ctx.textAlign='center';
+      ctx.fillText(this.C[i].name,i*bw+bw/2,base+15);
+      ctx.fillStyle='#fff';ctx.font='10px ui-monospace';
+      if(ht>16)ctx.fillText(val.toFixed(2),i*bw+bw/2,base-ht+13);});
+    // verdict
+    const mx=Math.max(...w),ent=-w.reduce((a,p)=>a+(p>1e-6?p*Math.log(p):0),0)/Math.log(this.C.length);
+    let v;
+    if(mx>0.8)v=`<span class="tag olive">collide</span> resolves to <b>${this.C[w.indexOf(mx)].name}</b> — a seen task; one clean direction.`;
+    else if(ent>0.7)v=`<span class="tag">mixture</span> spread across tasks — an unseen/ambiguous query borrowing trust from neighbours.`;
+    else v=`<span class="tag">soft blend</span> mostly <b>${this.C[w.indexOf(mx)].name}</b> with neighbour bleed — related-task transfer.`;
+    document.getElementById('p3verdict').innerHTML=`<div class="callout" style="margin:0;padding:9px 13px"><p style="margin:0;font-size:.9em">${v} <span class="muted mono">(normalized entropy ${ent.toFixed(2)})</span></p></div>`;
+  }
+};
+
+/* ================= PANEL 4 ================= */
+const P4={n:8,
+  relabel(){document.getElementById('p4gv').textContent=(+document.getElementById('p4g').value).toFixed(3);},
+  reset(){const cv=document.getElementById('p4chart');cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+    ['p4top','p4bulk','p4sep','p4al'].forEach(id=>document.getElementById(id).textContent='—');},
+  run(){
+    document.getElementById('p4fv').textContent=(+document.getElementById('p4f').value).toFixed(2);
+    this.relabel();
+    const g=+document.getElementById('p4g').value,frac=+document.getElementById('p4f').value,eta=0.3;
+    const sig=randUnit(this.n);let M=zeros(this.n);const T=240;
+    const tops=[],bulks=[],als=[];
+    for(let t=0;t<T;t++){
+      let phi,s;
+      if(Math.random()<frac){phi=sig;s=1;}                       // signal
+      else{phi=randUnit(this.n);s=Math.random()<.5?1:-1;}        // noise
+      addInto(M,outer(phi,eta*s),g);
+      const e=jacobi(M);
+      tops.push(e[0].val);
+      let bulk=0;for(let i=1;i<e.length;i++)bulk=Math.max(bulk,Math.abs(e[i].val));bulks.push(bulk);
+      als.push(Math.abs(dot(unit(e[0].vec),sig)));
+    }
+    // draw chart
+    const cv=document.getElementById('p4chart'),ctx=cv.getContext('2d'),W=cv.width,H=cv.height,pad=30;
+    ctx.clearRect(0,0,W,H);
+    const ymax=Math.max(...tops,...bulks,0.5)*1.1;
+    const X=i=>pad+(i/(T-1))*(W-pad-10), Y=v=>H-pad-(v/ymax)*(H-2*pad), YA=v=>H-pad-v*(H-2*pad);
+    // axes
+    ctx.strokeStyle='#ccc';ctx.beginPath();ctx.moveTo(pad,H-pad);ctx.lineTo(W-8,H-pad);ctx.moveTo(pad,H-pad);ctx.lineTo(pad,pad);ctx.stroke();
+    ctx.fillStyle='#999';ctx.font='10px ui-monospace';ctx.textAlign='left';
+    ctx.fillText('eigenvalue',pad+2,pad-8);ctx.fillText('events →',W-70,H-pad+16);
+    ctx.save();ctx.translate(W-8,pad+4);ctx.fillStyle='#141413';ctx.fillText('align 1.0',-46,0);ctx.restore();
+    const line=(arr,col,w,ymap)=>{ctx.strokeStyle=col;ctx.lineWidth=w;ctx.beginPath();
+      arr.forEach((v,i)=>{const x=X(i),y=(ymap||Y)(v);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();};
+    line(als,'#141413',1.5,YA);
+    line(bulks,'#D97757',2);
+    line(tops,'#788C5D',2.5);
+    const last=T-1;
+    document.getElementById('p4top').textContent=tops[last].toFixed(2);
+    document.getElementById('p4bulk').textContent=bulks[last].toFixed(2);
+    document.getElementById('p4sep').textContent=(tops[last]/(bulks[last]||1e-6)).toFixed(1)+'×';
+    document.getElementById('p4al').textContent=als[last].toFixed(3);
+  }
+};
+
+/* ================= PANEL 5 : steering read ================= */
+const P5={
+  r:6,
+  // φ* = "this task's competence direction"; each peer's matrix has different alignment to it
+  init(){
+    this.phiStar=unit([1,.5,.2,0,0,0]);
+    // build three peer matrices by accumulating evidence in chosen directions
+    const mk=(dir,strength)=>{let M=zeros(this.r);const d=unit(dir);
+      for(let k=0;k<20;k++)addInto(M,outer(d,0.3),0.95);return M.map(r=>r.map(x=>x*strength));};
+    this.M=[
+      mk([1,.5,.2,0,0,0],1.0),     // Gemma: aligned with phiStar  -> big steer
+      mk([0,0,.2,1,.5,0],1.0),     // Qwen: orthogonal competence  -> tiny steer
+      mk([1,.5,.2,0,0,0],0.12),    // Phi: same dir but little evidence
+    ];
+    // fixed random "endorsement" readout directions in hidden space (deterministic)
+    this.cols=['#788C5D','#5A8C96','#c98a3f'];
+    this.names=['Gemma','Qwen','Phi'];
+    // prior log-probs (flat-ish base) and a projection from steer->logit per peer
+    this.base=[ -1.10,-1.10,-1.10 ];
+    this.draw();
+  },
+  setG(v){document.getElementById('p5g').value=v;this.draw();},
+  anim(){let g=0;const t=setInterval(()=>{g+=0.05;this.setG(Math.min(2,g));if(g>=2)clearInterval(t);},25);},
+  steerNorm(p){const s=this.M[p].map(row=>dot(row,this.phiStar));return norm2vec(s);},
+  draw(){
+    const g=+document.getElementById('p5g').value;
+    document.getElementById('p5gv').textContent=g.toFixed(2);
+    // each peer's logit = base + g * (its own steer alignment with phiStar)
+    // the steer for peer p, projected onto an endorsement direction ~ its own M·phiStar magnitude
+    const contrib=[0,1,2].map(p=>this.steerNorm(p));
+    const logits=[0,1,2].map(p=>this.base[p]+g*contrib[p]);
+    // softmax-normalize to show as log p
+    const mx=Math.max(...logits);const ex=logits.map(l=>Math.exp(l-mx));const Z=ex.reduce((a,b)=>a+b,0);
+    const logp=logits.map((l,i)=>Math.log(ex[i]/Z));
+    // draw bars (log-prob, more negative = lower)
+    const cv=document.getElementById('p5bars'),ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+    ctx.clearRect(0,0,W,H);
+    const lo=-3.0, base=H-26, top=14, bw=(W-40)/3;
+    // gridline at chosen scale
+    ctx.strokeStyle='#eee';ctx.fillStyle='#bbb';ctx.font='10px ui-monospace';ctx.textAlign='right';
+    for(let v=0;v>=-3;v--){const y=base+(v/lo)*(base-top);ctx.beginPath();ctx.moveTo(36,y);ctx.lineTo(W-6,y);ctx.stroke();ctx.fillText(v.toFixed(0),32,y+3);}
+    [0,1,2].forEach(p=>{
+      const h=(logp[p]/lo)*(base-top);
+      const x=40+p*bw;
+      ctx.fillStyle=this.cols[p];ctx.fillRect(x,base-h,bw-22,h);
+      ctx.fillStyle='#3D3D3A';ctx.font='12px system-ui';ctx.textAlign='center';
+      ctx.fillText(this.names[p],x+(bw-22)/2,base+15);
+      ctx.fillStyle='#fff';ctx.font='10px ui-monospace';
+      if(h>16)ctx.fillText(logp[p].toFixed(2),x+(bw-22)/2,base-h+13);
+    });
+    document.getElementById('p5n0').textContent=contrib[0].toFixed(2);
+    document.getElementById('p5n1').textContent=contrib[1].toFixed(2);
+    document.getElementById('p5n2').textContent=contrib[2].toFixed(2);
+    const pick=logp.indexOf(Math.max(...logp));
+    document.getElementById('p5pick').textContent=this.names[pick]+(g<0.05?' (flat prior)':'');
+  }
+};
+
+/* ================= PANEL 6 : joint G ================= */
+const P6={n:4,G:null,eta:0.3,g:0.95,
+  init(){this.G=zeros(this.n);this.draw();},
+  reset(){this.G=zeros(this.n);this.draw();},
+  feed(kind){
+    let o=new Array(this.n).fill(0);
+    const rb=()=>Math.random()<.5?1:-1;
+    if(kind==='redundant'){const s=rb();o[0]=s;o[1]=s;o[2]=rb();}      // 0,1 same
+    else if(kind==='complementary'){const s=rb();o[0]=s;o[2]=-s;o[1]=rb();} // 0,2 opposite
+    else{o[3]=rb();o[Math.floor(Math.random()*3)]=rb();}              // 3 random
+    addInto(this.G,outer(o,this.eta),this.g);this.draw();
+  },
+  auto(){let k=0;const t=setInterval(()=>{
+    const r=Math.random();this.feed(r<0.4?'redundant':r<0.8?'complementary':'indep');
+    if(++k>=60)clearInterval(t);},40);},
+  draw(){
+    drawMat(document.getElementById('p6mat'),this.G);
+    const norm=(i,j)=>{const d=Math.sqrt(Math.abs(this.G[i][i]*this.G[j][j]))||1e-6;return this.G[i][j]/d;};
+    const set=(gid,tid,i,j)=>{
+      const v=this.G[i][i]?norm(i,j):0;
+      document.getElementById(gid).textContent=v.toFixed(2);
+      const el=document.getElementById(tid);
+      if(Math.abs(v)<0.2){el.textContent='independent';el.className='muted';}
+      else if(v>0){el.innerHTML='<span class="bad">redundant</span> — right/wrong together';el.className='';}
+      else{el.innerHTML='<span class="good">complementary</span> — errors cancel';el.className='';}
+    };
+    set('g01','t01',0,1);set('g02','t02',0,2);set('g03','t03',0,3);
+  }
+};
+
+/* ================= PANEL 7 : multi-aspect ================= */
+const P7={
+  aspects:['search','revise','file','verify'],
+  cols:['#788C5D','#5A8C96','#c98a3f','#9a6fb0'],
+  peers:['Gemma','Qwen','Phi'],
+  // ground-truth competence of each peer over the 4 aspects (what the matrix should discover)
+  competence:[[0.9,0.2,0.1,0.3],[0.2,0.9,0.3,0.2],[0.2,0.2,0.3,0.9]],
+  M:null,
+  reset(){this.M=[zeros(4),zeros(4),zeros(4)];this.render(true);},
+  run(){
+    if(!this.M)this.M=[zeros(4),zeros(4),zeros(4)];
+    let task=0;
+    const step=()=>{
+      // a decomposed task touches 2 random aspects; each routed peer gets an event
+      const a1=Math.floor(Math.random()*4);let a2=Math.floor(Math.random()*4);if(a2===a1)a2=(a2+1)%4;
+      [a1,a2].forEach(a=>{
+        // one-hot-ish aspect address with a little neighbour bleed (soft prototype)
+        const phi=unit(this.aspects.map((_,k)=>k===a?1:0.12*Math.random()));
+        for(let p=0;p<3;p++){
+          const s=Math.random()<this.competence[p][a]?1:-1;  // success prob = competence
+          addInto(this.M[p],outer(phi,0.3*s),0.93);
+        }
+      });
+      this.render();
+      if(++task<30)setTimeout(step,45);
+    };
+    step();
+  },
+  render(empty){
+    const row=document.getElementById('p7row');
+    let html='';
+    for(let p=0;p<3;p++){
+      const M=this.M?this.M[p]:zeros(4);
+      const eig=jacobi(M);
+      const v1=eig[0]?unit(eig[0].vec.map(Math.abs)):[0,0,0,0];
+      const topIdx=v1.indexOf(Math.max(...v1));
+      const topVal=eig[0]?eig[0].val:0;
+      html+=`<div style="flex:1;min-width:170px"><h3 style="margin:0 0 4px">${this.peers[p]}</h3>`;
+      html+=`<canvas id="p7c${p}" width="190" height="120"></canvas>`;
+      html+=`<div class="cap">top λ=${topVal.toFixed(2)} → <b style="color:${this.cols[topIdx]}">${empty||topVal<0.3?'—':this.aspects[topIdx]}</b></div></div>`;
+    }
+    row.innerHTML=html;
+    for(let p=0;p<3;p++){
+      const M=this.M?this.M[p]:zeros(4);
+      const eig=jacobi(M);
+      const v1=eig[0]?eig[0].vec.map(Math.abs):[0,0,0,0];
+      const mxv=Math.max(...v1,1e-6);
+      const topIdx=v1.indexOf(Math.max(...v1));
+      const cv=document.getElementById('p7c'+p),ctx=cv.getContext('2d'),base=cv.height-20,bw=cv.width/4;
+      ctx.clearRect(0,0,cv.width,cv.height);
+      v1.forEach((val,k)=>{
+        const h=(val/mxv)*(base-8);
+        ctx.fillStyle=(k===topIdx&&eig[0]&&eig[0].val>0.3)?this.cols[k]:'#d8d4c8';
+        ctx.fillRect(k*bw+6,base-h,bw-12,h);
+        ctx.fillStyle='#777';ctx.font='9px system-ui';ctx.textAlign='center';
+        ctx.fillText(this.aspects[k].slice(0,5),k*bw+bw/2,base+13);
+      });
+    }
+  }
+};
+
+P1.init();P2.init();P3.init();P4.reset();P5.init();P6.init();P7.reset();
+</script>
+</body>
+</html>

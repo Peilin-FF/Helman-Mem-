@@ -13,6 +13,13 @@ LOGD=logs/m5; mkdir -p "$LOGD"
 VIEWS=(unified math code rag)
 PROPS=(p0 p50 p70 p90)
 
+# Build the 9B eval config from the normal eval config so max_length stays 8192,
+# then add sharding for the large model.
+cp "$CFG" "$CFG9B"
+cat >> "$CFG9B" <<'YAML'
+device_map: auto
+YAML
+
 # ---- Phase 1: the 4 single-GPU models, parallel across GPUs 2/3/4/5 ----
 # tag|dir|gpu|overlay
 SMALL=(

@@ -12,7 +12,8 @@ cd "$(dirname "$0")/.."
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=.
 
 MODEL=Qwen/Qwen3-4B-Instruct-2507
-CFG=configs/symmetric_memory.yaml
+TRAIN_CFG=configs/symmetric_memory_train4096.yaml  # train at 4096
+EVAL_CFG=configs/symmetric_memory.yaml             # eval at 8192
 TRAIN=data/v3/mixed_train_labeled.jsonl
 read -r -a GPUS <<< "${GPUS:-2 3 4 5 7}"     # 0/1/6 hold leaked mem from orphan vLLM
 TASKS=(math code rag)
@@ -24,7 +25,7 @@ mkdir -p "$OUTD" "$EVALD" "$LOGD"
 
 echo "=== TRAIN proto on 3-task mixed set (gpu ${GPUS[0]}) ==="
 CUDA_VISIBLE_DEVICES="${GPUS[0]}" python -u train_symmetric_memory.py \
-  --config "$CFG" --central_model "$MODEL" \
+  --config "$TRAIN_CFG" --central_model "$MODEL" \
   --phi_mode proto --use_joint off \
   --offline_data "$TRAIN" \
   --output_dir "$OUTD/proto" \
@@ -46,7 +47,7 @@ for job in "${jobs[@]}"; do
   gpu="${GPUS[$((i % ${#GPUS[@]}))]}"
   extra=""; [ "$arm" = ablate ] && extra="--ablate_memory"
   CUDA_VISIBLE_DEVICES="$gpu" python -u eval_symmetric_memory.py \
-    --config "$CFG" --central_model "$MODEL" \
+    --config "$EVAL_CFG" --central_model "$MODEL" \
     --checkpoint "$OUTD/proto" --phi_mode proto --use_joint off $extra \
     --offline_data "data/v3_unified_${t}/${p}.jsonl" \
     --output "$EVALD/${arm}_${t}_${p}" \
