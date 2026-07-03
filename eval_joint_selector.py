@@ -88,7 +88,7 @@ def as_bool(v, default=False):
 
 
 def _domain(record) -> str:
-    return str(record.get("domain") or ("rag" if task_type_of(record) == "rag" else "math"))
+    return str(record.get("domain") or task_type_of(record))
 
 
 # ---- Bayesian baselines (pure) ---------------------------------------------
