@@ -368,6 +368,34 @@ class JointDeltaMemSelector(nn.Module):
         tok_lp = logprob.gather(-1, target.unsqueeze(-1)).squeeze(-1)
         return tok_lp.sum(dim=1)
 
+    def score_candidate_utility(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        positive: list[int],
+        negative: list[int],
+    ) -> torch.Tensor:
+        """Shared binary candidate utility: logp(positive) - logp(negative).
+
+        For the peer-count-invariant scorer the continuations are normally single
+        tokens (" Yes" and " No"), so one forward can score both. Multi-token
+        continuations fall back to teacher-forced sequence scoring.
+        """
+        if len(positive) == 1 and len(negative) == 1:
+            out = self.base_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                use_cache=False,
+                return_dict=True,
+            )
+            next_logits = out.logits[:, -1, :]
+            logprob = torch.log_softmax(next_logits.float(), dim=-1)
+            return logprob[:, int(positive[0])] - logprob[:, int(negative[0])]
+        return (
+            self.score_one_candidate(input_ids, attention_mask, positive)
+            - self.score_one_candidate(input_ids, attention_mask, negative)
+        )
+
     @torch.no_grad()
     def score_candidates(
         self,

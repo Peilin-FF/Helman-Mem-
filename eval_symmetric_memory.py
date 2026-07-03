@@ -35,9 +35,9 @@ from transformers import AutoTokenizer
 
 from feedback_state.data import JsonlDataset
 from feedback_state.generation import dtype_from_name
-from feedback_state.joint_data import VARIANT_AR, candidate_token_ids
+from feedback_state.joint_data import VARIANT_AR, candidate_token_ids, yes_no_token_ids
 from feedback_state.joint_models import JointDeltaMemSelector
-from feedback_state.joint_prompt import PEER_SEP, build_joint_prompt
+from feedback_state.joint_prompt import PEER_SEP, build_candidate_judge_prompt, build_joint_prompt
 from feedback_state.permutations import canonical_peer_view
 from feedback_state.symmetric_memory import ActivationSteerer, SymmetricTrustMemory, DEFAULT_TASK_TYPES, cm_context_vector
 from feedback_state.utils import load_config, merge_args_with_config
@@ -54,6 +54,8 @@ def parse_args():
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--checkpoint", type=Path, default=None)
     p.add_argument("--central_model", default=None)
+    p.add_argument("--num_peers", type=int, default=None)
+    p.add_argument("--max_length", type=int, default=None)
     p.add_argument("--center_lora_checkpoint", type=Path, default=None,
                    help="Optional LoRA selector checkpoint to attach to the central model.")
     p.add_argument("--offline_data", type=Path, default=None)
@@ -68,6 +70,9 @@ def parse_args():
     p.add_argument("--peer_mode", choices=["joint", "one"], default=None,
                    help="joint: all peers in one prompt, CM compares (default). "
                         "one: each peer scored alone in its own prompt (no cross-comparison).")
+    p.add_argument("--score_mode", choices=["peer_name", "candidate_yesno"], default=None,
+                   help="peer_name: score 'Peer j' continuations (legacy). "
+                        "candidate_yesno: score each highlighted candidate with shared Yes/No utility.")
     p.add_argument("--confusion_gate", choices=["off", "entropy", "margin"], default=None,
                    help="Optional center-uncertainty gate. If enabled, confident examples use "
                         "center-only scores and skip Sigma memory read/write.")
@@ -114,6 +119,31 @@ def _use_memory_for_confusion(gate, entropy, margin, threshold):
     return True
 
 
+def _load_shape_compatible(module, state_dict, label):
+    """Load checkpoint entries whose names and shapes match the current module.
+
+    This keeps train-3/test-5 evaluation usable: peer-shaped runtime buffers such as
+    M/G are dropped separately, and any remaining peer-indexed parameter from an old
+    per_peer_decay checkpoint is skipped instead of aborting the run.
+    """
+    current = module.state_dict()
+    loadable = {}
+    skipped = []
+    for key, value in state_dict.items():
+        if key not in current:
+            skipped.append(f"{key}: missing")
+        elif tuple(current[key].shape) != tuple(value.shape):
+            skipped.append(f"{key}: ckpt{tuple(value.shape)} != current{tuple(current[key].shape)}")
+        else:
+            loadable[key] = value
+    missing, unexpected = module.load_state_dict(loadable, strict=False)
+    if skipped:
+        preview = "; ".join(skipped[:6])
+        suffix = "" if len(skipped) <= 6 else f"; ... +{len(skipped) - 6} more"
+        print(f"[eval_sym] skipped shape-incompatible {label} entries: {preview}{suffix}", flush=True)
+    return missing, unexpected
+
+
 def main():
     args = parse_args()
     cfg = merge_args_with_config(args, load_config(args.config))
@@ -136,11 +166,17 @@ def main():
     write_mode = str(cfg.get("write_mode", "addr"))  # addr (A) | carry (B)
     per_peer_decay = as_bool(cfg.get("per_peer_decay"), False)  # match train: per-peer decay theta shape
     peer_mode = str(cfg.get("peer_mode", "joint"))   # joint (compare all) | one (score each alone)
+    score_mode = str(cfg.get("score_mode", "peer_name")).lower()
     whiten = as_bool(cfg.get("whiten"), write_mode == "carry")
     confusion_gate = str(cfg.get("confusion_gate", "off")).lower()
     confusion_temp = float(cfg.get("confusion_temperature", 1.0))
     if confusion_gate not in {"off", "entropy", "margin"}:
         raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    if score_mode not in {"peer_name", "candidate_yesno"}:
+        raise ValueError(f"score_mode must be peer_name/candidate_yesno, got {score_mode!r}")
+    if score_mode == "candidate_yesno" and peer_mode != "joint":
+        print("[eval_sym] score_mode=candidate_yesno uses joint candidate prompts; "
+              f"peer_mode={peer_mode!r} is kept only for legacy metrics.", flush=True)
     confusion_threshold = cfg.get("confusion_threshold")
     if confusion_gate != "off":
         if confusion_threshold is None:
@@ -195,11 +231,11 @@ def main():
                                per_peer_decay=per_peer_decay,
                                use_joint=use_joint, device=device).to(device)
     steerer = ActivationSteerer(base, rank=rank).to(device)
-    # load trained memory params (phi/eta/theta + steerer proj/gain) from checkpoint.
-    # Drop the state buffers M/G: they are the only num_peers-dependent tensors, and they
-    # are cold-reset below anyway. Dropping them lets a checkpoint trained with a DIFFERENT
-    # number of peers load cleanly -> train with 3 agents, evaluate with 5 (the trainable
-    # params eta/gamma/phi_proj/steerer are all agent-count-independent by construction).
+    # Load trained memory params (phi/eta/shared theta + steerer proj/gain) from checkpoint.
+    # M/G are runtime state buffers and are rebuilt below for the requested num_peers.
+    # Strict peer-count generalization requires peer-count-independent learned params
+    # (for example per_peer_decay=off). Shape filtering below prevents old peer-indexed
+    # checkpoints from crashing evaluation, but skipped params fall back to init values.
     if ckpt is not None and (ckpt / "sym_memory.pt").exists():
         payload = torch.load(ckpt / "sym_memory.pt", map_location=device)
         mem_sd = {k: v for k, v in payload["mem"].items() if k not in ("M", "G")}
@@ -213,9 +249,9 @@ def main():
             # set_prototypes re-whitens, so undo: pass raw = cw*std+mean
             raw_cent = cw.to(pstd.dtype) * (pstd + 1e-6) + pmean
             mem.set_prototypes(raw_cent, pmean, pstd)
-        mem.load_state_dict(mem_sd, strict=False)
+        _load_shape_compatible(mem, mem_sd, "memory")
         if steerer is not None and "steerer" in payload:
-            steerer.load_state_dict(payload["steerer"], strict=False)
+            _load_shape_compatible(steerer, payload["steerer"], "steerer")
     mem.reset()
     # warm start the matrices (rare; default cold)
     if init_state == "warm" and ckpt is not None and (ckpt / "sym_state.pt").exists():
@@ -224,6 +260,7 @@ def main():
     base_snap = mem.snapshot()
 
     cand_ids = candidate_token_ids(tok, num_peers)
+    yes_ids, no_ids = yes_no_token_ids(tok)
     records = JsonlDataset(cfg["offline_data"]).records
     max_examples = cfg.get("max_examples")
     if max_examples is not None:
@@ -241,14 +278,26 @@ def main():
                 mem.restore(base_snap)
             q = str(rec.get("problem", rec.get("question", "")))
             rag_ctx = str(rec.get("retrieved_context", rec.get("context", ""))) if cfg.get("include_context") else ""
-            prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None, include_identity=False, real=real)
-            enc = tok(prompt, add_special_tokens=True, truncation=True, max_length=max_len)
-            pid = torch.tensor([enc["input_ids"]], device=device)
-            pmask = torch.ones_like(pid)
+            pid = pmask = None
             # peer_mode="one": precompute a single-peer prompt per candidate (CM sees ONE answer
             # at a time, no cross-comparison). Each is scored on its lone " Peer 0" endorsement.
             one_pids = None
-            if peer_mode == "one":
+            candidate_pids = None
+            if score_mode == "candidate_yesno":
+                candidate_pids = []
+                for s in range(real):
+                    cp = build_candidate_judge_prompt(
+                        q, slot_names, texts, s, context=rag_ctx or None,
+                        include_identity=False, real=real)
+                    ce = tok(cp, add_special_tokens=True, truncation=True, max_length=max_len)
+                    candidate_pids.append(torch.tensor([ce["input_ids"]], device=device))
+            else:
+                prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None,
+                                            include_identity=False, real=real)
+                enc = tok(prompt, add_special_tokens=True, truncation=True, max_length=max_len)
+                pid = torch.tensor([enc["input_ids"]], device=device)
+                pmask = torch.ones_like(pid)
+            if score_mode == "peer_name" and peer_mode == "one":
                 one_pids = []
                 for s in range(real):
                     sp = build_joint_prompt(q, [slot_names[s]], [texts[s]], context=rag_ctx or None,
@@ -267,7 +316,11 @@ def main():
             def score_slot(s, steer_vec=None):
                 if steer_vec is not None:
                     steerer.steer_vec = steer_vec
-                if peer_mode == "one":
+                if score_mode == "candidate_yesno":
+                    cpid = candidate_pids[s]
+                    cmask = torch.ones_like(cpid)
+                    lp = float(model.score_candidate_utility(cpid, cmask, yes_ids, no_ids)[0])
+                elif peer_mode == "one":
                     # CM scores this peer ALONE: its prompt has a single answer at slot 0,
                     # so the endorsement token is always " Peer 0" (cand_ids[0]).
                     spid = one_pids[s]
@@ -279,6 +332,8 @@ def main():
 
             def score_center_slots():
                 steerer.steer_vec = None
+                if score_mode == "candidate_yesno":
+                    return [score_slot(s) for s in range(real)]
                 if peer_mode == "joint":
                     vals = model.score_candidates(pid, pmask, cand_ids)[0]
                     return [float(vals[s]) for s in range(real)]
@@ -349,8 +404,12 @@ def main():
                                 "hit_rate_when_chosen": round(v["chosen_correct"] / v["chosen"], 4) if v["chosen"] else 0.0}
                       for p, v in sorted(peer_chosen.items())}
     metrics = {
-        "accuracy": acc, "num_samples": total, "coupling": "steer", "phi_mode": phi_mode, "write_mode": write_mode, "decay_mode": decay_mode,
+        "accuracy": acc, "num_samples": total, "coupling": "steer", "phi_mode": phi_mode,
+        "write_mode": write_mode, "decay_mode": decay_mode,
+        "num_peers": num_peers,
+        "per_peer_decay": per_peer_decay,
         "peer_mode": peer_mode,
+        "score_mode": score_mode,
         "init_state": init_state, "reset_state": reset_state, "ablate_memory": ablate, "use_joint": use_joint,
         "gamma": mem.gamma_scalar(), "eta": float(mem.eta),
         "peer_selection": peer_selection,
@@ -372,7 +431,8 @@ def main():
         for s in selections:
             f.write(json.dumps(s) + "\n")
     print(f"[eval_sym/steer/{phi_mode}] {cfg['offline_data']}: accuracy={acc*100:.2f} over {total} "
-          f"(ablate={ablate}, reset={reset_state}, peer_mode={peer_mode}, use_joint={use_joint})")
+          f"(ablate={ablate}, reset={reset_state}, peer_mode={peer_mode}, "
+          f"score_mode={score_mode}, use_joint={use_joint})")
     steerer.remove()
 
 

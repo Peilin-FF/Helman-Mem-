@@ -34,6 +34,14 @@ def candidate_token_ids(tokenizer, num_peers: int) -> list[list[int]]:
     return [tokenizer.encode(" " + s, add_special_tokens=False) for s in candidate_peer_strings(num_peers)]
 
 
+def yes_no_token_ids(tokenizer) -> tuple[list[int], list[int]]:
+    """Token ids for the shared Yes/No candidate-utility continuations."""
+    return (
+        tokenizer.encode(" Yes", add_special_tokens=False),
+        tokenizer.encode(" No", add_special_tokens=False),
+    )
+
+
 def char_to_token_spans(offsets: list[tuple[int, int]], char_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """Map [char_start, char_end) response spans to [tok_start, tok_end) spans."""
     out = []

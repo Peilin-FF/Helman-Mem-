@@ -32,9 +32,9 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 from feedback_state.data import JsonlDataset
 from feedback_state.generation import dtype_from_name
-from feedback_state.joint_data import VARIANT_AR, candidate_token_ids
+from feedback_state.joint_data import VARIANT_AR, candidate_token_ids, yes_no_token_ids
 from feedback_state.joint_models import JointDeltaMemSelector
-from feedback_state.joint_prompt import PEER_SEP, build_joint_prompt
+from feedback_state.joint_prompt import PEER_SEP, build_candidate_judge_prompt, build_joint_prompt
 from feedback_state.permutations import canonical_peer_view
 from feedback_state.symmetric_memory import ActivationSteerer, SymmetricTrustMemory, DEFAULT_TASK_TYPES, cm_context_vector
 from feedback_state.tasks import task_type_of
@@ -53,6 +53,8 @@ def parse_args():
     p.add_argument("--offline_data", type=Path, default=None)
     p.add_argument("--output_dir", type=Path, default=None)
     p.add_argument("--central_model", default=None)
+    p.add_argument("--num_peers", type=int, default=None)
+    p.add_argument("--max_length", type=int, default=None)
     p.add_argument("--center_lora_checkpoint", type=Path, default=None,
                    help="Optional LoRA selector checkpoint to attach to the central model.")
     p.add_argument("--train_center_lora", choices=["on", "off"], default=None,
@@ -65,6 +67,9 @@ def parse_args():
     p.add_argument("--diff_write", choices=["on", "off"], default=None)
     p.add_argument("--peer_mode", choices=["joint", "one"], default=None,
                    help="joint: score all peers in one prompt. one: score each peer alone.")
+    p.add_argument("--score_mode", choices=["peer_name", "candidate_yesno"], default=None,
+                   help="peer_name: score 'Peer j' continuations (legacy). "
+                        "candidate_yesno: score each highlighted candidate with shared Yes/No utility.")
     p.add_argument("--confusion_gate", choices=["off", "entropy", "margin"], default=None,
                    help="Optional center-uncertainty gate. If enabled, confident examples skip "
                         "Sigma memory training and online state update.")
@@ -137,6 +142,7 @@ def main():
     per_peer_decay = as_bool(cfg.get("per_peer_decay"), False)  # idea-3: each peer its own decay theta
     diff_write = as_bool(cfg.get("diff_write"), False)          # idea-2: read thru a differentiable write -> theta/eta learn
     peer_mode = str(cfg.get("peer_mode", "joint")).lower()
+    score_mode = str(cfg.get("score_mode", "peer_name")).lower()
     train_center_lora = as_bool(cfg.get("train_center_lora"), False)
     whiten = as_bool(cfg.get("whiten"), write_mode == "carry")
     grad_accum = int(cfg.get("gradient_accumulation_steps", 4))
@@ -144,6 +150,11 @@ def main():
     confusion_temp = float(cfg.get("confusion_temperature", 1.0))
     if confusion_gate not in {"off", "entropy", "margin"}:
         raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    if score_mode not in {"peer_name", "candidate_yesno"}:
+        raise ValueError(f"score_mode must be peer_name/candidate_yesno, got {score_mode!r}")
+    if score_mode == "candidate_yesno" and peer_mode != "joint":
+        print("[sym/steer] score_mode=candidate_yesno uses joint candidate prompts; "
+              f"peer_mode={peer_mode!r} is kept only for legacy metrics.", flush=True)
     confusion_threshold = cfg.get("confusion_threshold")
     if confusion_gate != "off":
         if confusion_threshold is None:
@@ -228,7 +239,8 @@ def main():
     params = memory_params + lora_params
     named = list(mem.named_parameters()) + list(steerer.named_parameters()) + lora_named
     print(f"[sym/steer] trainable params: total={sum(p.numel() for p in params)} "
-          f"(lora={sum(p.numel() for _, p in lora_named)}, peer_mode={peer_mode})", flush=True)
+          f"(lora={sum(p.numel() for _, p in lora_named)}, peer_mode={peer_mode}, "
+          f"score_mode={score_mode})", flush=True)
     memory_lr = float(cfg.get("learning_rate", 1e-3))
     lora_lr = float(cfg.get("lora_learning_rate", cfg.get("learning_rate", 1e-4)))
     weight_decay = float(cfg.get("weight_decay", 0.0))
@@ -240,6 +252,7 @@ def main():
 
 
     cand_ids = candidate_token_ids(tok, num_peers)
+    yes_ids, no_ids = yes_no_token_ids(tok)
     records = JsonlDataset(cfg["offline_data"]).records
     total_steps = int(cfg.get("max_steps", len(records)))
     sched = get_cosine_schedule_with_warmup(optim, int(total_steps * float(cfg.get("warmup_ratio", 0.03))), total_steps)
@@ -281,12 +294,24 @@ def main():
                 continue
             q = str(rec.get("problem", rec.get("question", "")))
             rag_ctx = str(rec.get("retrieved_context", rec.get("context", ""))) if cfg.get("include_context") else ""
-            prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None, include_identity=False, real=real)
-            enc = tok(prompt, add_special_tokens=True, truncation=True, max_length=max_len)
-            pid = torch.tensor([enc["input_ids"]], device=device)
-            pmask = torch.ones_like(pid)
+            pid = pmask = None
             one_pids = None
-            if peer_mode == "one":
+            candidate_pids = None
+            if score_mode == "candidate_yesno":
+                candidate_pids = []
+                for s in range(real):
+                    cp = build_candidate_judge_prompt(
+                        q, slot_names, texts, s, context=rag_ctx or None,
+                        include_identity=False, real=real)
+                    ce = tok(cp, add_special_tokens=True, truncation=True, max_length=max_len)
+                    candidate_pids.append(torch.tensor([ce["input_ids"]], device=device))
+            else:
+                prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None,
+                                            include_identity=False, real=real)
+                enc = tok(prompt, add_special_tokens=True, truncation=True, max_length=max_len)
+                pid = torch.tensor([enc["input_ids"]], device=device)
+                pmask = torch.ones_like(pid)
+            if score_mode == "peer_name" and peer_mode == "one":
                 one_pids = []
                 for s in range(real):
                     sp = build_joint_prompt(q, [slot_names[s]], [texts[s]], context=rag_ctx or None,
@@ -306,7 +331,11 @@ def main():
                     value_vecs.append(ans_h - gold_h)
 
             def score_slot(s):
-                if peer_mode == "one":
+                if score_mode == "candidate_yesno":
+                    cpid = candidate_pids[s]
+                    cmask = torch.ones_like(cpid)
+                    lp = model.score_candidate_utility(cpid, cmask, yes_ids, no_ids)[0]
+                elif peer_mode == "one":
                     spid = one_pids[s]
                     lp = model.score_one_candidate(spid, torch.ones_like(spid), cand_ids[0])[0]
                 else:
@@ -316,6 +345,8 @@ def main():
 
             def score_center_slots():
                 steerer.steer_vec = None
+                if score_mode == "candidate_yesno":
+                    return [float(score_slot(s)) for s in range(real)]
                 if peer_mode == "joint":
                     vals = model.score_candidates(pid, pmask, cand_ids)[0]
                     return [float(vals[s]) for s in range(real)]
@@ -400,6 +431,10 @@ def main():
     (out_dir / "train_config.json").write_text(json.dumps({k: str(v) for k, v in cfg.items()}, indent=1))
     if confusion_gate != "off":
         (out_dir / "train_metrics.json").write_text(json.dumps({
+            "score_mode": score_mode,
+            "peer_mode": peer_mode,
+            "num_peers": num_peers,
+            "per_peer_decay": per_peer_decay,
             "confusion_gate": confusion_gate,
             "confusion_threshold": confusion_threshold,
             "confusion_temperature": confusion_temp,
