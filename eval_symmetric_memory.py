@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -67,6 +68,14 @@ def parse_args():
     p.add_argument("--peer_mode", choices=["joint", "one"], default=None,
                    help="joint: all peers in one prompt, CM compares (default). "
                         "one: each peer scored alone in its own prompt (no cross-comparison).")
+    p.add_argument("--confusion_gate", choices=["off", "entropy", "margin"], default=None,
+                   help="Optional center-uncertainty gate. If enabled, confident examples use "
+                        "center-only scores and skip Sigma memory read/write.")
+    p.add_argument("--confusion_threshold", type=float, default=None,
+                   help="Gate threshold. entropy: use memory when normalized entropy >= threshold. "
+                        "margin: use memory when top1-top2 score margin <= threshold.")
+    p.add_argument("--confusion_temperature", type=float, default=None,
+                   help="Temperature for entropy softmax over center-only candidate scores.")
     p.add_argument("--max_examples", type=int, default=None,
                    help="Optional cap for quick diagnostic evals; full eval by default.")
     p.add_argument("--output", type=Path, default=None)
@@ -81,6 +90,28 @@ def _example_view(rec, num_peers):
     # peer index from canonical key "peer_N" -> identity address for the per-peer matrix
     peer_ids = [int(str(k).split("_")[1]) if str(k).startswith("peer_") else i for i, k in enumerate(keys)]
     return [f"peer_{i}" for i in range(len(keys))], texts, corr, real, peer_ids
+
+
+def _center_uncertainty(scores, temperature=1.0):
+    vals = torch.tensor(scores, dtype=torch.float32)
+    temp = max(float(temperature), 1e-6)
+    probs = torch.softmax(vals / temp, dim=0)
+    entropy = float(-(probs * probs.clamp_min(1e-9).log()).sum())
+    if len(scores) > 1:
+        entropy /= math.log(len(scores))
+        top2 = torch.topk(vals, k=2).values
+        margin = float(top2[0] - top2[1])
+    else:
+        margin = 1e9
+    return entropy, margin
+
+
+def _use_memory_for_confusion(gate, entropy, margin, threshold):
+    if gate == "entropy":
+        return entropy >= threshold
+    if gate == "margin":
+        return margin <= threshold
+    return True
 
 
 def main():
@@ -106,6 +137,17 @@ def main():
     per_peer_decay = as_bool(cfg.get("per_peer_decay"), False)  # match train: per-peer decay theta shape
     peer_mode = str(cfg.get("peer_mode", "joint"))   # joint (compare all) | one (score each alone)
     whiten = as_bool(cfg.get("whiten"), write_mode == "carry")
+    confusion_gate = str(cfg.get("confusion_gate", "off")).lower()
+    confusion_temp = float(cfg.get("confusion_temperature", 1.0))
+    if confusion_gate not in {"off", "entropy", "margin"}:
+        raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    confusion_threshold = cfg.get("confusion_threshold")
+    if confusion_gate != "off":
+        if confusion_threshold is None:
+            confusion_threshold = 0.8 if confusion_gate == "entropy" else 2.0
+        confusion_threshold = float(confusion_threshold)
+        print(f"[eval_sym] confusion_gate={confusion_gate} threshold={confusion_threshold} "
+              f"temperature={confusion_temp}", flush=True)
 
     tok_src = str(lora_ckpt) if lora_ckpt is not None and (lora_ckpt / "tokenizer_config.json").exists() else model_name
     tok = AutoTokenizer.from_pretrained(tok_src, local_files_only=bool(cfg.get("local_files_only", False)))
@@ -187,6 +229,8 @@ def main():
     if max_examples is not None:
         records = records[:int(max_examples)]
     correct = total = 0
+    gate_total = gate_used = 0
+    entropy_sum = margin_sum = 0.0
     selections = []  # per-example: which peer was picked, was it right, per-peer scores+labels
     with torch.no_grad():
         for rec in records:
@@ -219,11 +263,10 @@ def main():
                 gold_h = cm_context_vector(base, tok, str(rec.get("answer", "")), device=device, layer_frac=phi_layer_frac)
                 value_vecs = [cm_context_vector(base, tok, str(texts[s])[:4000], device=device, layer_frac=phi_layer_frac) - gold_h
                               for s in range(real)]
-            scores = []
-            for s in range(real):
-                pj = peer_ids[s]
-                if not ablate:
-                    steerer.steer_vec = mem.steer_vector(pj, phi_ctx).detach()
+
+            def score_slot(s, steer_vec=None):
+                if steer_vec is not None:
+                    steerer.steer_vec = steer_vec
                 if peer_mode == "one":
                     # CM scores this peer ALONE: its prompt has a single answer at slot 0,
                     # so the endorsement token is always " Peer 0" (cand_ids[0]).
@@ -232,7 +275,36 @@ def main():
                 else:
                     lp = float(model.score_one_candidate(pid, pmask, cand_ids[s])[0])
                 steerer.steer_vec = None
-                scores.append(lp)
+                return lp
+
+            def score_center_slots():
+                steerer.steer_vec = None
+                if peer_mode == "joint":
+                    vals = model.score_candidates(pid, pmask, cand_ids)[0]
+                    return [float(vals[s]) for s in range(real)]
+                return [score_slot(s) for s in range(real)]
+
+            center_scores = None
+            center_entropy = None
+            center_margin = None
+            use_memory_now = not ablate
+            if confusion_gate != "off":
+                center_scores = score_center_slots()
+                center_entropy, center_margin = _center_uncertainty(center_scores, confusion_temp)
+                use_memory_now = (not ablate) and _use_memory_for_confusion(
+                    confusion_gate, center_entropy, center_margin, confusion_threshold)
+                gate_total += 1
+                gate_used += int(use_memory_now)
+                entropy_sum += center_entropy
+                margin_sum += center_margin
+
+            if use_memory_now:
+                scores = [
+                    score_slot(s, mem.steer_vector(peer_ids[s], phi_ctx).detach())
+                    for s in range(real)
+                ]
+            else:
+                scores = center_scores if center_scores is not None else [score_slot(s) for s in range(real)]
             sel = int(max(range(real), key=lambda s: scores[s]))
             total += 1
             correct += int(corr[sel] == 1)
@@ -244,11 +316,19 @@ def main():
                 "selected_correct": int(corr[sel] == 1),
                 "peer_scores": {int(peer_ids[s]): round(scores[s], 4) for s in range(real)},
                 "peer_correct": {int(peer_ids[s]): int(corr[s]) for s in range(real)},
+                "memory_used": bool(use_memory_now),
+                "score_source": "sigma" if use_memory_now else "center",
             })
+            if center_entropy is not None:
+                selections[-1]["center_entropy"] = round(center_entropy, 6)
+                selections[-1]["center_margin"] = round(center_margin, 4)
+                selections[-1]["center_peer_scores"] = {
+                    int(peer_ids[s]): round(center_scores[s], 4) for s in range(real)
+                }
             # event-axis update AFTER the pick (one update per peer per task).
             # sign s: ground-truth correctness. (The trainable-judge s was dropped — correctness
             # is not linearly readable from the frozen CM feature; see git history / train script.)
-            if not ablate:
+            if use_memory_now:
                 signs = [1.0 if corr[s] else -1.0 for s in range(real)]
                 for s in range(real):
                     vv = value_vecs[s] if value_vecs is not None else None
@@ -268,13 +348,25 @@ def main():
                                 "share": round(v["chosen"] / total, 4) if total else 0.0,
                                 "hit_rate_when_chosen": round(v["chosen_correct"] / v["chosen"], 4) if v["chosen"] else 0.0}
                       for p, v in sorted(peer_chosen.items())}
-    (out / "eval_metrics.json").write_text(json.dumps({
+    metrics = {
         "accuracy": acc, "num_samples": total, "coupling": "steer", "phi_mode": phi_mode, "write_mode": write_mode, "decay_mode": decay_mode,
         "peer_mode": peer_mode,
         "init_state": init_state, "reset_state": reset_state, "ablate_memory": ablate, "use_joint": use_joint,
         "gamma": mem.gamma_scalar(), "eta": float(mem.eta),
         "peer_selection": peer_selection,
-    }, indent=1))
+        "confusion_gate": confusion_gate,
+    }
+    if confusion_gate != "off":
+        metrics.update({
+            "confusion_threshold": confusion_threshold,
+            "confusion_temperature": confusion_temp,
+            "memory_used": gate_used,
+            "memory_gate_total": gate_total,
+            "memory_use_rate": round(gate_used / gate_total, 6) if gate_total else 0.0,
+            "mean_center_entropy": round(entropy_sum / gate_total, 6) if gate_total else None,
+            "mean_center_margin": round(margin_sum / gate_total, 6) if gate_total else None,
+        })
+    (out / "eval_metrics.json").write_text(json.dumps(metrics, indent=1))
     # per-example selections (id, picked peer, correctness, scores) for detailed inspection
     with (out / "selections.jsonl").open("w") as f:
         for s in selections:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -64,6 +65,14 @@ def parse_args():
     p.add_argument("--diff_write", choices=["on", "off"], default=None)
     p.add_argument("--peer_mode", choices=["joint", "one"], default=None,
                    help="joint: score all peers in one prompt. one: score each peer alone.")
+    p.add_argument("--confusion_gate", choices=["off", "entropy", "margin"], default=None,
+                   help="Optional center-uncertainty gate. If enabled, confident examples skip "
+                        "Sigma memory training and online state update.")
+    p.add_argument("--confusion_threshold", type=float, default=None,
+                   help="Gate threshold. entropy: train/update when normalized entropy >= threshold. "
+                        "margin: train/update when top1-top2 score margin <= threshold.")
+    p.add_argument("--confusion_temperature", type=float, default=None,
+                   help="Temperature for entropy softmax over center-only candidate scores.")
     p.add_argument("--max_steps", type=int, default=None)
     return p.parse_args()
 
@@ -84,6 +93,28 @@ def _probe_grad(params_named, label="param"):
         if p.grad is not None:
             tot += float(p.grad.detach().abs().sum())
     print(f"[grad-probe] {label} grad |.|1 sum = {tot:.4e} -> {'TRAIN' if tot > 0 else 'NO GRAD (bug)'}", flush=True)
+
+
+def _center_uncertainty(scores, temperature=1.0):
+    vals = torch.tensor(scores, dtype=torch.float32)
+    temp = max(float(temperature), 1e-6)
+    probs = torch.softmax(vals / temp, dim=0)
+    entropy = float(-(probs * probs.clamp_min(1e-9).log()).sum())
+    if len(scores) > 1:
+        entropy /= math.log(len(scores))
+        top2 = torch.topk(vals, k=2).values
+        margin = float(top2[0] - top2[1])
+    else:
+        margin = 1e9
+    return entropy, margin
+
+
+def _use_memory_for_confusion(gate, entropy, margin, threshold):
+    if gate == "entropy":
+        return entropy >= threshold
+    if gate == "margin":
+        return margin <= threshold
+    return True
 
 
 def main():
@@ -109,6 +140,17 @@ def main():
     train_center_lora = as_bool(cfg.get("train_center_lora"), False)
     whiten = as_bool(cfg.get("whiten"), write_mode == "carry")
     grad_accum = int(cfg.get("gradient_accumulation_steps", 4))
+    confusion_gate = str(cfg.get("confusion_gate", "off")).lower()
+    confusion_temp = float(cfg.get("confusion_temperature", 1.0))
+    if confusion_gate not in {"off", "entropy", "margin"}:
+        raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    confusion_threshold = cfg.get("confusion_threshold")
+    if confusion_gate != "off":
+        if confusion_threshold is None:
+            confusion_threshold = 0.8 if confusion_gate == "entropy" else 2.0
+        confusion_threshold = float(confusion_threshold)
+        print(f"[sym/steer] confusion_gate={confusion_gate} threshold={confusion_threshold} "
+              f"temperature={confusion_temp}", flush=True)
 
     tok_src = str(lora_ckpt) if lora_ckpt is not None and (lora_ckpt / "tokenizer_config.json").exists() else model_name
     tok = AutoTokenizer.from_pretrained(tok_src, local_files_only=bool(cfg.get("local_files_only", False)))
@@ -224,6 +266,10 @@ def main():
 
     mem.reset()
     step = 0; probed = False
+    backward_steps = 0
+    gate_total = gate_used = 0
+    entropy_sum = margin_sum = 0.0
+    last_loss = None
     log_every = int(cfg.get("logging_steps", 50))
     while step < total_steps:
         for rec in records:
@@ -258,57 +304,92 @@ def main():
                 for s in range(real):
                     ans_h = cm_context_vector(base, tok, str(texts[s])[:4000], device=device, layer_frac=phi_layer_frac)
                     value_vecs.append(ans_h - gold_h)
-            # score each candidate WITH the steering vector in-graph; logp_CM under steering
-            # carries the gradient back to the memory params (phi/phi_proj/theta/proj/gain).
-            logits = []
-            for s in range(real):
-                pj = peer_ids[s]
-                if diff_write:
-                    # idea-2: read through one DIFFERENTIABLE write so loss reaches theta/eta.
-                    # sign = ground-truth correctness of THIS peer (train-only signal).
-                    vv = value_vecs[s] if value_vecs is not None else None
-                    steerer.steer_vec = mem.steer_vector_diff(pj, phi_ctx, 1.0 if corr[s] else -1.0, value_vec=vv)
-                else:
-                    steerer.steer_vec = mem.steer_vector(pj, phi_ctx)
+
+            def score_slot(s):
                 if peer_mode == "one":
                     spid = one_pids[s]
                     lp = model.score_one_candidate(spid, torch.ones_like(spid), cand_ids[0])[0]
                 else:
                     lp = model.score_one_candidate(pid, pmask, cand_ids[s])[0]
                 steerer.steer_vec = None
-                logits.append(lp)
-            logit_vec = torch.stack(logits)
-            loss = torch.nn.functional.cross_entropy(
-                logit_vec.unsqueeze(0).float(), torch.tensor([tgt], device=device)) / grad_accum
-            loss.backward()
-            if not probed and step >= grad_accum * 3:
-                # probe AFTER the matrices are warm — at step 0 M=0 so read==0 and grad is
-                # legitimately zero (d/dphi of phi^T 0 phi = 0); that is not a bug.
-                _probe_grad(named, "all trainable params")
-                if lora_named:
-                    _probe_grad(lora_named, "LoRA params")
-                probed = True
-            if (step + 1) % grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(params, float(cfg.get("max_grad_norm", 1.0)))
-                optim.step(); sched.step(); optim.zero_grad(set_to_none=True)
+                return lp
+
+            def score_center_slots():
+                steerer.steer_vec = None
+                if peer_mode == "joint":
+                    vals = model.score_candidates(pid, pmask, cand_ids)[0]
+                    return [float(vals[s]) for s in range(real)]
+                return [float(score_slot(s)) for s in range(real)]
+
+            use_memory_now = True
+            if confusion_gate != "off":
+                with torch.no_grad():
+                    center_scores = score_center_slots()
+                center_entropy, center_margin = _center_uncertainty(center_scores, confusion_temp)
+                use_memory_now = _use_memory_for_confusion(
+                    confusion_gate, center_entropy, center_margin, confusion_threshold)
+                gate_total += 1
+                gate_used += int(use_memory_now)
+                entropy_sum += center_entropy
+                margin_sum += center_margin
+
+            if use_memory_now:
+                # score each candidate WITH the steering vector in-graph; logp_CM under steering
+                # carries the gradient back to the memory params (phi/phi_proj/theta/proj/gain).
+                logits = []
+                for s in range(real):
+                    pj = peer_ids[s]
+                    if diff_write:
+                        # idea-2: read through one DIFFERENTIABLE write so loss reaches theta/eta.
+                        # sign = ground-truth correctness of THIS peer (train-only signal).
+                        vv = value_vecs[s] if value_vecs is not None else None
+                        steerer.steer_vec = mem.steer_vector_diff(pj, phi_ctx, 1.0 if corr[s] else -1.0, value_vec=vv)
+                    else:
+                        steerer.steer_vec = mem.steer_vector(pj, phi_ctx)
+                    logits.append(score_slot(s))
+                logit_vec = torch.stack(logits)
+                loss = torch.nn.functional.cross_entropy(
+                    logit_vec.unsqueeze(0).float(), torch.tensor([tgt], device=device)) / grad_accum
+                loss.backward()
+                backward_steps += 1
+                last_loss = float(loss) * grad_accum
+                if not probed and backward_steps >= grad_accum * 3:
+                    # probe AFTER the matrices are warm — at step 0 M=0 so read==0 and grad is
+                    # legitimately zero (d/dphi of phi^T 0 phi = 0); that is not a bug.
+                    _probe_grad(named, "all trainable params")
+                    if lora_named:
+                        _probe_grad(lora_named, "LoRA params")
+                    probed = True
+                if backward_steps % grad_accum == 0:
+                    torch.nn.utils.clip_grad_norm_(params, float(cfg.get("max_grad_norm", 1.0)))
+                    optim.step(); sched.step(); optim.zero_grad(set_to_none=True)
             # event-axis state update (no grad; state, not params). sign s = ground-truth
             # correctness. (A trainable judge head -> learned s was tried and dropped: from a
             # frozen-CM mid-layer feature, "answer correctness" is not linearly readable
             # (probe AUC ~0.69), so the judge could not produce a usable s; see git history.)
-            signs = [1.0 if corr[s] else -1.0 for s in range(real)]
-            for s in range(real):
-                vv = value_vecs[s] if value_vecs is not None else None
-                mem.update(peer_ids[s], signs[s], phi_ctx, value_vec=vv)
-            mem.update_joint(list(signs) + [0.0] * (num_peers - real))
+            if use_memory_now:
+                signs = [1.0 if corr[s] else -1.0 for s in range(real)]
+                for s in range(real):
+                    vv = value_vecs[s] if value_vecs is not None else None
+                    mem.update(peer_ids[s], signs[s], phi_ctx, value_vec=vv)
+                mem.update_joint(list(signs) + [0.0] * (num_peers - real))
             step += 1
             if step % log_every == 0:
                 gd = mem.gamma().detach()
                 gstr = (f"{float(gd):.3f}" if gd.ndim == 0
                         else "[" + ",".join(f"{x:.3f}" for x in gd.reshape(gd.shape[0], -1).mean(-1).tolist()) + "]")
-                print(f"[sym/steer] step {step}/{total_steps} loss={float(loss)*grad_accum:.4f} "
-                      f"gamma={gstr} eta={float(mem.eta):.3f} gain={float(steerer.gain):.3f}", flush=True)
+                gate_msg = ""
+                if confusion_gate != "off" and gate_total:
+                    gate_msg = f" gate_use={gate_used}/{gate_total}({gate_used/gate_total:.3f})"
+                loss_msg = f"{last_loss:.4f}" if last_loss is not None else "nan"
+                print(f"[sym/steer] step {step}/{total_steps} loss={loss_msg} "
+                      f"gamma={gstr} eta={float(mem.eta):.3f} gain={float(steerer.gain):.3f}"
+                      f"{gate_msg}", flush=True)
 
     # save trained params + final matrices
+    if backward_steps % grad_accum != 0:
+        torch.nn.utils.clip_grad_norm_(params, float(cfg.get("max_grad_norm", 1.0)))
+        optim.step(); sched.step(); optim.zero_grad(set_to_none=True)
     payload = {"mem": mem.state_dict(), "steerer": steerer.state_dict()}
     torch.save(payload, out_dir / "sym_memory.pt")
     torch.save(mem.snapshot(), out_dir / "sym_state.pt")
@@ -317,6 +398,18 @@ def main():
         base.save_pretrained(adapter_dir)
         tok.save_pretrained(out_dir)
     (out_dir / "train_config.json").write_text(json.dumps({k: str(v) for k, v in cfg.items()}, indent=1))
+    if confusion_gate != "off":
+        (out_dir / "train_metrics.json").write_text(json.dumps({
+            "confusion_gate": confusion_gate,
+            "confusion_threshold": confusion_threshold,
+            "confusion_temperature": confusion_temp,
+            "memory_used": gate_used,
+            "memory_gate_total": gate_total,
+            "memory_use_rate": round(gate_used / gate_total, 6) if gate_total else 0.0,
+            "mean_center_entropy": round(entropy_sum / gate_total, 6) if gate_total else None,
+            "mean_center_margin": round(margin_sum / gate_total, 6) if gate_total else None,
+            "backward_steps": backward_steps,
+        }, indent=1))
     print(f"[sym/steer] saved to {out_dir}", flush=True)
 
 

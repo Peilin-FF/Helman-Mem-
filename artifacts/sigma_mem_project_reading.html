@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sigma-Mem 项目解读</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class='eyebrow'>Project Reading</div><h1>Sigma-Mem 当前项目解读</h1><p class='lede'>这个仓库不是在训练一个会重新解题的中心模型，而是在研究一个更窄的问题：给定多个 peer model 已经写好的答案，冻结的 Center Model 只做“选谁可信”。当前主线方法是 <b>event-axis symmetric trust memory</b>：每个 peer 有一块随在线反馈更新的对称矩阵 <code>M_p</code>，它记录这个 peer 在不同任务/方面上的历史可靠性，再通过 activation steering 改变中心模型对各 peer 的 endorsement log-prob。</p><div class='callout rec'><div class='callout-h'>一句话结论</div><p>当前方法已经从旧的 token 级 Delta-Mem 迁移到事件级 Σ/Sigma memory：它解决了长回答会把历史信任冲掉的问题，并在已有评估里相对 prompt-only 有明显提升；但它目前仍主要依赖离线正确性标签来写入记忆，真正在线 agent swarm 还需要独立 verifier/quality head 和多方面任务数据。</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class='summary-band'><div><span class='k'>核心入口</span><code>train_symmetric_memory.py</code> / <code>eval_symmetric_memory.py</code></div><div><span class='k'>核心模块</span><code>feedback_state/symmetric_memory.py</code></div><div><span class='k'>当前配置</span><code>phi_mode=proto</code>, <code>peer_mode=one</code>, <code>rank=16</code></div><div><span class='k'>默认状态</span><code>G</code> joint matrix 已实现但默认 <code>off</code></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>1. 项目在解决什么</h2><div class='grid col-2'><div class='card'><h3>问题定义</h3><p>每条样本包含一个问题、若干 peer 的完整回答，以及每个 peer 是否正确。中心模型读取问题和回答后，只输出应该信任哪个 peer：<code>Peer 0</code>、<code>Peer 1</code> 或 <code>Peer 2</code>。所以准确率上限不是中心模型自己能不能解题，而是“至少有一个 peer 答对”的覆盖率。</p></div><div class='card'><h3>为什么要记忆</h3><p>单题内的答案文本只能告诉 CM 这次谁看起来对；跨题的历史反馈告诉它“这个 peer 在这类任务上长期可靠吗”。项目的研究点就是：冻结 backbone，只训练很小的记忆/steering 参数，看看在线反馈能否改变选择。</p></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>2. 当前算法的完整数据流</h2><div class='timeline'><div class='tl-entry'><div class='tl-time'>A</div><div class='tl-body'><b>构造候选。</b> <code>canonical_peer_view</code> 把样本里的真实 peer 映射到当前 slot，得到 peer 文本、正确性 <code>corr</code> 和真实 peer id。选择 prompt 默认匿名，身份只用来寻址哪一个 <code>M_p</code>。</div></div><div class='tl-entry'><div class='tl-time'>B</div><div class='tl-body'><b>生成任务地址 φ。</b> 用冻结 CM 的中层 hidden mean-pool 编码 question，和预先计算的固定任务 centroid 做 cosine softmax，再经 <code>proto_proj</code> 映射到 rank=16 并归一化。它回答的是“这次属于什么能力方向”。</div></div><div class='tl-entry'><div class='tl-time'>C</div><div class='tl-body'><b>读记忆。</b> 每个 peer 的矩阵读出 <code>steer_p = M_p φ*</code>。这不是 scalar bias，而是一个 rank 维方向。</div></div><div class='tl-entry'><div class='tl-time'>D</div><div class='tl-body'><b>steer 冻结 CM。</b> <code>ActivationSteerer</code> 把 rank 方向投影到 hidden size，并把同一个 residual delta 加到上半层 decoder 输出。CM 在这个 nudge 下重新给候选 endorsement token 打 log-prob。</div></div><div class='tl-entry'><div class='tl-time'>E</div><div class='tl-body'><b>选择并更新。</b> 选择最高 log-prob 的 peer。随后才用每个 peer 的正确性符号 <code>s=+1/-1</code> 更新 <code>M_p ← γ_p M_p + η s φ φ^T</code>。评估时先读后写，避免标签泄漏。</div></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["组件", "当前实现", "我的解读"],
+    "rows": [
+      ["记忆状态", "每个 peer 一个对称矩阵 `M_p ∈ R^{16×16}`", "不是一维 reputation；它能表示“某 peer 在某个能力方向上可靠/不可靠”。"],
+      ["写入", "`M_p ← γ M_p + η s φφ^T`，event-level 一题一次", "避免旧 Delta-Mem 的 token-level 长回答覆盖问题。"],
+      ["地址 φ", "fixed task centroids + softmax cosine + learned `proto_proj`", "折中于 hard task one-hot 和 raw hidden：既要同类任务碰撞，又要能对未见/相近任务软迁移。"],
+      ["读出", "`M_p φ*` 作为 steering direction", "比 `φ^T M φ` scalar bias 强，因为它让 CM 自己在 hidden space 下重评分。"],
+      ["训练", "CE 到第一个正确 peer；可用 `diff_write` 让 `η/γ` 收到梯度", "核心监督仍来自离线 `correctness_by_peer`，不是完全在线自监督。"],
+      ["评估", "`--ablate_memory` 关闭 steering 做 prompt-only 控制", "这是最关键 baseline：能分辨提升是否真来自记忆。"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>3. 为什么要替换 Delta-Mem</h2><div class='card'><p>旧路径的问题不是实现小 bug，而是 primitive 不匹配。Delta-Mem 的状态按 token 更新，文档里估算 keep≈0.982；一个约 800 token 的回答会让历史状态保留比例变成约 <code>0.982^800 ≈ 1e-7</code>。这意味着“上一题的信任反馈”几乎到不了下一题，长回答等价于重写状态。</p><p>现在的方法把更新轴从 token 改成 event：一题/一次反馈只写一次。这样回答长度不会影响信任寿命，<code>γ</code> 变成明确的事件级时间常数。对称 rank-1 写入还给了谱分析工具：单次扰动幅度受 <code>η</code> 控制，持续一致的信号才会形成主导特征值。</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>4. 你给的两个 HTML 应该怎么看</h2><div class='grid col-2'><div class='card'><h3><code>symmetric_memory_design.html</code></h3><p>这是方法设计文档，核心价值是把“为什么旧记忆失败”和“为什么对称矩阵稳定”讲清楚。里面最关键的几个判断是：token 级记忆会自覆盖；<code>M_p</code> 的对称性由 <code>φφ^T</code> 保证；<code>γ=e^{-softplus(θ)}</code> 保证衰减稳定；scalar bias 太弱，当前 live read 是 activation steering；<code>G</code> 和 multi-aspect swarm 仍是下一步。</p></div><div class='card'><h3><code>symmetric_memory_viz.html</code></h3><p>这是教学可视化，不是实验结果页。它用小维度矩阵演示：矩阵热力图保持对称；rank-1 imprint 如何写入；soft-prototype φ 如何在 centroid 间软寻址；一致信号如何从噪声 bulk 中长出 top eigenvector；steering read 如何把 peer 的历史证据转成 endorsement log-prob 的重排。</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["可视化面板", "它在证明/解释什么", "对应代码"],
+    "rows": [
+      ["Panel 1: `M_p` 谱", "持续同向反馈会推高 top eigenvalue；随机噪声留在 bulk。", "`SymmetricTrustMemory.update`, `spectral_norms`"],
+      ["Panel 2: 更新分解", "`γ·M` 衰减旧证据，`η·s·φφ^T` 加入一次 rank-1 证据。", "`update(peer, sign, ctx)`"],
+      ["Panel 3: soft-prototype φ", "seen task 碰撞到自己的方向；unseen/related task 作为 centroid 混合迁移。", "`set_prototypes`, `phi_of`, `cm_context_vector`"],
+      ["Panel 4: 信号 vs 噪声", "矩阵比 scalar reputation 多了 eigenvector，所以能分离能力方向。", "设计假设，非直接训练图"],
+      ["Panel 5: steering read", "`M_pφ*` 不是 bias，而是投影到 hidden 后改 residual stream。", "`ActivationSteerer`"],
+      ["Panel 6: joint `G`", "agent-agent 冗余/互补关系；当前默认未消费。", "`update_joint`, `redundancy_penalty`"],
+      ["Panel 7: multi-aspect", "真正 agent swarm 需要 aspect-level event，当前数据还没有完全覆盖。", "未来数据/目标函数方向"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>5. 从已有结果看，方法在哪里有效</h2><div class='callout olive'><div class='callout-h'>读取来源</div><p>下面不是我重新跑实验，而是从现有 <code>outputs/eval_m5_q3_4b/*/eval_metrics.json</code> 读到的代表性结果。这里的 `ablate` 是关闭 memory steering 的 prompt-only 控制；`sigma` 是当前对称记忆 steering。Qwen3-4B 这组使用 learned per-peer decay + diff write，<code>γ≈0.888</code>, <code>η≈0.406</code>。</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Qwen3-4B unified CF", "p0", "p50", "p70", "p90"],
+    "rows": [
+      ["prompt-only / ablate", "53.8", "56.5", "57.2", "58.2"],
+      ["sigma memory", "60.1", "59.1", "67.4", "75.5"],
+      ["lift", "+6.3", "+2.6", "+10.2", "+17.4"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class='card'><p>这个曲线符合方法假设：当 CF 比例高、peer 可靠性在流里更稳定或更可利用时，历史记忆给的提升更大。换句话说，Sigma-Mem 最擅长的不是“凭空读懂单个答案”，而是在一个有稳定 peer 行为模式的流里，把过去的反馈迁移到当前选择。</p><p>另一个现象也要注意：不同中心模型和是否叠 LoRA 会改变收益形态。比如结果页里 4B/8B/3.5 系列都有不同 tradeoff，说明 steering 是和 CM 表征强耦合的，不是一个完全模型无关的外挂分数器。</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>6. 代码地图</h2><div class='grid col-2'><div class='card'><h3>核心路径</h3><ul><li><code>feedback_state/symmetric_memory.py</code>: <code>SymmetricTrustMemory</code>, <code>phi_of</code>, <code>update</code>, <code>steer_vector</code>, <code>ActivationSteerer</code></li><li><code>train_symmetric_memory.py</code>: 训练循环、prototype 预计算、CE loss、event update、保存 <code>sym_memory.pt</code></li><li><code>eval_symmetric_memory.py</code>: 先读后写的在线评估、<code>--ablate_memory</code>、输出 <code>eval_metrics.json</code> 和 <code>selections.jsonl</code></li></ul></div><div class='card'><h3>支撑路径</h3><ul><li><code>feedback_state/joint_prompt.py</code>: 生成匿名 peer prompt 和 <code>Peer j</code> 候选字符串</li><li><code>feedback_state/joint_models.py</code>: teacher-forced candidate log-prob 评分</li><li><code>configs/symmetric_memory*.yaml</code>: rank、proto、peer_mode、max_length、训练/评估默认项</li><li><code>scripts/run_m5_train_eval.sh</code>: 当前多模型最终实验脚本</li></ul></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>7. 我会重点盯的风险</h2><div class='review blocking'><div class='avatar'>1</div><div class='bubble'><div class='who'>在线写入信号还没真正闭环</div>当前训练/评估主线写入用的是 <code>correctness_by_peer</code> 的 ground-truth 正误。真实 agent swarm 通常没有即时 oracle；如果改成 CM 自己判断自己的选择，会有自我强化偏差。需要独立 verifier、critic、CI/测试结果或 downstream acceptance 作为 <code>s</code>。</div></div><div class='review blocking'><div class='avatar'>2</div><div class='bubble'><div class='who'>`G` 还不是当前方法的证据</div>joint matrix <code>G</code> 已在代码和可视化里出现，但默认 <code>use_joint: off</code>，当前 K-choose-1 read 也没有消费它。因此“agent-agent 互补/冗余”是很好的方向，但不能算当前结果已经证明的部分。</div></div><div class='review'><div class='avatar'>3</div><div class='bubble'><div class='who'>φ 的表达力取决于数据结构</div>如果只有 math/code/rag 三类任务，<code>M_p</code> 可能退化成更稳定的 per-peer/per-task scalar bank。要让矩阵的 eigenvector 价值真正显现，需要更细的 aspect/subskill 事件，例如 search、revise、file、verify 这样的重叠能力轴。</div></div><div class='review'><div class='avatar'>4</div><div class='bubble'><div class='who'>agent-count invariant 说法需要实现细化</div>共享 <code>γ</code> 时，训练 3 个 peer、测试 5 个 peer 基本成立，因为可训练参数不依赖 peer 数。但当前最终实验常用 <code>per_peer_decay=on</code>，此时 <code>_theta</code> 是按 peer 数量成形的可训练参数；eval loader 目前只丢弃 <code>M/G</code>，没有扩展或丢弃 <code>_theta</code>。如果要正式支持 train-3/test-5，需要把 per-peer decay 当状态扩展/重置，或回到共享 decay。</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>8. 下一步建议</h2><div class='procon'><div class='pros'><ul><li>把 <code>s</code> 从 GT correctness 升级为 verifier/quality score，并显式做防自证循环实验。</li><li>补一个真实数据结果面板到 <code>symmetric_memory_viz.html</code>：展示 learned <code>γ/η/gain</code>、peer selection shift 和每个 CF split 的 lift。</li><li>做 aspect-decomposed 数据集，让一个任务拆成多个可评价事件，验证矩阵是否真的学到重叠能力方向。</li></ul></div><div class='cons'><ul><li>不要把 <code>G</code> 的模拟图当成当前实验证据；先接入 selection/team objective 后再宣称 swarm relation memory。</li><li>不要只报 sigma 准确率；每组都必须带 prompt-only、LoRA-only、LoRA+sigma 或 ablate 控制。</li><li>不要忽略 loader/shape 细节，特别是 <code>per_peer_decay</code> 与新增 peer 的兼容性。</li></ul></div></div>"
+  }
+]
+</script>
+
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>
