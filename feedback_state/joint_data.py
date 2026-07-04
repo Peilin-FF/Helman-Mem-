@@ -19,6 +19,7 @@ from feedback_state.data import peer_correctness
 from feedback_state.joint_write import build_short_answers
 from feedback_state.joint_prompt import (
     ar_target_text,
+    build_candidate_judge_prompt,
     candidate_peer_strings,
     canonical_target_peer_id,
     peer_response_char_spans,
@@ -40,6 +41,58 @@ def yes_no_token_ids(tokenizer) -> tuple[list[int], list[int]]:
         tokenizer.encode(" Yes", add_special_tokens=False),
         tokenizer.encode(" No", add_special_tokens=False),
     )
+
+
+def batch_candidate_judge_inputs(
+    tokenizer,
+    question: str,
+    slot_names: list[str],
+    slot_texts: list[str],
+    *,
+    context: str | None = None,
+    include_identity: bool = False,
+    real: int,
+    max_length: int,
+    device: torch.device | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Tokenize all candidate Yes/No judge prompts for one example as a batch.
+
+    Each row highlights a different candidate response, but the model call is shared.
+    Right padding is OK because candidate scorers gather logits at each row's final
+    non-pad token from ``attention_mask``.
+    """
+    prompts = [
+        build_candidate_judge_prompt(
+            question,
+            slot_names,
+            slot_texts,
+            s,
+            context=context,
+            include_identity=include_identity,
+            real=real,
+        )
+        for s in range(int(real))
+    ]
+    encoded = [
+        tokenizer(p, add_special_tokens=True, truncation=True, max_length=max_length)["input_ids"]
+        for p in prompts
+    ]
+    if not encoded:
+        raise ValueError("real must be >= 1 for candidate judge batching")
+    pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        pad_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+    width = max(len(ids) for ids in encoded)
+    input_ids = torch.full((len(encoded), width), int(pad_id), dtype=torch.long)
+    attention_mask = torch.zeros((len(encoded), width), dtype=torch.long)
+    for row, ids in enumerate(encoded):
+        n = len(ids)
+        input_ids[row, :n] = torch.tensor(ids, dtype=torch.long)
+        attention_mask[row, :n] = 1
+    if device is not None:
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+    return input_ids, attention_mask
 
 
 def char_to_token_spans(offsets: list[tuple[int, int]], char_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:

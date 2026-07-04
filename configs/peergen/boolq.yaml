@@ -1,0 +1,20 @@
+dataset: boolq
+split: validation
+start_index: 0
+max_samples: 400
+central_model: /mnt/data/peilin/HF_MODEL/Qwen3-0.6B
+peer_models:
+  - /mnt/data/peilin/HF_MODEL/Qwen3-0.6B
+  - /mnt/data/peilin/HF_MODEL/Qwen3-4B
+  - /mnt/data/peilin/HF_MODEL/Qwen3-8B
+deprive_context_models: []
+generation_batch_size: 8
+write_chunk_size: 32
+max_new_tokens: 64
+temperature: 0.2
+top_p: 0.95
+use_vllm: true
+local_files_only: true
+dtype: bfloat16
+device: cuda:0
+adversarial_rate: 0.0

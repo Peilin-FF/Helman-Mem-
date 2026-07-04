@@ -971,7 +971,7 @@
  },
  {
   "type": "html",
-  "html": "<h1 style=\"font-family:Georgia,serif\">8192 Joint-Mode Results (Qwen3 only)</h1><p>Train max_length = <b>8192</b>. Sigma and LoRA-&gt;Sigma use <b>peer_mode=joint</b> for both training and evaluation. Rows are grouped by model in <b>Qwen3-0.6B, Qwen3-4B, Qwen3-8B</b> order; arms are ordered as <b>lora-AR, sigma, lora-&gt;sigma</b>.</p><div class=\"callout\" style=\"border-left:4px solid #788C5D;padding:10px 14px;background:#fff\"><b><code>accuracy (n₀/n₁/n₂)</code></b> = accuracy and selection counts of gemma/phi/qwen-coder on CF_unified p0/p50/p70/p90.</div>"
+  "html": "<h1 style=\"font-family:Georgia,serif\">8192 Joint-Mode Results (Qwen3 only)</h1><p>Train max_length = <b>8192</b>. Sigma and LoRA-&gt;Sigma use <b>peer_mode=joint</b> for both training and evaluation. Rows are grouped by model in <b>Qwen3-0.6B, Qwen3-4B, Qwen3-8B</b> order; arms are ordered as <b>prompt-only, lora-AR, lora-YesNo, sigma, sigma-YesNo, lora-&gt;sigma</b>.</p><div class=\"callout\" style=\"border-left:4px solid #788C5D;padding:10px 14px;background:#fff\"><b><code>accuracy (n₀/n₁/n₂)</code></b> = accuracy and selection counts of gemma/phi/qwen-coder on CF_unified p0/p50/p70/p90.</div>"
  },
  {
   "type": "html",
@@ -1006,11 +1006,27 @@
    ],
    [
     "Qwen3-0.6B",
+    "lora-YesNo",
+    "68.2 (986/680/1019)",
+    "74.7 (828/674/1183)",
+    "76.9 (814/638/1233)",
+    "79.3 (766/619/1300)"
+   ],
+   [
+    "Qwen3-0.6B",
     "sigma",
     "61.0 (1611/503/571)",
     "54.6 (511/806/1368)",
     "58.7 (264/941/1480)",
     "63.6 (149/1107/1429)"
+   ],
+   [
+    "Qwen3-0.6B",
+    "sigma-YesNo",
+    "64.2 (1801/355/529)",
+    "55.4 (617/511/1557)",
+    "61.2 (261/714/1710)",
+    "68.6 (82/968/1635)"
    ],
    [
     "Qwen3-0.6B",

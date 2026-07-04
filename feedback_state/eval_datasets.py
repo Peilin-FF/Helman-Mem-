@@ -33,6 +33,7 @@ from typing import Any, Callable
 # the local copy so everything runs with HF_DATASETS_OFFLINE=1.
 _HF_DATA_DIR = os.environ.get("HF_DATA_DIR", "/workspace/cloud_android/fengpeilin/HF_DATA")
 _LOCAL_DIRS = {
+    "super_glue": "super_glue",
     "hotpot_qa": "hotpot_qa",
     "trivia_qa": "trivia_qa",
     "squad": "squad/plain_text",
@@ -57,6 +58,7 @@ def _dataset_path(hub_name: str) -> str:
 # task_type for each registered dataset name.
 RAG_DATASETS = {"hotpotqa", "triviaqa", "squad"}
 CODE_DATASETS = {"humaneval", "mbpp", "bigcodebench", "livecodebench", "apps"}
+BOOLQA_DATASETS = {"boolq"}
 
 
 def task_type_for(name: str) -> str:
@@ -65,6 +67,8 @@ def task_type_for(name: str) -> str:
         return "rag"
     if key in {d.replace("-", "_") for d in CODE_DATASETS}:
         return "code"
+    if key in {d.replace("-", "_") for d in BOOLQA_DATASETS}:
+        return "boolqa"
     return "math"
 
 
@@ -155,6 +159,25 @@ def load_squad(split: str, start_index: int, max_samples: int | None, cache_dir:
             "answer_aliases": aliases,
             "context": [context] if context else [],
             "source": "squad",
+        })
+    return out
+
+
+def load_boolq(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("super_glue"), "boolq", split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for ex in ds:
+        label = int(ex.get("label", 0))
+        out.append({
+            "id": f"boolq:{ex.get('idx', len(out))}",
+            "task_type": "boolqa",
+            "problem": str(ex.get("question", "")).strip(),
+            "answer": "yes" if label == 1 else "no",
+            "context": [str(ex.get("passage", "")).strip()],
+            "source": "boolq",
         })
     return out
 
@@ -372,6 +395,7 @@ REGISTRY: dict[str, Callable[..., list[dict[str, Any]]]] = {
     "hotpotqa": load_hotpotqa,
     "triviaqa": load_triviaqa,
     "squad": load_squad,
+    "boolq": load_boolq,
     "humaneval": load_humaneval,
     "mbpp": load_mbpp,
     "bigcodebench": load_bigcodebench,

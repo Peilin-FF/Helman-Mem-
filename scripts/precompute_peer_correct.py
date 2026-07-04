@@ -9,9 +9,6 @@ Usage: python scripts/precompute_peer_correct.py <in.jsonl> <out.jsonl> [timeout
 import json, sys, multiprocessing as mp
 from feedback_state.tasks import task_type_of, get_task
 
-KEYS = ["peer_0", "peer_1", "peer_2"]
-
-
 def _grade_one(args):
     record, key, text = args
     task = get_task(task_type_of(record))
@@ -40,9 +37,8 @@ def main():
                 fout.write(json.dumps(r, ensure_ascii=False) + "\n")
                 continue
             pc = {}
-            for k in KEYS:
-                if k not in r.get("peer_responses", {}):
-                    continue
+            peer_keys = sorted(dict(r.get("peer_responses", {})).keys())
+            for k in peer_keys:
                 text = str(r["peer_responses"][k])
                 q = mp.Queue()
                 p = mp.Process(target=_worker, args=((r, k, text), q))

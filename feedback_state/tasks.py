@@ -193,6 +193,63 @@ def _rag_prompt(record: dict[str, Any], with_context: bool) -> str:
     )
 
 
+_YES_NO_RE = re.compile(r"\b(yes|no|true|false)\b", flags=re.IGNORECASE)
+
+
+def _normalize_bool_label(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes"}:
+        return "yes"
+    if text in {"0", "false", "no"}:
+        return "no"
+    match = _YES_NO_RE.search(text)
+    if not match:
+        return ""
+    token = match.group(1).lower()
+    return "yes" if token in {"yes", "true"} else "no"
+
+
+def boolqa_extract_answer(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    explicit = list(
+        re.finditer(
+            r"(?:final\s+answer|answer)\s*(?:is|:)?\s*(yes|no|true|false)\b",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if explicit:
+        return _normalize_bool_label(explicit[-1].group(1))
+    # Fall back to the last yes/no-looking token so explanatory answers like
+    # "... therefore, no" are scored as intended.
+    matches = list(_YES_NO_RE.finditer(raw))
+    return _normalize_bool_label(matches[-1].group(1)) if matches else ""
+
+
+def _boolqa_target(text: str, record: dict[str, Any]) -> float:
+    pred = boolqa_extract_answer(text)
+    gold = _normalize_bool_label(record.get("answer", ""))
+    return 1.0 if pred and gold and pred == gold else 0.0
+
+
+def _boolqa_correct(text: str, record: dict[str, Any]) -> bool:
+    return _boolqa_target(text, record) >= 0.5
+
+
+def _boolqa_prompt(record: dict[str, Any], with_context: bool) -> str:
+    question = str(record.get("problem", "")).strip()
+    context = _rag_context_text(record) if with_context else ""
+    prefix = (
+        "Read the passage and answer the yes/no question. "
+        "End with exactly 'Final answer: yes' or 'Final answer: no'."
+    )
+    if context:
+        return f"{prefix}\n\nPassage:\n{context}\n\nQuestion: {question}"
+    return f"{prefix}\n\nQuestion: {question}"
+
+
 def _code_precomputed(record: dict[str, Any], peer_key: str | None) -> float | None:
     table = record.get("peer_correct")
     if isinstance(table, dict) and peer_key is not None and peer_key in table:
@@ -231,6 +288,9 @@ def _code_prompt(record: dict[str, Any], with_context: bool) -> str:
 REGISTRY: dict[str, TaskSpec] = {
     "math": TaskSpec("math", _math_target, _math_correct, extract_final_answer, _math_prompt),
     "rag": TaskSpec("rag", _rag_target, _rag_correct, qa_extract_answer, _rag_prompt),
+    "boolqa": TaskSpec(
+        "boolqa", _boolqa_target, _boolqa_correct, boolqa_extract_answer, _boolqa_prompt
+    ),
     "code": TaskSpec(
         "code", _code_target, _code_correct, code_extract_answer, _code_prompt, precomputed=True
     ),

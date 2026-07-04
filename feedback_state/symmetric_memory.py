@@ -435,7 +435,12 @@ class ActivationSteerer(nn.Module):
         if self.steer_vec is None:
             return output
         hs = output[0] if isinstance(output, tuple) else output
-        add = self.gain * self.proj(self.steer_vec.to(self.proj.weight.dtype))  # [hidden]
+        add = self.gain * self.proj(self.steer_vec.to(self.proj.weight.dtype))
+        # Single candidate: [hidden]. Batched candidate scoring: [B, hidden].
+        if add.ndim == 2:
+            add = add.unsqueeze(1)
+        elif add.ndim != 1:
+            raise ValueError(f"steer_vec must be [rank] or [batch, rank], got {tuple(self.steer_vec.shape)}")
         # .to(hs.device) makes this safe under device_map sharding (the hooked layer may live
         # on a different GPU than the steerer's proj). No-op when everything is on one device.
         hs = hs + add.to(device=hs.device, dtype=hs.dtype)

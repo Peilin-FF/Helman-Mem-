@@ -5,6 +5,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+
+try:
+    from feedback_state.newarch_loader import apply_torch_fp8_shim
+
+    apply_torch_fp8_shim()
+except Exception:
+    pass
+
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -81,6 +89,7 @@ class TextGenerator:
             )
             if self.tokenizer.pad_token_id is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.padding_side = "left"
             return
         if config.use_vllm:
             try:
@@ -117,6 +126,7 @@ class TextGenerator:
         )
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer.padding_side = "left"
         try:
             self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs).eval()
         except ValueError:

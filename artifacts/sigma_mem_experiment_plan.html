@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Sigma Memory Experiments</div><h1>CF Robustness, Peer-Count Generalization, and Unseen-Task Generalization</h1><p class=\"lede\">This notebook tracks the current main experimental thread: first verify that Sigma Memory improves selection under counterfactual peer reliability shifts, then scale the effective configuration to Qwen3-4B and Qwen3-8B, and finally test whether a 3-peer trained system generalizes to more peers and unseen task families.</p><div class=\"summary-band\"><div><span class=\"k\">Current method</span>candidate Yes/No scorer + symmetric online peer memory</div><div><span class=\"k\">Train set</span><code>data/mixed_train_labeled.jsonl</code></div><div><span class=\"k\">CF eval</span><code>data/CF_unified/{p0,p50,p70,p90}.jsonl</code></div><div><span class=\"k\">Current run</span>Qwen3-4B/8B CF complete; 4/5/6-peer eval complete; BoolQ held-out task complete</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout rec\"><div class=\"callout-h\">Working interpretation</div><p>The strongest current evidence is not that the center model is invariant to CF. It is the opposite: the center-only Yes/No scorer has a large slot bias and fails when CF moves reliable answers away from its preferred slot. Sigma Memory improves because the online state tracks persistent peer reliability across the stream and can shift selection toward the newly reliable peer.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Split", "Center-only Yes/No", "Sigma-YesNo", "LoRA-YesNo", "Sigma gain over center", "LoRA gain over center"],
+    "rows": [
+      ["p0", "61.0", "64.2", "68.2", "+3.2", "+7.2"],
+      ["p50", "52.9", "55.4", "74.7", "+2.5", "+21.8"],
+      ["p70", "50.5", "61.2", "76.9", "+10.7", "+26.4"],
+      ["p90", "46.2", "68.6", "79.3", "+22.4", "+33.1"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Experiment 1: CF Effectiveness</h2><div class=\"grid col-2\"><div class=\"card\"><h3>What is already supported</h3><p>On Qwen3-0.6B, the non-gated Sigma-YesNo path improves over center-only on all CF splits and the improvement grows as CF increases. This is consistent with online reliability tracking becoming more valuable when the stream has a stronger peer-level reliability signal.</p></div><div class=\"card\"><h3>Scaling status</h3><p>The fixed margin gate has been demoted to an ablation after the quick sweep. The main scaling run is non-gated Sigma-YesNo: Qwen3-4B and Qwen3-8B are both complete on CF p0/p50/p70/p90. A separate 4-peer task-separated diagnostic is complete and explains most of the earlier mixed-task negative transfer.</p></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout rec\"><div class=\"callout-h\">Gate threshold correction</div><p>The first gated run used <code>margin=2.0</code>, but existing center-only scores show that almost all Yes/No candidate margins are below 1.0 and every split has 100% of examples below 2.0. That setting is effectively non-gated. The active run uses <code>margin=0.125</code>; early training logs show gate use around 0.49-0.54, which matches the intended design of using online memory only on ambiguous center decisions.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Split", "Arm / gate setting", "Accuracy on first 400", "Memory use rate", "Interpretation"],
+    "rows": [
+      ["p0", "center-only", "65.25", "", "Center is already relatively strong on this subset"],
+      ["p0", "Sigma-YesNo non-gated", "67.25", "1.00", "Memory helps modestly"],
+      ["p0", "Sigma gate train0.125 eval0.125", "69.00", "0.56", "Best low-CF quick result; avoiding unnecessary memory helps"],
+      ["p0", "Sigma gate train0.125 eval0.5", "65.25", "0.94", "Too much memory hurts low-CF"],
+      ["p90", "center-only", "46.50", "", "Center slot bias fails under high CF"],
+      ["p90", "Sigma-YesNo non-gated", "67.25", "1.00", "Memory strongly helps"],
+      ["p90", "Sigma gate train0.125 eval0.125", "62.25", "0.58", "Too little memory underuses the reliability signal"],
+      ["p90", "Sigma gate train0.125 eval0.5", "75.00", "0.97", "High-CF needs frequent memory intervention"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout\"><div class=\"callout-h\">Decision after gate sweep</div><p>A fixed center-margin gate creates a low-CF/high-CF tradeoff: low CF prefers sparse memory use, high CF prefers frequent memory use. Therefore the fixed gate is not the main configuration for scaling. The CF main result should scale the stable non-gated Sigma-YesNo method to Qwen3-4B and Qwen3-8B, while the gate remains an ablation or a future adaptive-gate variant.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Split", "Uniform random expected", "Gold correct peer0", "Gold correct peer1", "Gold correct peer2", "Center selected peer0", "Center selected peer1", "Center selected peer2", "Center accuracy"],
+    "rows": [
+      ["p0", "56.73", "1596 (59.4%)", "1288 (48.0%)", "1686 (62.8%)", "1837 (68.4%)", "192 (7.2%)", "656 (24.4%)", "61.0"],
+      ["p50", "56.73", "1269 (47.3%)", "1381 (51.4%)", "1920 (71.5%)", "1828 (68.1%)", "222 (8.3%)", "635 (23.6%)", "52.9"],
+      ["p70", "56.73", "1133 (42.2%)", "1411 (52.6%)", "2026 (75.5%)", "1838 (68.5%)", "228 (8.5%)", "619 (23.1%)", "50.5"],
+      ["p90", "56.73", "1004 (37.4%)", "1437 (53.5%)", "2129 (79.3%)", "1830 (68.2%)", "229 (8.5%)", "626 (23.3%)", "46.2"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout olive\"><div class=\"callout-h\">Why center-only drops while Sigma rises</div><p>The CF split is constructed by swapping the historically strong peer's correct response into a weak peer slot while keeping peer identity metadata fixed. A truly uniform random selector would stay flat at 56.73% on every split because the average number of correct peers is unchanged. Center-only drops because it is not uniform: it keeps selecting peer0 on about 68% of examples, while peer0 correctness falls from 59.4% to 37.4% and peer2 correctness rises from 62.8% to 79.3%. Sigma rises because its online state moves selection toward the peer whose stream-level reliability becomes persistently higher.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Model", "Status", "Train config", "Eval target", "Decision rule"],
+    "rows": [
+      ["Qwen3-0.6B", "Complete / diagnostic", "Non-gated Sigma-YesNo is the current main config; fixed margin gate is ablation", "CF p0/p50/p70/p90 complete for non-gated; quick400 gate sweep complete", "Scale non-gated config; do not scale fixed gate yet"],
+      ["Qwen3-4B", "Training/eval complete", "Non-gated Sigma-YesNo, peer-shared params", "CF p0/p50/p70/p90 complete", "p0 63.35; p50 61.15; p70 66.41; p90 72.74"],
+      ["Qwen3-8B", "Training/eval complete", "Non-gated Sigma-YesNo, peer-shared params", "CF p0/p50/p70/p90 complete", "p0 67.75; p50 62.53; p70 64.80; p90 68.34"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["Model", "p0", "p50", "p70", "p90", "p0 selected peers", "Status"],
+    "rows": [
+      ["Qwen3-0.6B Sigma-YesNo", "64.20", "55.40", "61.20", "68.60", "1801 / 355 / 529", "Complete"],
+      ["Qwen3-4B Sigma-YesNo", "63.35", "61.15", "66.41", "72.74", "p0 1434/589/662; p70 238/363/2084", "Complete"],
+      ["Qwen3-8B Sigma-YesNo", "67.75", "62.53", "64.80", "68.34", "p0 1392/624/669; p50 535/547/1603; p70 307/552/1826; p90 227/571/1887", "Complete"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Experiment 2: Peer-Count Generalization</h2><p>The intended claim is that a system trained on three peers can operate with four, five, or six peers at test time. The implementation requirement is that learned parameters are peer-count shared: no learned tensor should be tied to exactly three peer slots. Runtime memory states can be allocated per peer at evaluation time.</p><div class=\"procon\"><div class=\"pros\"><ul><li>Candidate Yes/No scoring avoids a fixed <code>Peer j</code> output vocabulary.</li><li><code>per_peer_decay=off</code> keeps decay shared across peer slots.</li><li>The online matrices are runtime state, so adding peers allocates new state rather than new learned parameters.</li><li>The MAS peer generator is model-list driven, so extending <code>peer_models</code> can produce <code>peer_4</code>/<code>peer_5</code> without architecture changes.</li></ul></div><div class=\"cons\"><ul><li>Prompt length and candidate batching cost scale with peer count.</li><li>Evaluation must separate true peer-count generalization from changed peer quality distribution.</li><li>Current local artifacts contain many 4-peer files, but no ready 5/6-peer JSONL was found yet.</li></ul></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Eval", "Train peers", "Test peers", "Dataset", "Center-only", "Sigma", "Selection counts", "Status"],
+    "rows": [
+      ["Qwen3-0.6B 4-peer quick", "3", "4", "HumanEval scored, first 100", "11.00", "75.00", "center 72/3/7/18; sigma 1/0/0/99", "Mechanics verified"],
+      ["Qwen3-0.6B 4-peer full", "3", "4", "HumanEval scored, all 164", "14.63", "71.95", "center 111/5/13/35; sigma 1/0/0/163", "Strong 3-to-4 peer generalization evidence"],
+      ["Qwen3-0.6B 4-peer mixed CF", "3", "4", "math500/amc/olympiadbench/humaneval/mbpp/triviaqa, 1697 per split", "p0 63.41; p50 59.34; p70 59.63; p90 57.22", "shared: p0 67.00; p50 57.63; p70 55.57; p90 57.75; task-separated: p0 80.79; p50 58.46; p70 61.52; p90 66.71", "p0 tasksep 723/401/86/487; p90 tasksep 355/258/352/732", "3-to-4 mechanics work; shared-state failures are largely mixed-task interference, but RAG still needs better task-local calibration"],
+      ["Qwen3-0.6B BoolQ held-out", "3", "5", "BoolQ validation, 400 examples, peers p0-p4", "63.75", "84.50", "center 98/152/62/35/53; sigma 30/158/159/52/1", "Train-3/test-5 works on a new boolqa task family"],
+      ["Qwen3-0.6B BoolQ held-out", "3", "6", "BoolQ validation, 400 examples, peers p0-p5", "64.75", "84.00", "center 135/65/75/6/20/99; sigma 19/115/217/47/1/1", "Train-3/test-6 works; Sigma avoids weak extra peers p4/p5"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["4-peer diagnostic", "Center-only", "Sigma shared state", "Sigma task-separated state", "Interpretation"],
+    "rows": [
+      ["p0 overall", "63.41", "67.00", "80.79", "Task-separated online state gives each task family its own memory trajectory and removes most cross-task interference"],
+      ["p50 overall", "59.34", "57.63", "58.46", "Task separation improves over shared state but still trails center; RAG remains the bottleneck"],
+      ["p70 overall", "59.63", "55.57", "61.52", "Task separation repairs the shared-state failure and beats center; math rises from 61.02 to 76.27"],
+      ["p90 overall", "57.22", "57.75", "66.71", "Task separation turns a near tie into a clear gain; math rises to 81.86 and code to 40.13"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout\"><div class=\"callout-h\">Evaluation implementation note</div><p>The first 4-peer center-only run exposed an eval inefficiency: in <code>candidate_yesno</code> + <code>--ablate_memory</code>, the center branch recomputed the full candidate batch once per candidate. That made 4-peer center-only roughly 4x slower than Sigma. The branch now uses one batched center pass, and the old center-only run was stopped and restarted. This changes runtime only; the scoring function is the same.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["4-peer quick dataset", "Task", "N", "Fixed T", "Strong peer", "Per-peer accuracy"],
+    "rows": [
+      ["math500", "math", "500", "312", "peer_0", "p0 0.732 / p1 0.438 / p2 0.316 / p3 0.642"],
+      ["amc", "math", "83", "32", "peer_3", "p0 0.349 / p1 0.217 / p2 0.060 / p3 0.361"],
+      ["olympiadbench", "math", "674", "246", "peer_0", "p0 0.361 / p1 0.141 / p2 0.088 / p3 0.306"],
+      ["humaneval", "code", "164", "132", "peer_3", "p0 0.000 / p1 0.091 / p2 0.049 / p3 0.726"],
+      ["mbpp", "code", "500", "172", "peer_3", "p0 0.068 / p1 0.084 / p2 0.188 / p3 0.310"],
+      ["triviaqa", "rag", "1000", "803", "peer_1", "p0 0.508 / p1 0.726 / p2 0.020 / p3 0.468"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["Split", "Uniform random expected", "Best fixed peer", "Peer correctness p0/p1/p2/p3", "Center-only", "Sigma shared", "Sigma task-separated", "Interpretation"],
+    "rows": [
+      ["p0", "56.51", "76.37", "61.81 / 57.04 / 30.82 / 76.37", "63.41", "67.00", "80.79", "Task-separated Sigma beats both center and best fixed peer by using task-local reliability"],
+      ["p50", "56.51", "73.66", "55.16 / 53.21 / 44.02 / 73.66", "59.34", "57.63", "58.46", "Partial repair only; RAG still drags the aggregate below center"],
+      ["p70", "56.51", "73.25", "52.80 / 50.85 / 49.15 / 73.25", "59.63", "55.57", "61.52", "Task-separated state repairs the shared-state failure and beats center"],
+      ["p90", "56.51", "72.60", "50.09 / 48.85 / 54.51 / 72.60", "57.22", "57.75", "66.71", "Task-separated state gives a clear high-CF gain, mainly through math/code recovery"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["4-peer p50 task", "Center-only", "Sigma", "Delta", "Selection movement", "Diagnosis"],
+    "rows": [
+      ["code", "25.66", "36.18", "+10.52", "more peer3", "Sigma helps code by moving toward the stronger code peer"],
+      ["math", "59.32", "64.24", "+4.92", "more peer3", "Sigma helps math on this mixed stream"],
+      ["rag", "72.10", "60.90", "-11.20", "peer0-heavy center -> broader Sigma spread", "This loss dominates the p50 aggregate; Sigma adds many low-hit peer1/peer2 choices and suggests cross-task state interference"],
+      ["overall", "59.34", "57.63", "-1.71", "356/240/174/927 selected by Sigma", "The failure is not a peer-count crash; it is uneven transfer across task families"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["4-peer p50 task", "Center-only", "Sigma shared", "Sigma task-separated", "Task-separated diagnosis"],
+    "rows": [
+      ["code", "25.66", "36.18", "30.26", "Task separation reduces the useful shared push toward peer3, so code drops relative to shared Sigma"],
+      ["math", "59.32", "64.24", "68.47", "Task separation helps math most; it keeps the math state focused on peer3"],
+      ["rag", "72.10", "60.90", "61.77", "Still far below center because it wastes 237 RAG choices on low-hit peer1/peer2"],
+      ["overall", "59.34", "57.63", "58.46", "Partial repair only; p50 needs a within-task reliability confidence or stronger task-local calibration"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["4-peer p0 task", "Center-only", "Sigma shared", "Sigma task-separated", "Why task separation helps"],
+    "rows": [
+      ["code", "28.62", "71.05", "90.13", "Separate state locks code onto peer3; shared state still mixes in peer0"],
+      ["math", "83.39", "74.41", "90.85", "Separate state keeps math on peer0; shared state over-shifts math toward peer3"],
+      ["rag", "61.89", "60.02", "69.86", "Separate state moves RAG toward peer1 while avoiding most weak peer2 choices"],
+      ["overall", "63.41", "67.00", "80.79", "This strongly supports the diagnosis that the bad mixed-CF results came from shared stream-state interference"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["4-peer split", "Task", "Center-only", "Sigma shared", "Sigma task-separated", "Best delta", "Important selection / hit-rate detail"],
+    "rows": [
+      ["p0", "code", "28.62", "71.05", "90.13", "+61.51", "Task-separated state locks code onto peer3, which is correct on 90.13%"],
+      ["p0", "math", "83.39", "74.41", "90.85", "+7.46", "Task-separated state keeps math mostly on peer0 instead of inheriting code's peer3 preference"],
+      ["p0", "rag", "61.89", "60.02", "69.86", "+7.97", "Task-separated state moves RAG toward peer1 while avoiding most weak peer2 choices"],
+      ["p50", "code", "25.66", "36.18", "30.26", "+10.52", "Shared state helps code more here by pushing toward peer3"],
+      ["p50", "math", "59.32", "64.24", "68.47", "+9.15", "Task-separated state helps math most by keeping the math memory focused on peer3"],
+      ["p50", "rag", "72.10", "60.90", "61.77", "-10.33", "Both Sigma variants underperform center on RAG because low-hit peer1/peer2 choices remain too frequent"],
+      ["p70", "code", "26.64", "27.96", "31.25", "+4.61", "Task-separated state improves code modestly but code peer quality is diffuse"],
+      ["p70", "math", "52.71", "61.02", "76.27", "+23.56", "Task-separated state strongly shifts math to peer3, the strongest p70 math peer"],
+      ["p70", "rag", "77.21", "62.02", "62.14", "-15.07", "RAG remains the bottleneck; task separation does not yet suppress enough low-hit peer1/peer2 choices"],
+      ["p90", "code", "26.32", "35.86", "40.13", "+13.81", "Task-separated state avoids peer3 for code when peer3 code accuracy is 0.00"],
+      ["p90", "math", "43.05", "65.25", "81.86", "+38.81", "Task-separated state selects peer3 on 506/590 math examples with 84.6 hit-rate"],
+      ["p90", "rag", "79.33", "60.52", "65.63", "-13.70", "Task-separated state recovers part of the RAG loss but still trails center's peer0-heavy choice"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout olive\"><div class=\"callout-h\">Current 4-peer readout</div><p>The 3-to-4 peer generalization mechanics are sound: with task-separated online state, Sigma reaches 80.79 on p0, 61.52 on p70, and 66.71 on p90, all above center-only. The earlier shared-state failures are not a peer-count collapse; they come from mixing task families into one stream state. Task separation fixes math strongly and improves code, but p50 and RAG remain weak because the memory still assigns too many RAG examples to low-hit peer1/peer2. The next methodological question is therefore task-local reliability calibration, not whether a 3-peer-trained model can allocate state for a fourth peer.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Train peers", "Test peers", "Required data", "Primary metric", "Sanity checks", "Current status"],
+    "rows": [
+      ["3", "4", "CF_unified-style stream with four peer responses", "Accuracy and selected-correct rate", "Selection share by peer, memory state norm by peer", "Complete: shared-state and task-separated evals are both reported"],
+      ["3", "5", "BoolQ stream with five peer responses", "Accuracy and selected-correct rate", "No systematic collapse to first three peers", "Complete: center 63.75, Sigma 84.50; oracle-any 97.00"],
+      ["3", "6", "BoolQ stream with six peer responses", "Accuracy and selected-correct rate", "Stable eval and no collapse to first three peers", "Complete: center 64.75, Sigma 84.00; oracle-any 98.50"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Experiment 3: Unseen-Task Generalization</h2><p>The training task registry used for Sigma has math, code, and rag. We now report two levels of transfer: unseen source transfer inside a known family, and a stricter held-out task-family test. BigCodeBench is unseen source inside code. BoolQ is registered as a new <code>boolqa</code> family with a yes/no scorer, and it is not part of Sigma training.</p><div class=\"callout olive\"><div class=\"callout-h\">BoolQ held-out task result</div><p>On 400 BoolQ validation examples with three local Qwen peers, center-only reaches 58.25 while Sigma reaches 62.50. With five peers, center-only is 63.75 and Sigma is 84.50; with six peers, center-only is 64.75 and Sigma is 84.00. The strongest six-peer gold accuracies are peer1 84.00 and peer2 88.25, while weak added peers are peer4 19.00 and peer5 43.75. Sigma shifts selection toward peer1/peer2 and nearly never selects peer4/peer5, which supports both held-out task transfer and peer-count generalization.</p></div><div class=\"callout\"><div class=\"callout-h\">BigCodeBench caveat</div><p>The BigCodeBench 3-peer set is extremely sparse: only 49/1140 examples have any correct peer, so the oracle-any ceiling is 4.30 and uniform random is 1.43. Center-only reaches 2.02, while Sigma reaches 3.77 by selecting peer2 on 1005/1140 examples and recovers 43 of the 49 available correct examples. The absolute accuracy is low, but this is mostly a peer-output quality ceiling; relative to center and oracle, Sigma is doing the intended reliability tracking.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Unseen source", "N", "Peer correctness", "Oracle-any", "Uniform expected", "Center-only", "Sigma", "Interpretation"],
+    "rows": [
+      ["BigCodeBench 3-peer", "1140", "p0 0.00 / p1 0.00 / p2 4.30", "4.30", "1.43", "2.02", "3.77", "Unseen source inside code; Sigma improves over center and is near the oracle ceiling because almost all correct answers are in peer2"],
+      ["BoolQ boolqa held-out family, 3 peers", "400", "p0 44.00 / p1 62.75 / p2 67.50", "88.25", "58.08", "58.25", "62.50", "Strict new task family; Sigma shifts selection from p0-heavy center to p1/p2 and gains +4.25"],
+      ["BoolQ boolqa held-out family, 5 peers", "400", "p0 70.50 / p1 84.00 / p2 88.25 / p3 78.25 / p4 19.00", "97.00", "68.00", "63.75", "84.50", "Train-3/test-5: Sigma tracks reliable peers p1/p2 and avoids weak p4"],
+      ["BoolQ boolqa held-out family, 6 peers", "400", "p0 70.50 / p1 84.00 / p2 88.25 / p3 78.25 / p4 19.00 / p5 43.75", "98.50", "63.96", "64.75", "84.00", "Train-3/test-6: Sigma remains stable and avoids weak added peers p4/p5"]
+    ]
+  },
+  {
+    "type": "table",
+    "head": ["Train task families", "Held-out task family", "Expected evidence", "Failure mode to inspect"],
+    "rows": [
+      ["squad + gsm8k + apps", "BigCodeBench source within code family", "Complete: center 2.02, Sigma 3.77, oracle-any 4.30", "This supports unseen-source transfer inside code, not a strict new task-family claim"],
+      ["squad + gsm8k + apps", "CF unified unseen sources", "Covered indirectly by CF eval: math500/amc/college/olympiad/humaneval/mbpp/livecodebench/hotpotqa/triviaqa are not in the train source list", "CF and source shift are entangled; report this as supporting evidence, not the clean held-out-source result"],
+      ["math + code + rag", "BoolQ boolqa held-out family", "Complete: 3-peer 58.25->62.50, 5-peer 63.75->84.50, 6-peer 64.75->84.00", "This is the stricter held-out family result; the remaining gap to oracle suggests the selector can still improve peer2 utilization"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Analysis Checklist</h2><div class=\"grid col-3\"><div class=\"card\"><h3>When Sigma works</h3><p>Look for stable peer-level reliability, weak center invariance, and a selection-distribution shift that tracks gold peer reliability.</p></div><div class=\"card\"><h3>When Sigma fails</h3><p>Inspect whether simplifications remove the signal: over-aggressive gate, shared stream state that mixes task families, shared parameters that underfit per-peer dynamics, or candidate Yes/No prompts that make the CM re-read too much text.</p></div><div class=\"card\"><h3>What to report</h3><p>Always include accuracy, selected-peer distribution, hit-rate when chosen, gate use rate, and center-only diagnostics. Accuracy alone is not enough for a top-conference argument.</p></div></div>"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

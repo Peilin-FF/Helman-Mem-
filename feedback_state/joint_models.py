@@ -388,7 +388,9 @@ class JointDeltaMemSelector(nn.Module):
                 use_cache=False,
                 return_dict=True,
             )
-            next_logits = out.logits[:, -1, :]
+            last = attention_mask.to(dtype=torch.long).sum(dim=1).clamp_min(1) - 1
+            rows = torch.arange(input_ids.size(0), device=input_ids.device)
+            next_logits = out.logits[rows, last, :]
             logprob = torch.log_softmax(next_logits.float(), dim=-1)
             return logprob[:, int(positive[0])] - logprob[:, int(negative[0])]
         return (

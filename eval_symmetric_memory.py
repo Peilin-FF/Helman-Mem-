@@ -35,11 +35,17 @@ from transformers import AutoTokenizer
 
 from feedback_state.data import JsonlDataset
 from feedback_state.generation import dtype_from_name
-from feedback_state.joint_data import VARIANT_AR, candidate_token_ids, yes_no_token_ids
+from feedback_state.joint_data import (
+    VARIANT_AR,
+    batch_candidate_judge_inputs,
+    candidate_token_ids,
+    yes_no_token_ids,
+)
 from feedback_state.joint_models import JointDeltaMemSelector
-from feedback_state.joint_prompt import PEER_SEP, build_candidate_judge_prompt, build_joint_prompt
+from feedback_state.joint_prompt import PEER_SEP, build_joint_prompt
 from feedback_state.permutations import canonical_peer_view
 from feedback_state.symmetric_memory import ActivationSteerer, SymmetricTrustMemory, DEFAULT_TASK_TYPES, cm_context_vector
+from feedback_state.tasks import task_type_of
 from feedback_state.utils import load_config, merge_args_with_config
 
 
@@ -61,6 +67,9 @@ def parse_args():
     p.add_argument("--offline_data", type=Path, default=None)
     p.add_argument("--init_state", choices=["warm", "cold"], default="cold")
     p.add_argument("--reset_state", choices=["stream", "example"], default="stream")
+    p.add_argument("--task_state_mode", choices=["shared", "separate"], default=None,
+                   help="shared: one online Sigma state for the whole stream. "
+                        "separate: maintain one online state per broad task type.")
     p.add_argument("--ablate_memory", action="store_true")
     p.add_argument("--use_joint", choices=["on", "off"], default="off")
     p.add_argument("--phi_mode", choices=["proto"], default=None)
@@ -156,6 +165,7 @@ def main():
     max_len = int(cfg.get("max_length", 8192))
     init_state = str(cfg.get("init_state", "cold")).lower()
     reset_state = str(cfg.get("reset_state", "stream")).lower()
+    task_state_mode = str(cfg.get("task_state_mode", "shared")).lower()
     ablate = bool(cfg.get("ablate_memory", False))
     use_joint = str(cfg.get("use_joint", "off")) == "on"
     rank = int(cfg.get("rank", 16))
@@ -172,6 +182,8 @@ def main():
     confusion_temp = float(cfg.get("confusion_temperature", 1.0))
     if confusion_gate not in {"off", "entropy", "margin"}:
         raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    if task_state_mode not in {"shared", "separate"}:
+        raise ValueError(f"task_state_mode must be shared/separate, got {task_state_mode!r}")
     if score_mode not in {"peer_name", "candidate_yesno"}:
         raise ValueError(f"score_mode must be peer_name/candidate_yesno, got {score_mode!r}")
     if score_mode == "candidate_yesno" and peer_mode != "joint":
@@ -258,6 +270,7 @@ def main():
         snap = torch.load(ckpt / "sym_state.pt", map_location=device)
         mem.restore({k: v.to(device) for k, v in snap.items()})
     base_snap = mem.snapshot()
+    task_snaps = {}
 
     cand_ids = candidate_token_ids(tok, num_peers)
     yes_ids, no_ids = yes_no_token_ids(tok)
@@ -270,27 +283,31 @@ def main():
     entropy_sum = margin_sum = 0.0
     selections = []  # per-example: which peer was picked, was it right, per-peer scores+labels
     with torch.no_grad():
-        for rec in records:
+        for rec_idx, rec in enumerate(records, start=1):
             slot_names, texts, corr, real, peer_ids = _example_view(rec, num_peers)
             if real < 1:
                 continue
             if reset_state == "example":
                 mem.restore(base_snap)
+            elif task_state_mode == "separate":
+                task_key = task_type_of(rec)
+                mem.restore(task_snaps.get(task_key, base_snap))
             q = str(rec.get("problem", rec.get("question", "")))
             rag_ctx = str(rec.get("retrieved_context", rec.get("context", ""))) if cfg.get("include_context") else ""
             pid = pmask = None
             # peer_mode="one": precompute a single-peer prompt per candidate (CM sees ONE answer
             # at a time, no cross-comparison). Each is scored on its lone " Peer 0" endorsement.
             one_pids = None
-            candidate_pids = None
+            candidate_pids = candidate_mask = None
             if score_mode == "candidate_yesno":
-                candidate_pids = []
-                for s in range(real):
-                    cp = build_candidate_judge_prompt(
-                        q, slot_names, texts, s, context=rag_ctx or None,
-                        include_identity=False, real=real)
-                    ce = tok(cp, add_special_tokens=True, truncation=True, max_length=max_len)
-                    candidate_pids.append(torch.tensor([ce["input_ids"]], device=device))
+                candidate_pids, candidate_mask = batch_candidate_judge_inputs(
+                    tok, q, slot_names, texts,
+                    context=rag_ctx or None,
+                    include_identity=False,
+                    real=real,
+                    max_length=max_len,
+                    device=device,
+                )
             else:
                 prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None,
                                             include_identity=False, real=real)
@@ -313,19 +330,34 @@ def main():
                 value_vecs = [cm_context_vector(base, tok, str(texts[s])[:4000], device=device, layer_frac=phi_layer_frac) - gold_h
                               for s in range(real)]
 
+            def score_candidate_batch(steer_vecs=None):
+                steerer.steer_vec = steer_vecs
+                try:
+                    return model.score_candidate_utility(candidate_pids, candidate_mask, yes_ids, no_ids)
+                finally:
+                    steerer.steer_vec = None
+
             def score_slot(s, steer_vec=None):
-                if steer_vec is not None:
-                    steerer.steer_vec = steer_vec
                 if score_mode == "candidate_yesno":
-                    cpid = candidate_pids[s]
-                    cmask = torch.ones_like(cpid)
-                    lp = float(model.score_candidate_utility(cpid, cmask, yes_ids, no_ids)[0])
+                    if steer_vec is None:
+                        lp = float(score_candidate_batch()[s])
+                    else:
+                        steerer.steer_vec = steer_vec
+                        try:
+                            lp = float(model.score_candidate_utility(
+                                candidate_pids[s:s + 1], candidate_mask[s:s + 1], yes_ids, no_ids)[0])
+                        finally:
+                            steerer.steer_vec = None
                 elif peer_mode == "one":
+                    if steer_vec is not None:
+                        steerer.steer_vec = steer_vec
                     # CM scores this peer ALONE: its prompt has a single answer at slot 0,
                     # so the endorsement token is always " Peer 0" (cand_ids[0]).
                     spid = one_pids[s]
                     lp = float(model.score_one_candidate(spid, torch.ones_like(spid), cand_ids[0])[0])
                 else:
+                    if steer_vec is not None:
+                        steerer.steer_vec = steer_vec
                     lp = float(model.score_one_candidate(pid, pmask, cand_ids[s])[0])
                 steerer.steer_vec = None
                 return lp
@@ -333,7 +365,8 @@ def main():
             def score_center_slots():
                 steerer.steer_vec = None
                 if score_mode == "candidate_yesno":
-                    return [score_slot(s) for s in range(real)]
+                    vals = score_candidate_batch()
+                    return [float(vals[s]) for s in range(real)]
                 if peer_mode == "joint":
                     vals = model.score_candidates(pid, pmask, cand_ids)[0]
                     return [float(vals[s]) for s in range(real)]
@@ -354,12 +387,25 @@ def main():
                 margin_sum += center_margin
 
             if use_memory_now:
-                scores = [
-                    score_slot(s, mem.steer_vector(peer_ids[s], phi_ctx).detach())
-                    for s in range(real)
-                ]
+                if score_mode == "candidate_yesno":
+                    steer_vecs = torch.stack([
+                        mem.steer_vector(peer_ids[s], phi_ctx).detach()
+                        for s in range(real)
+                    ])
+                    vals = score_candidate_batch(steer_vecs)
+                    scores = [float(vals[s]) for s in range(real)]
+                else:
+                    scores = [
+                        score_slot(s, mem.steer_vector(peer_ids[s], phi_ctx).detach())
+                        for s in range(real)
+                    ]
             else:
-                scores = center_scores if center_scores is not None else [score_slot(s) for s in range(real)]
+                if center_scores is not None:
+                    scores = center_scores
+                elif score_mode == "candidate_yesno":
+                    scores = score_center_slots()
+                else:
+                    scores = [score_slot(s) for s in range(real)]
             sel = int(max(range(real), key=lambda s: scores[s]))
             total += 1
             correct += int(corr[sel] == 1)
@@ -389,6 +435,16 @@ def main():
                     vv = value_vecs[s] if value_vecs is not None else None
                     mem.update(peer_ids[s], signs[s], phi_ctx, value_vec=vv)
                 mem.update_joint(list(signs) + [0.0] * (num_peers - real))
+                if reset_state == "stream" and task_state_mode == "separate":
+                    task_snaps[task_type_of(rec)] = mem.snapshot()
+            if rec_idx == 1 or rec_idx % 100 == 0 or rec_idx == len(records):
+                running_acc = correct / total if total else 0.0
+                print(
+                    f"[eval_sym/progress] {rec_idx}/{len(records)} "
+                    f"acc={running_acc*100:.2f} ablate={ablate} "
+                    f"score_mode={score_mode} peer_mode={peer_mode}",
+                    flush=True,
+                )
 
     acc = correct / total if total else 0.0
     out = Path(cfg.get("output", "outputs/eval_sym")); out.mkdir(parents=True, exist_ok=True)
@@ -411,6 +467,7 @@ def main():
         "peer_mode": peer_mode,
         "score_mode": score_mode,
         "init_state": init_state, "reset_state": reset_state, "ablate_memory": ablate, "use_joint": use_joint,
+        "task_state_mode": task_state_mode,
         "gamma": mem.gamma_scalar(), "eta": float(mem.eta),
         "peer_selection": peer_selection,
         "confusion_gate": confusion_gate,

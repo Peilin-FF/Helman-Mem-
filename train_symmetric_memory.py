@@ -32,9 +32,14 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 from feedback_state.data import JsonlDataset
 from feedback_state.generation import dtype_from_name
-from feedback_state.joint_data import VARIANT_AR, candidate_token_ids, yes_no_token_ids
+from feedback_state.joint_data import (
+    VARIANT_AR,
+    batch_candidate_judge_inputs,
+    candidate_token_ids,
+    yes_no_token_ids,
+)
 from feedback_state.joint_models import JointDeltaMemSelector
-from feedback_state.joint_prompt import PEER_SEP, build_candidate_judge_prompt, build_joint_prompt
+from feedback_state.joint_prompt import PEER_SEP, build_joint_prompt
 from feedback_state.permutations import canonical_peer_view
 from feedback_state.symmetric_memory import ActivationSteerer, SymmetricTrustMemory, DEFAULT_TASK_TYPES, cm_context_vector
 from feedback_state.tasks import task_type_of
@@ -55,6 +60,9 @@ def parse_args():
     p.add_argument("--central_model", default=None)
     p.add_argument("--num_peers", type=int, default=None)
     p.add_argument("--max_length", type=int, default=None)
+    p.add_argument("--task_state_mode", choices=["shared", "separate"], default=None,
+                   help="shared: one online Sigma state for the whole stream. "
+                        "separate: maintain one online state per broad task type.")
     p.add_argument("--center_lora_checkpoint", type=Path, default=None,
                    help="Optional LoRA selector checkpoint to attach to the central model.")
     p.add_argument("--train_center_lora", choices=["on", "off"], default=None,
@@ -132,6 +140,7 @@ def main():
     lora_ckpt = Path(cfg["center_lora_checkpoint"]) if cfg.get("center_lora_checkpoint") else None
     num_peers = int(cfg.get("num_peers", 3))
     max_len = int(cfg.get("max_length", 8192))
+    task_state_mode = str(cfg.get("task_state_mode", "shared")).lower()
     use_joint = str(cfg.get("use_joint", "off")) == "on"
     rank = int(cfg.get("rank", 16))
     task_types = tuple(cfg.get("task_types", DEFAULT_TASK_TYPES))
@@ -150,6 +159,8 @@ def main():
     confusion_temp = float(cfg.get("confusion_temperature", 1.0))
     if confusion_gate not in {"off", "entropy", "margin"}:
         raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    if task_state_mode not in {"shared", "separate"}:
+        raise ValueError(f"task_state_mode must be shared/separate, got {task_state_mode!r}")
     if score_mode not in {"peer_name", "candidate_yesno"}:
         raise ValueError(f"score_mode must be peer_name/candidate_yesno, got {score_mode!r}")
     if score_mode == "candidate_yesno" and peer_mode != "joint":
@@ -278,6 +289,8 @@ def main():
           f"(n={ {t: len(by_task[t]) for t in proto_tasks} })", flush=True)
 
     mem.reset()
+    base_snap = mem.snapshot()
+    task_snaps = {}
     step = 0; probed = False
     backward_steps = 0
     gate_total = gate_used = 0
@@ -292,19 +305,23 @@ def main():
             if real < 1 or tgt is None or tgt >= real:
                 step += 1
                 continue
+            if task_state_mode == "separate":
+                task_key = task_type_of(rec)
+                mem.restore(task_snaps.get(task_key, base_snap))
             q = str(rec.get("problem", rec.get("question", "")))
             rag_ctx = str(rec.get("retrieved_context", rec.get("context", ""))) if cfg.get("include_context") else ""
             pid = pmask = None
             one_pids = None
-            candidate_pids = None
+            candidate_pids = candidate_mask = None
             if score_mode == "candidate_yesno":
-                candidate_pids = []
-                for s in range(real):
-                    cp = build_candidate_judge_prompt(
-                        q, slot_names, texts, s, context=rag_ctx or None,
-                        include_identity=False, real=real)
-                    ce = tok(cp, add_special_tokens=True, truncation=True, max_length=max_len)
-                    candidate_pids.append(torch.tensor([ce["input_ids"]], device=device))
+                candidate_pids, candidate_mask = batch_candidate_judge_inputs(
+                    tok, q, slot_names, texts,
+                    context=rag_ctx or None,
+                    include_identity=False,
+                    real=real,
+                    max_length=max_len,
+                    device=device,
+                )
             else:
                 prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None,
                                             include_identity=False, real=real)
@@ -330,11 +347,16 @@ def main():
                     ans_h = cm_context_vector(base, tok, str(texts[s])[:4000], device=device, layer_frac=phi_layer_frac)
                     value_vecs.append(ans_h - gold_h)
 
+            def score_candidate_batch(steer_vecs=None):
+                steerer.steer_vec = steer_vecs
+                try:
+                    return model.score_candidate_utility(candidate_pids, candidate_mask, yes_ids, no_ids)
+                finally:
+                    steerer.steer_vec = None
+
             def score_slot(s):
                 if score_mode == "candidate_yesno":
-                    cpid = candidate_pids[s]
-                    cmask = torch.ones_like(cpid)
-                    lp = model.score_candidate_utility(cpid, cmask, yes_ids, no_ids)[0]
+                    lp = score_candidate_batch()[s]
                 elif peer_mode == "one":
                     spid = one_pids[s]
                     lp = model.score_one_candidate(spid, torch.ones_like(spid), cand_ids[0])[0]
@@ -346,7 +368,8 @@ def main():
             def score_center_slots():
                 steerer.steer_vec = None
                 if score_mode == "candidate_yesno":
-                    return [float(score_slot(s)) for s in range(real)]
+                    vals = score_candidate_batch()
+                    return [float(vals[s]) for s in range(real)]
                 if peer_mode == "joint":
                     vals = model.score_candidates(pid, pmask, cand_ids)[0]
                     return [float(vals[s]) for s in range(real)]
@@ -367,18 +390,25 @@ def main():
             if use_memory_now:
                 # score each candidate WITH the steering vector in-graph; logp_CM under steering
                 # carries the gradient back to the memory params (phi/phi_proj/theta/proj/gain).
-                logits = []
+                steer_vecs = []
                 for s in range(real):
                     pj = peer_ids[s]
                     if diff_write:
                         # idea-2: read through one DIFFERENTIABLE write so loss reaches theta/eta.
                         # sign = ground-truth correctness of THIS peer (train-only signal).
                         vv = value_vecs[s] if value_vecs is not None else None
-                        steerer.steer_vec = mem.steer_vector_diff(pj, phi_ctx, 1.0 if corr[s] else -1.0, value_vec=vv)
+                        steer_vecs.append(mem.steer_vector_diff(
+                            pj, phi_ctx, 1.0 if corr[s] else -1.0, value_vec=vv))
                     else:
-                        steerer.steer_vec = mem.steer_vector(pj, phi_ctx)
-                    logits.append(score_slot(s))
-                logit_vec = torch.stack(logits)
+                        steer_vecs.append(mem.steer_vector(pj, phi_ctx))
+                if score_mode == "candidate_yesno":
+                    logit_vec = score_candidate_batch(torch.stack(steer_vecs))
+                else:
+                    logits = []
+                    for s in range(real):
+                        steerer.steer_vec = steer_vecs[s]
+                        logits.append(score_slot(s))
+                    logit_vec = torch.stack(logits)
                 loss = torch.nn.functional.cross_entropy(
                     logit_vec.unsqueeze(0).float(), torch.tensor([tgt], device=device)) / grad_accum
                 loss.backward()
@@ -404,6 +434,8 @@ def main():
                     vv = value_vecs[s] if value_vecs is not None else None
                     mem.update(peer_ids[s], signs[s], phi_ctx, value_vec=vv)
                 mem.update_joint(list(signs) + [0.0] * (num_peers - real))
+                if task_state_mode == "separate":
+                    task_snaps[task_type_of(rec)] = mem.snapshot()
             step += 1
             if step % log_every == 0:
                 gd = mem.gamma().detach()
@@ -435,6 +467,7 @@ def main():
             "peer_mode": peer_mode,
             "num_peers": num_peers,
             "per_peer_decay": per_peer_decay,
+            "task_state_mode": task_state_mode,
             "confusion_gate": confusion_gate,
             "confusion_threshold": confusion_threshold,
             "confusion_temperature": confusion_temp,
