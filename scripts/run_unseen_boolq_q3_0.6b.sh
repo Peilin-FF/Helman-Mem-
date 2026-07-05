@@ -8,12 +8,12 @@ PYTHON="${PYTHON:-/home/peilin/miniconda3/envs/sigma/bin/python}"
 CFG="${CFG:-configs/peergen/boolq.yaml}"
 CKPT="${CKPT:-outputs/sigma_candidate_yesno_q3_0.6b/proto}"
 MODEL="${MODEL:-/mnt/data/peilin/HF_MODEL/Qwen3-0.6B}"
-OUTD="${OUTD:-data/unseen_task/boolq_qwen3_peers}"
-LOGD="${LOGD:-logs/unseen_boolq_q3_0.6b}"
-EVAL_ROOT="${EVAL_ROOT:-outputs/eval_unseen_task_boolq_q3_0.6b}"
+OUTD="${OUTD:-data/unseen_task/boolq_canonical3_peers}"
+LOGD="${LOGD:-logs/unseen_boolq_canonical3_q3_0.6b}"
+EVAL_ROOT="${EVAL_ROOT:-outputs/eval_unseen_task_boolq_canonical3_q3_0.6b}"
 
-# Let datasets download/cache BoolQ if it is not already cached. The peer models
-# are local paths in configs/peergen/boolq.yaml, so model loading remains local.
+# Let datasets download/cache BoolQ if it is not already cached. Peer models are
+# the canonical Gemma/Phi/Qwen2.5-Coder set from configs/peergen/boolq.yaml.
 unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
 
 read -r -a GPUS <<< "${GPUS:-4 5 6 7}"

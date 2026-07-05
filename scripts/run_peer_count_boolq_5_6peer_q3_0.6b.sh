@@ -9,9 +9,9 @@ EVAL_PYTHON="${EVAL_PYTHON:-/home/peilin/miniconda3/envs/sigma/bin/python}"
 CFG="${CFG:-configs/peergen/boolq6.yaml}"
 CKPT="${CKPT:-outputs/sigma_candidate_yesno_q3_0.6b/proto}"
 MODEL="${MODEL:-/mnt/data/peilin/HF_MODEL/Qwen3-0.6B}"
-OUTD="${OUTD:-data/peer_generalization/boolq6_qwen_peers}"
-LOGD="${LOGD:-logs/peer_generalization/boolq6_q3_0.6b}"
-EVAL_ROOT="${EVAL_ROOT:-outputs/eval_peer_generalization_boolq6_q3_0.6b}"
+OUTD="${OUTD:-data/peer_generalization/boolq6_canonical_peers}"
+LOGD="${LOGD:-logs/peer_generalization/boolq6_canonical_q3_0.6b}"
+EVAL_ROOT="${EVAL_ROOT:-outputs/eval_peer_generalization_boolq6_canonical_q3_0.6b}"
 
 unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
 

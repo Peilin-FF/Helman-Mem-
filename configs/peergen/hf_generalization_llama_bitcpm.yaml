@@ -1,0 +1,42 @@
+dataset: hf_generalization
+datasets:
+  - name: arc_challenge
+    split: validation
+  - name: piqa
+    split: validation
+  - name: winogrande
+    split: validation
+  - name: mmlu
+    split: validation
+  - name: bbh
+    split: test
+  - name: superglue_wic
+    split: validation
+  - name: superglue_rte
+    split: validation
+  - name: superglue_cb
+    split: validation
+  - name: superglue_copa
+    split: validation
+  - name: superglue_wsc
+    split: validation
+  - name: superglue_multirc
+    split: validation
+central_model: /mnt/data/peilin/HF_MODEL/Qwen3-0.6B
+peer_models:
+  - /mnt/data/peilin/HF_MODEL/Llama-3.2-3B-Instruct
+  - /mnt/data/peilin/HF_MODEL/BitCPM-CANN-3B
+peer_keys:
+  - peer_4
+  - peer_5
+deprive_context_models: []
+generation_batch_size: 16
+write_chunk_size: 20000
+max_new_tokens: 96
+temperature: 0.2
+top_p: 0.95
+use_vllm: true
+local_files_only: true
+dtype: bfloat16
+device: cuda:0
+adversarial_rate: 0.0

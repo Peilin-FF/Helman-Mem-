@@ -38,8 +38,12 @@ def main():
                 continue
             pc = {}
             peer_keys = sorted(dict(r.get("peer_responses", {})).keys())
+            task_type = task_type_of(r)
             for k in peer_keys:
                 text = str(r["peer_responses"][k])
+                if task_type != "math":
+                    pc[k] = _grade_one((r, k, text))
+                    continue
                 q = mp.Queue()
                 p = mp.Process(target=_worker, args=((r, k, text), q))
                 p.start()

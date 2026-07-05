@@ -30,6 +30,11 @@ class GenerationConfig:
     device: str = "cuda:0"
     use_vllm: bool = False
     local_files_only: bool = False
+    tokenizer_mode: str = "auto"
+    config_format: str = "auto"
+    load_format: str = "auto"
+    max_model_len: int | None = None
+    gpu_memory_utilization: float | None = None
     # Optional PEFT LoRA adapter directory. When set with the vllm backend, the
     # engine is started with enable_lora=True and every request carries a
     # LoRARequest, so the adapter is applied on top of the base weights.
@@ -98,20 +103,53 @@ class TextGenerator:
                 if config.lora_path:
                     from vllm.lora.request import LoRARequest
 
+                    vllm_kwargs = {}
+                    if str(config.config_format).lower() != "auto":
+                        vllm_kwargs["config_format"] = str(config.config_format)
+                    if str(config.load_format).lower() != "auto":
+                        vllm_kwargs["load_format"] = str(config.load_format)
+                    if config.max_model_len is not None:
+                        vllm_kwargs["max_model_len"] = int(config.max_model_len)
+                    if config.gpu_memory_utilization is not None:
+                        vllm_kwargs["gpu_memory_utilization"] = float(
+                            config.gpu_memory_utilization
+                        )
                     self.llm = LLM(
                         model=model_name,
+                        tokenizer_mode=str(config.tokenizer_mode),
                         dtype=str(config.dtype),
                         enable_lora=True,
                         max_lora_rank=int(config.max_lora_rank),
                         enforce_eager=bool(config.enforce_eager),
+                        **vllm_kwargs,
                     )
                     self._lora_request = LoRARequest("adapter", 1, config.lora_path)
                 else:
+                    vllm_kwargs = {}
+                    if str(config.config_format).lower() != "auto":
+                        vllm_kwargs["config_format"] = str(config.config_format)
+                    if str(config.load_format).lower() != "auto":
+                        vllm_kwargs["load_format"] = str(config.load_format)
+                    if config.max_model_len is not None:
+                        vllm_kwargs["max_model_len"] = int(config.max_model_len)
+                    if config.gpu_memory_utilization is not None:
+                        vllm_kwargs["gpu_memory_utilization"] = float(
+                            config.gpu_memory_utilization
+                        )
                     self.llm = LLM(
                         model=model_name,
+                        tokenizer_mode=str(config.tokenizer_mode),
                         dtype=str(config.dtype),
                         enforce_eager=bool(config.enforce_eager),
+                        **vllm_kwargs,
                     )
+                try:
+                    self.tokenizer = self.llm.get_tokenizer()
+                    if self.tokenizer.pad_token_id is None:
+                        self.tokenizer.pad_token = self.tokenizer.eos_token
+                    self.tokenizer.padding_side = "left"
+                except Exception:
+                    self.tokenizer = None
                 self.backend = "vllm"
                 return
             except Exception:

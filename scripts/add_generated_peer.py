@@ -137,6 +137,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--use_vllm", type=_as_bool, default=True)
     p.add_argument("--local_files_only", type=_as_bool, default=True)
+    p.add_argument("--tokenizer_mode", default="auto")
+    p.add_argument("--config_format", default="auto")
+    p.add_argument("--load_format", default="auto")
+    p.add_argument("--max_model_len", type=int, default=None)
+    p.add_argument("--gpu_memory_utilization", type=float, default=None)
+    p.add_argument("--enforce_eager", type=_as_bool, default=False)
     p.add_argument("--shard_index", type=int, default=0)
     p.add_argument("--num_shards", type=int, default=1)
     p.add_argument("--max_samples", type=int, default=None)
@@ -160,6 +166,12 @@ def main() -> None:
         device=str(args.device),
         use_vllm=bool(args.use_vllm),
         local_files_only=bool(args.local_files_only),
+        tokenizer_mode=str(args.tokenizer_mode),
+        config_format=str(args.config_format),
+        load_format=str(args.load_format),
+        max_model_len=args.max_model_len,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        enforce_eager=bool(args.enforce_eager),
     )
     generator = TextGenerator(str(args.model), gen_cfg)
     try:

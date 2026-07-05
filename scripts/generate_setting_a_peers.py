@@ -51,6 +51,28 @@ def load_any_dataset(dataset_key: str, *, split, start_index, max_samples, cfg) 
     return records
 
 
+def load_dataset_mixture(entries: list, *, cfg) -> list[dict]:
+    records: list[dict] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            item = {"name": entry}
+        else:
+            item = dict(entry)
+        name = str(item.get("name") or item.get("dataset"))
+        if not name or name == "None":
+            raise ValueError(f"Bad dataset mixture entry: {entry!r}")
+        records.extend(
+            load_any_dataset(
+                name,
+                split=item.get("split", cfg.get("split", "train")),
+                start_index=item.get("start_index", 0),
+                max_samples=item.get("max_samples", None),
+                cfg=cfg,
+            )
+        )
+    return records
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate offline peer responses for Setting A.")
     parser.add_argument("--config", type=Path, default=None)
@@ -93,20 +115,26 @@ def main() -> None:
     rng = random.Random(seed)
 
     dataset_key = str(cfg.get("dataset", cfg.get("dataset_name", "deepmath")))
-    if "/" in dataset_key:
-        # Backwards-compatible: a full HF path string still works for DeepMath etc.
-        dataset_key = {"zwhe99/DeepMath-103K": "deepmath"}.get(dataset_key, dataset_key)
-    max_samples = cfg.get("max_samples", cfg.get(f"max_{split}_samples", None))
-    start_index = int(cfg.get("start_index", 0))
-    records = load_any_dataset(
-        dataset_key, split=split, start_index=start_index, max_samples=max_samples, cfg=cfg
-    )
+    if cfg.get("datasets"):
+        records = load_dataset_mixture(list(cfg.get("datasets") or []), cfg=cfg)
+    else:
+        if "/" in dataset_key:
+            # Backwards-compatible: a full HF path string still works for DeepMath etc.
+            dataset_key = {"zwhe99/DeepMath-103K": "deepmath"}.get(dataset_key, dataset_key)
+        max_samples = cfg.get("max_samples", cfg.get(f"max_{split}_samples", None))
+        start_index = int(cfg.get("start_index", 0))
+        records = load_any_dataset(
+            dataset_key, split=split, start_index=start_index, max_samples=max_samples, cfg=cfg
+        )
     shard_index = int(cfg.get("shard_index", 0))
     num_shards = int(cfg.get("num_shards", 1))
 
     peer_models = list(cfg.get("peer_models", []))
     if not peer_models:
         raise ValueError("Config must define peer_models")
+    peer_keys = [str(x) for x in cfg.get("peer_keys", [])]
+    if peer_keys and len(peer_keys) != len(peer_models):
+        raise ValueError("Config peer_keys must have the same length as peer_models")
     adversarial_rates = cfg.get("adversarial_rate", 0.0)
     if not isinstance(adversarial_rates, list):
         adversarial_rates = [float(adversarial_rates)] * len(peer_models)
@@ -130,6 +158,18 @@ def main() -> None:
         device=str(cfg.get("device", "cuda:0")),
         use_vllm=bool(cfg.get("use_vllm", True)),
         local_files_only=bool(cfg.get("local_files_only", False)),
+        tokenizer_mode=str(cfg.get("tokenizer_mode", "auto")),
+        config_format=str(cfg.get("config_format", "auto")),
+        load_format=str(cfg.get("load_format", "auto")),
+        max_model_len=(
+            int(cfg["max_model_len"]) if cfg.get("max_model_len") is not None else None
+        ),
+        gpu_memory_utilization=(
+            float(cfg["gpu_memory_utilization"])
+            if cfg.get("gpu_memory_utilization") is not None
+            else None
+        ),
+        enforce_eager=bool(cfg.get("enforce_eager", False)),
     )
 
     pending: list[dict] = []
@@ -203,7 +243,7 @@ def main() -> None:
                 for row_index, record in enumerate(chunk):
                     is_adv = adversarial_flags[row_index]
                     samples = per_row_samples[row_index]
-                    key = f"peer_{peer_index}"
+                    key = peer_keys[peer_index] if peer_keys else f"peer_{peer_index}"
                     record["peer_responses"][key] = samples[0]
                     if samples_per_peer > 1:
                         record.setdefault("peer_samples", {})[key] = samples

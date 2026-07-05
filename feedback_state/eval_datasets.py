@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+from pathlib import Path
 from typing import Any, Callable
 
 # Map HuggingFace dataset names to local directories under HF_DATA for offline use.
 # Loaders call load_dataset(<hub_name>, ...); when HF_DATA/<dir> exists we point at
 # the local copy so everything runs with HF_DATASETS_OFFLINE=1.
-_HF_DATA_DIR = os.environ.get("HF_DATA_DIR", "/workspace/cloud_android/fengpeilin/HF_DATA")
+_HF_DATA_DIR = os.environ.get("HF_DATA_DIR", "/mnt/data/peilin/HF_DATA")
 _LOCAL_DIRS = {
     "super_glue": "super_glue",
     "hotpot_qa": "hotpot_qa",
@@ -42,6 +44,14 @@ _LOCAL_DIRS = {
     "bigcode/bigcodebench": "bigcodebench",
     "livecodebench/code_generation_lite": "code_generation_lite",
     "codeparrot/apps": "apps",
+    "arc_challenge": "arc_challenge",
+    "piqa": "piqa",
+    "winogrande": "winogrande",
+    "mmlu": "mmlu",
+    "bbh": "bbh",
+    "openbookqa": "openbookqa",
+    "commonsense_qa": "commonsense_qa",
+    "sciq": "sciq",
 }
 
 
@@ -59,6 +69,19 @@ def _dataset_path(hub_name: str) -> str:
 RAG_DATASETS = {"hotpotqa", "triviaqa", "squad"}
 CODE_DATASETS = {"humaneval", "mbpp", "bigcodebench", "livecodebench", "apps"}
 BOOLQA_DATASETS = {"boolq"}
+MCQA_DATASETS = {
+    "arc_challenge",
+    "piqa",
+    "winogrande",
+    "mmlu",
+    "openbookqa",
+    "commonsense_qa",
+    "sciq",
+    "superglue_rte",
+    "superglue_cb",
+    "superglue_copa",
+}
+SHORTQA_DATASETS = {"bbh"}
 
 
 def task_type_for(name: str) -> str:
@@ -69,6 +92,10 @@ def task_type_for(name: str) -> str:
         return "code"
     if key in {d.replace("-", "_") for d in BOOLQA_DATASETS}:
         return "boolqa"
+    if key in {d.replace("-", "_") for d in MCQA_DATASETS}:
+        return "mcqa"
+    if key in {d.replace("-", "_") for d in SHORTQA_DATASETS}:
+        return "shortqa"
     return "math"
 
 
@@ -178,6 +205,352 @@ def load_boolq(split: str, start_index: int, max_samples: int | None, cache_dir:
             "answer": "yes" if label == 1 else "no",
             "context": [str(ex.get("passage", "")).strip()],
             "source": "boolq",
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Classification / multiple-choice loaders
+# ---------------------------------------------------------------------------
+
+def _letters(n: int) -> list[str]:
+    return [chr(ord("A") + i) for i in range(n)]
+
+
+def _mc_record(
+    *,
+    dataset: str,
+    rid: Any,
+    problem: str,
+    choices: list[Any],
+    answer_index: int | None = None,
+    answer_label: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    labels = _letters(len(choices))
+    if answer_label is None:
+        if answer_index is None:
+            raise ValueError("Either answer_index or answer_label is required")
+        answer_label = labels[int(answer_index)]
+    record = {
+        "id": f"{dataset}:{rid}",
+        "task_type": "mcqa",
+        "problem": str(problem).strip(),
+        "choices": [str(x).strip() for x in choices],
+        "choice_labels": labels,
+        "answer": str(answer_label),
+        "source": dataset,
+    }
+    record.update(extra)
+    return record
+
+
+def load_arc_challenge(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("arc_challenge"), split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        block = ex.get("choices", {}) or {}
+        labels = [str(x) for x in block.get("label", [])]
+        texts = [str(x) for x in block.get("text", [])]
+        answer_key = str(ex.get("answerKey", "")).strip()
+        # ARC occasionally uses numeric labels; map them back onto A/B/C...
+        if answer_key in labels:
+            answer_index = labels.index(answer_key)
+        elif answer_key.isdigit() and str(int(answer_key)) in labels:
+            answer_index = labels.index(str(int(answer_key)))
+        else:
+            answer_index = 0
+        out.append(
+            _mc_record(
+                dataset="arc_challenge",
+                rid=ex.get("id", i),
+                problem=str(ex.get("question", "")),
+                choices=texts,
+                answer_index=answer_index,
+            )
+        )
+    return out
+
+
+def load_piqa(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("piqa"), split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        out.append(
+            _mc_record(
+                dataset="piqa",
+                rid=i,
+                problem=f"Goal: {ex.get('goal', '')}",
+                choices=[ex.get("sol1", ""), ex.get("sol2", "")],
+                answer_index=int(ex.get("label", 0)),
+            )
+        )
+    return out
+
+
+def load_winogrande(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("winogrande"), "winogrande_xl", split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        answer = int(str(ex.get("answer", "1"))) - 1
+        out.append(
+            _mc_record(
+                dataset="winogrande",
+                rid=i,
+                problem=f"Fill in the blank in this sentence:\n{ex.get('sentence', '')}",
+                choices=[ex.get("option1", ""), ex.get("option2", "")],
+                answer_index=answer,
+            )
+        )
+    return out
+
+
+def load_mmlu(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("mmlu"), "all", split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        subject = str(ex.get("subject", "")).replace("_", " ")
+        out.append(
+            _mc_record(
+                dataset="mmlu",
+                rid=f"{ex.get('subject', 'all')}:{i}",
+                problem=f"Subject: {subject}\n{ex.get('question', '')}",
+                choices=list(ex.get("choices", []) or []),
+                answer_index=int(ex.get("answer", 0)),
+                subject=ex.get("subject", ""),
+            )
+        )
+    return out
+
+
+def load_openbookqa(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("openbookqa"), "main", split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        block = ex.get("choices", {}) or {}
+        labels = [str(x) for x in block.get("label", [])]
+        texts = [str(x) for x in block.get("text", [])]
+        answer_key = str(ex.get("answerKey", "")).strip()
+        answer_index = labels.index(answer_key) if answer_key in labels else 0
+        out.append(
+            _mc_record(
+                dataset="openbookqa",
+                rid=ex.get("id", start_index + i),
+                problem=str(ex.get("question_stem", "")),
+                choices=texts,
+                answer_index=answer_index,
+            )
+        )
+    return out
+
+
+def load_commonsense_qa(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("commonsense_qa"), split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        block = ex.get("choices", {}) or {}
+        labels = [str(x) for x in block.get("label", [])]
+        texts = [str(x) for x in block.get("text", [])]
+        answer_key = str(ex.get("answerKey", "")).strip()
+        answer_index = labels.index(answer_key) if answer_key in labels else 0
+        out.append(
+            _mc_record(
+                dataset="commonsense_qa",
+                rid=ex.get("id", start_index + i),
+                problem=str(ex.get("question", "")),
+                choices=texts,
+                answer_index=answer_index,
+                question_concept=ex.get("question_concept", ""),
+            )
+        )
+    return out
+
+
+def load_sciq(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    ds = load_dataset(_dataset_path("sciq"), split=split or "validation", cache_dir=cache_dir)
+    ds = _slice(ds, start_index, max_samples)
+    out = []
+    for i, ex in enumerate(ds):
+        rid = start_index + i
+        keyed_choices = [
+            (str(ex.get("correct_answer", "")), True),
+            (str(ex.get("distractor1", "")), False),
+            (str(ex.get("distractor2", "")), False),
+            (str(ex.get("distractor3", "")), False),
+        ]
+
+        def sort_key(item: tuple[str, bool]) -> str:
+            text, is_gold = item
+            raw = f"sciq:{rid}:{int(is_gold)}:{text}".encode("utf-8")
+            return hashlib.blake2b(raw, digest_size=8).hexdigest()
+
+        keyed_choices = sorted(keyed_choices, key=sort_key)
+        choices = [text for text, _ in keyed_choices]
+        answer_index = next(idx for idx, (_, is_gold) in enumerate(keyed_choices) if is_gold)
+        out.append(
+            _mc_record(
+                dataset="sciq",
+                rid=rid,
+                problem=str(ex.get("question", "")),
+                choices=choices,
+                answer_index=answer_index,
+            )
+        )
+    return out
+
+
+def load_bbh(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    from datasets import load_dataset
+
+    root = Path(_dataset_path("bbh"))
+    tasks = sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
+    rows: list[dict[str, Any]] = []
+    for task in tasks:
+        ds = load_dataset(str(root), task, split=split or "test", cache_dir=cache_dir)
+        for i, ex in enumerate(ds):
+            rows.append(
+                {
+                    "id": f"bbh:{task}:{i}",
+                    "task_type": "shortqa",
+                    "problem": str(ex.get("input", "")).strip(),
+                    "answer": str(ex.get("target", "")).strip(),
+                    "source": "bbh",
+                    "bbh_task": task,
+                }
+            )
+    return list(_slice(rows, start_index, max_samples))
+
+
+def _superglue(split: str, config: str, cache_dir: str | None):
+    from datasets import load_dataset
+
+    return load_dataset(_dataset_path("super_glue"), config, split=split or "validation", cache_dir=cache_dir)
+
+
+def load_superglue_wic(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    ds = _slice(_superglue(split, "wic", cache_dir), start_index, max_samples)
+    out = []
+    for ex in ds:
+        out.append({
+            "id": f"superglue_wic:{ex.get('idx', len(out))}",
+            "task_type": "boolqa",
+            "problem": (
+                f"Word: {ex.get('word', '')}\n"
+                f"Sentence 1: {ex.get('sentence1', '')}\n"
+                f"Sentence 2: {ex.get('sentence2', '')}\n"
+                "Does the word have the same meaning in both sentences?"
+            ),
+            "answer": "yes" if int(ex.get("label", 0)) == 1 else "no",
+            "source": "superglue_wic",
+        })
+    return out
+
+
+def load_superglue_rte(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    ds = _slice(_superglue(split, "rte", cache_dir), start_index, max_samples)
+    out = []
+    for ex in ds:
+        out.append(
+            _mc_record(
+                dataset="superglue_rte",
+                rid=ex.get("idx", len(out)),
+                problem=f"Premise: {ex.get('premise', '')}\nHypothesis: {ex.get('hypothesis', '')}",
+                choices=["entailment", "not entailment"],
+                answer_index=int(ex.get("label", 0)),
+            )
+        )
+    return out
+
+
+def load_superglue_cb(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    ds = _slice(_superglue(split, "cb", cache_dir), start_index, max_samples)
+    out = []
+    for ex in ds:
+        out.append(
+            _mc_record(
+                dataset="superglue_cb",
+                rid=ex.get("idx", len(out)),
+                problem=f"Premise: {ex.get('premise', '')}\nHypothesis: {ex.get('hypothesis', '')}",
+                choices=["entailment", "contradiction", "neutral"],
+                answer_index=int(ex.get("label", 0)),
+            )
+        )
+    return out
+
+
+def load_superglue_copa(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    ds = _slice(_superglue(split, "copa", cache_dir), start_index, max_samples)
+    out = []
+    for ex in ds:
+        relation = "cause" if str(ex.get("question", "")) == "cause" else "effect"
+        out.append(
+            _mc_record(
+                dataset="superglue_copa",
+                rid=ex.get("idx", len(out)),
+                problem=f"Premise: {ex.get('premise', '')}\nWhich option is the more plausible {relation}?",
+                choices=[ex.get("choice1", ""), ex.get("choice2", "")],
+                answer_index=int(ex.get("label", 0)),
+            )
+        )
+    return out
+
+
+def load_superglue_wsc(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    ds = _slice(_superglue(split, "wsc.fixed", cache_dir), start_index, max_samples)
+    out = []
+    for ex in ds:
+        out.append({
+            "id": f"superglue_wsc:{ex.get('idx', len(out))}",
+            "task_type": "boolqa",
+            "problem": (
+                f"Text: {ex.get('text', '')}\n"
+                f"Candidate antecedent: {ex.get('span1_text', '')}\n"
+                f"Pronoun/reference: {ex.get('span2_text', '')}\n"
+                "Does the pronoun/reference refer to the candidate antecedent?"
+            ),
+            "answer": "yes" if int(ex.get("label", 0)) == 1 else "no",
+            "source": "superglue_wsc",
+        })
+    return out
+
+
+def load_superglue_multirc(split: str, start_index: int, max_samples: int | None, cache_dir: str | None) -> list[dict[str, Any]]:
+    ds = _slice(_superglue(split, "multirc", cache_dir), start_index, max_samples)
+    out = []
+    for ex in ds:
+        idx = ex.get("idx", {}) or {}
+        rid = f"{idx.get('paragraph', len(out))}:{idx.get('question', 0)}:{idx.get('answer', 0)}"
+        out.append({
+            "id": f"superglue_multirc:{rid}",
+            "task_type": "boolqa",
+            "problem": (
+                f"Paragraph: {ex.get('paragraph', '')}\n"
+                f"Question: {ex.get('question', '')}\n"
+                f"Candidate answer: {ex.get('answer', '')}\n"
+                "Is the candidate answer correct?"
+            ),
+            "answer": "yes" if int(ex.get("label", 0)) == 1 else "no",
+            "source": "superglue_multirc",
         })
     return out
 
@@ -396,6 +769,20 @@ REGISTRY: dict[str, Callable[..., list[dict[str, Any]]]] = {
     "triviaqa": load_triviaqa,
     "squad": load_squad,
     "boolq": load_boolq,
+    "arc_challenge": load_arc_challenge,
+    "piqa": load_piqa,
+    "winogrande": load_winogrande,
+    "mmlu": load_mmlu,
+    "openbookqa": load_openbookqa,
+    "commonsense_qa": load_commonsense_qa,
+    "sciq": load_sciq,
+    "bbh": load_bbh,
+    "superglue_wic": load_superglue_wic,
+    "superglue_rte": load_superglue_rte,
+    "superglue_cb": load_superglue_cb,
+    "superglue_copa": load_superglue_copa,
+    "superglue_wsc": load_superglue_wsc,
+    "superglue_multirc": load_superglue_multirc,
     "humaneval": load_humaneval,
     "mbpp": load_mbpp,
     "bigcodebench": load_bigcodebench,
@@ -418,7 +805,25 @@ def load_eval_dataset(
     tag the records with task_type="math".
     """
     key = name.lower().replace("-", "_")
-    aliases = {"hotpot_qa": "hotpotqa", "trivia_qa": "triviaqa", "openai_humaneval": "humaneval"}
+    aliases = {
+        "hotpot_qa": "hotpotqa",
+        "trivia_qa": "triviaqa",
+        "openai_humaneval": "humaneval",
+        "arcchallenge": "arc_challenge",
+        "arc": "arc_challenge",
+        "mmlu_all": "mmlu",
+        "commonsenseqa": "commonsense_qa",
+        "commonsense": "commonsense_qa",
+        "openbook_qa": "openbookqa",
+        "bbh_all": "bbh",
+        "super_glue_wic": "superglue_wic",
+        "super_glue_rte": "superglue_rte",
+        "super_glue_cb": "superglue_cb",
+        "super_glue_copa": "superglue_copa",
+        "super_glue_wsc": "superglue_wsc",
+        "super_glue_wsc_fixed": "superglue_wsc",
+        "super_glue_multirc": "superglue_multirc",
+    }
     key = aliases.get(key, key)
     if key not in REGISTRY:
         raise KeyError(f"Unknown eval dataset {name!r}. Registered: {sorted(REGISTRY)}")

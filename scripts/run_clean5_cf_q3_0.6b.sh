@@ -25,23 +25,20 @@ if [ ! -f "$CKPT/sym_memory.pt" ]; then
   exit 1
 fi
 
-splits=(p0 p50 p70 p90)
-gen_pids=()
-gen_names=()
-for idx in "${!splits[@]}"; do
-  split="${splits[$idx]}"
-  gpu="${GEN_GPUS[$((idx % ${#GEN_GPUS[@]}))]}"
-  in_file="$IN_DIR/${split}.jsonl"
-  raw_file="$OUT_DIR/raw/${split}.jsonl"
-  log_file="$LOG_DIR/add_peer_${split}.log"
-  if [ -s "$raw_file" ]; then
-    echo "[clean5] reuse raw $raw_file"
-    continue
-  fi
-  echo "[clean5] add peer_4=$NEW_PEER_MODEL split=$split gpu=$gpu"
-  env CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" -u scripts/add_generated_peer.py \
-    --input "$in_file" \
-    --output "$raw_file" \
+splits=(p0)
+base_raw="$OUT_DIR/raw/p0.jsonl"
+base_labeled="$OUT_DIR/labeled/p0.jsonl"
+source_count="$(wc -l < "$IN_DIR/p0.jsonl")"
+raw_count=0
+if [ -s "$base_raw" ]; then
+  raw_count="$(wc -l < "$base_raw")"
+fi
+if [ "$raw_count" -lt "$source_count" ]; then
+  echo "[clean5] raw p0 incomplete: $raw_count/$source_count; resuming generation"
+  echo "[clean5] add peer_4 once on canonical p0 gpu=${GEN_GPUS[0]}"
+  env CUDA_VISIBLE_DEVICES="${GEN_GPUS[0]}" "$PYTHON" -u scripts/add_generated_peer.py \
+    --input "$IN_DIR/p0.jsonl" \
+    --output "$base_raw" \
     --model "$NEW_PEER_MODEL" \
     --peer_key peer_4 \
     --remap peer_0=peer_0 \
@@ -53,38 +50,28 @@ for idx in "${!splits[@]}"; do
     --local_files_only true \
     --batch_size 4 \
     --write_chunk_size 64 \
-    > "$log_file" 2>&1 &
-  gen_pids+=("$!")
-  gen_names+=("$split:$log_file")
-  echo "[clean5] launched split=$split pid=${gen_pids[-1]} log=$log_file"
-done
-for i in "${!gen_pids[@]}"; do
-  pid="${gen_pids[$i]}"
-  name="${gen_names[$i]}"
-  if ! wait "$pid"; then
-    echo "[error] generation failed for $name" >&2
-    log="${name#*:}"
-    tail -80 "$log" >&2 || true
-    exit 1
-  fi
-done
+    > "$LOG_DIR/add_peer_p0.log" 2>&1
+else
+  echo "[clean5] reuse complete raw $base_raw ($raw_count/$source_count)"
+fi
 
-for split in "${splits[@]}"; do
-  raw_file="$OUT_DIR/raw/${split}.jsonl"
-  labeled_file="$OUT_DIR/labeled/${split}.jsonl"
-  if [ -s "$labeled_file" ]; then
-    echo "[clean5] reuse labeled $labeled_file"
-    continue
-  fi
-  echo "[clean5] fill peer_4 correctness split=$split"
+labeled_count=0
+if [ -s "$base_labeled" ]; then
+  labeled_count="$(wc -l < "$base_labeled")"
+fi
+if [ "$labeled_count" -lt "$source_count" ]; then
+  echo "[clean5] labeled p0 incomplete: $labeled_count/$source_count; filling labels"
+  echo "[clean5] fill peer_4 correctness split=p0"
   "$PYTHON" -u scripts/fill_missing_peer_correct.py \
-    --input "$raw_file" \
-    --output "$labeled_file" \
+    --input "$base_raw" \
+    --output "$base_labeled" \
     --peer_key peer_4 \
     --timeout 10 \
-    > "$LOG_DIR/fill_correct_${split}.log" 2>&1
-  tail -1 "$LOG_DIR/fill_correct_${split}.log"
-done
+    > "$LOG_DIR/fill_correct_p0.log" 2>&1
+  tail -1 "$LOG_DIR/fill_correct_p0.log"
+else
+  echo "[clean5] reuse complete labeled $base_labeled ($labeled_count/$source_count)"
+fi
 
 for split in "${splits[@]}"; do
   labeled_file="$OUT_DIR/labeled/${split}.jsonl"
@@ -122,7 +109,7 @@ done
 import json
 from pathlib import Path
 root = Path("$EVAL_ROOT")
-for split in ["p0", "p50", "p70", "p90"]:
+for split in ["p0"]:
     vals = []
     for arm in ["center", "sigma"]:
         path = root / f"{arm}_{split}" / "eval_metrics.json"

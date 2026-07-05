@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Symmetric Information-Matrix Memory for Multi-Agent Trust — Design Notes</title>
+<title>Sigma-Mem: Symmetric Event-Memory for Peer Selection</title>
 <link rel="stylesheet" href="/__assets/notebook.css">
 </head>
 <body>
@@ -18,306 +18,161 @@
 <script id="seed" type="application/json">
 [
   {
-    "html": "<h1>Symmetric Information-Matrix Memory for Multi-Agent Trust</h1>\n<p style=\"font-size:1.05em\">Design notes for a per-peer trust memory that replaces the Delta-Mem recurrence. Motivation: in\nan agent swarm / agent workflow, the Center Model (CM) must judge each peer not only by <i>this round's response</i>\n(already in-context) but by the peer's <b>persistent identity / reputation</b> accumulated over many rounds. The\nDelta-Mem token-level rule cannot carry that signal; a <b>symmetric (information-matrix) state</b> can.</p>\n<div class=\"callout clay\"><span class=\"tag\">status</span><p class=\"why\" style=\"margin:6px 0 0\">This notebook records what is\n<b>established</b> (the symmetric-matrix properties, validated by simulation) and flags what is <b>still open</b> for the\nmulti-agent adaptation. It is a working design doc, not a finished method.</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Paper Method · Sigma Only</div>\n<h1>Sigma-Mem: Symmetric Event Memory for Peer Selection</h1>\n<p class=\"lede\">This document consolidates the current Sigma method into a paper-ready form. Sigma-Mem turns peer selection into online, task-conditioned trust estimation: each peer owns a symmetric event memory that accumulates evidence over a stream, while all learned dynamics and scoring functions are shared across peers.</p>\n<div class=\"summary-band\">\n  <div><span class=\"k\">Scope</span>Sigma core only: no LoRA, no BCE baseline, no two-stage LoRA+Sigma</div>\n  <div><span class=\"k\">Selector</span>shared candidate Yes/No utility</div>\n  <div><span class=\"k\">State</span>one runtime symmetric matrix per peer</div>\n  <div><span class=\"k\">Claim</span>train with 3 peers, instantiate with variable peer counts</div>\n</div>"
   },
   {
-    "html": "<h2>1. Why Delta-Mem is the wrong primitive (recap)</h2>\n<div class=\"card\"><p class=\"why\">The Delta-Mem update <code>S ← keep·S − erase·(Sk)kᵀ + write·(v kᵀ)</code>\nruns <b>per token</b> with keep = σ(β) ≈ 0.982. Over an ~800-token peer response the prior state survives by\n0.982<sup>800</sup> ≈ 10<sup>−7</sup> — a peer answer longer than ~500 tokens <b>completely overwrites</b>\nthe old state. So cross-round feedback never reaches the next decision (measured: feedback contributes +0.0–0.3 pt; the\n\"online feedback\" did essentially nothing). A token-level overwriting recurrence is structurally mismatched to slowly-varying\nreputation.</p>\n<p class=\"why\" style=\"margin-top:6px\"><b>Two design errors to fix:</b> (1) update granularity must move from the\n<b>token axis</b> to the <b>event axis</b> (one update per task/feedback event, independent of response length); (2) decay must be\na <b>fixed, learned time-constant</b>, not a content-dependent gate that the next response erases.</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<div class=\"stat-grid\">\n  <div class=\"stat-card\"><div class=\"stat-num\">$M_{p,t}$</div><div class=\"stat-label\">peer-specific runtime memory</div><div class=\"stat-delta up\">state, not checkpoint parameter</div></div>\n  <div class=\"stat-card\"><div class=\"stat-num\">$\\phi_t$</div><div class=\"stat-label\">task address</div><div class=\"stat-delta up\">soft prototype over CM representations</div></div>\n  <div class=\"stat-card\"><div class=\"stat-num\">$u_{p,t}$</div><div class=\"stat-label\">candidate utility</div><div class=\"stat-delta up\">shared Yes/No score</div></div>\n  <div class=\"stat-card\"><div class=\"stat-num\">$\\Theta$</div><div class=\"stat-label\">shared learned parameters</div><div class=\"stat-delta up\">independent of peer count</div></div>\n</div>\n<div class=\"callout rec\"><div class=\"callout-h\">One-sentence method statement</div><p>Sigma-Mem learns a peer-agnostic rule for writing, reading, and using task-conditioned reliability evidence; adding a peer at test time only allocates a new memory matrix and reuses the same learned rule.</p></div>"
   },
   {
-    "html": "<h2>2. The proposed primitive: a symmetric information matrix per peer</h2>\n<div class=\"card\"><p class=\"why\">Each peer <i>p</i> holds a symmetric state $M_p=M_p^{\\top}\\in\\mathbb{R}^{r\\times r}$, init 0,\nupdated <b>once per task</b> (when the outcome is known), independent of how long the peer's answer was:</p>\n<p style=\"text-align:center\">$$M_p \\;\\leftarrow\\; \\gamma\\,M_p \\;+\\; \\eta\\,s_t\\,\\phi_t\\phi_t^{\\top}$$</p>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li>$s_t\\in\\{+1,-1\\}$ — peer correct / incorrect on task <i>t</i>.</li>\n<li>$\\phi_t$ — an embedding of the <b>task context</b> (task type, or the CM's query hidden). \"Aligned\" signals share a direction.</li>\n<li>$\\gamma=e^{-\\Delta}\\in(0,1]$ — a <b>fixed, learned</b> memory time-constant. It is a stabilizing decay on the event axis: $\\gamma\\in(0,1]$ for every $\\theta$ keeps the state matrix bounded, so memory neither explodes nor forgets (proved in §3).</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\">Read at decision time, fully differentiable, <b>no eigendecomposition</b>:\nthe trust direction $\\;\\text{steer}_p = M_p\\,\\phi_*\\;$ (a rank-dim vector, $\\phi_*$ = the current query's context address) is injected into the frozen CM's activations, re-ranking its $\\log p(\\text{\"Peer }j\\text{\"})$. The trust is\ntherefore <b>conditioned on the task</b>, not on this round's raw response. <span class=\"why\">(An earlier scalar read — adding $\\phi_*^{\\top}M_p\\phi_*$ as a logit bias — proved too weak and was dropped; steering is the live read.)</span></p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>1. Problem Setup</h2>\n<div class=\"card\">\n<p>At event $t$, an input task $x_t$ is answered by a finite set of peers $\\mathcal P_t$. Peer $p\\in\\mathcal P_t$ provides a candidate response $a_{p,t}$. A center model must select the candidate most likely to be correct:</p>\n<p>$$\\hat p_t = \\arg\\max_{p\\in\\mathcal P_t} u_{p,t}.$$</p>\n<p>Let $c_{p,t}\\in\\{0,1\\}$ denote whether peer $p$'s answer is correct, and define the signed event feedback</p>\n<p>$$s_{p,t}=2c_{p,t}-1\\in\\{-1,+1\\}.$$</p>\n<p>The central difficulty is that a single prompt may not contain enough information to infer which peer should be trusted. Peers can have persistent, task-dependent reliability patterns. Sigma-Mem makes those patterns explicit by maintaining an online memory for each peer and reading that memory when scoring future candidates.</p>\n</div>"
   },
   {
-    "html": "<h2>2b. How the trust steers the CM — the live read in detail</h2>\n<div class=\"card\"><p class=\"why\">The read is <b>not</b> a scalar added to a logit. The trust matrix produces a <b>direction</b> that is injected into the frozen CM's residual stream, so the CM <i>re-scores the candidates itself</i> under the nudge. Four steps, per candidate peer $p$ on the current task:</p>\n<ol class=\"why\" style=\"margin:6px 0 0\">\n<li><b>Read a direction, not a number.</b> $\\;\\text{steer}_p = M_p\\,\\phi_* \\in \\mathbb{R}^{r}\\;$ (<code>steer_vector(peer, ctx)</code>). $\\phi_*$ is the current task's soft-prototype address; $M_p\\phi_*$ points along the peer's accumulated reliability response to <i>this</i> context, and its magnitude grows with how much aligned evidence $M_p$ holds in that direction. Differentiable through $\\phi_*$ (the matrix $M_p$ is a no-grad buffer).</li>\n<li><b>Lift rank→hidden.</b> A trainable $W_{\\text{up}}\\in\\mathbb{R}^{d\\times r}$ (<code>proj</code>, no bias) maps the rank-$r$ direction to the model's hidden size $d$, and a single learned scalar <b>gain</b> $g$ scales it: $\\;\\delta = g\\,W_{\\text{up}}\\,\\text{steer}_p \\in \\mathbb{R}^{d}$.</li>\n<li><b>Add to the residual stream of the upper-half layers.</b> Forward hooks on every decoder layer from $\\lfloor L\\cdot\\text{layer\\_frac}\\rfloor$ to $L$ (default the <b>top half</b>) do $\\;h_\\ell \\leftarrow h_\\ell + \\delta\\;$ at <i>every token position</i>. Same $\\delta$ added at each hooked layer; the lower half runs untouched so the CM still reads the prompt normally before the nudge accumulates.</li>\n<li><b>Let the CM score under the nudge.</b> With the hook live, the steered CM emits its endorsement log-prob $\\;\\text{score}_p = \\log p_{\\text{CM}}(\\text{\"}\\,\\text{Peer }j\\,\\text{\"}\\mid \\text{steered})$. Then the steer vector is cleared to <code>None</code> (hook becomes a no-op) before the next candidate. Pick $\\;\\arg\\max_p \\text{score}_p$.</li>\n</ol></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">What is trainable, and why it starts as the frozen base</h3>\n<p class=\"why\">The CM backbone is <b>frozen</b>. The only trained tensors are the memory dynamics ($\\eta$, $\\gamma$, the proto map $W_{\\text{proj}}$) and the steerer's $W_{\\text{up}}$ + gain $g$ — all <b>agent-count-independent</b>. Two deliberate inits make training stable: $W_{\\text{up}}$ starts near zero (std $10^{-3}$) and $g$ starts at $0$, so at step 0 $\\delta\\approx 0$ and the steered CM is bit-for-bit the frozen base. Training then learns <i>how strongly</i> and <i>in which hidden directions</i> the trust signal should bend the CM's judgement, supervised by cross-entropy against the gold peer.</p></div>\n<div class=\"callout clay\" style=\"margin-top:8px\"><span class=\"tag\">why a direction, not a logit bias</span>\n<p class=\"why\" style=\"margin:6px 0 0\">A scalar $\\phi_*^{\\top}M_p\\phi_*$ bias can only push a peer's score up or down by a fixed amount — it proved <b>too weak</b> (§6). Steering instead changes <i>what the CM attends to</i> while reading the answer, so the same accumulated reliability can express itself as a context-specific re-ranking. The cost: it injects a slowly-varying cross-event signal into every token (the higher-risk \"content-steer\" path the earlier ablations flagged) — which is exactly what this arm is built to measure.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">Exactly what changes inside the CM — and what does <i>not</i></h3>\n<p class=\"why\">The hook is a <b>post-layer</b> <code>register_forward_hook</code>: it fires <i>after</i> a decoder layer returns, and rewrites that layer's output hidden state — the <b>residual stream</b> $h_\\ell$ — by adding the same $\\delta$ at every token position:</p>\n<p style=\"text-align:center\">$$h_\\ell \\;\\leftarrow\\; h_\\ell + \\delta,\\qquad \\delta = g\\,W_{\\text{up}}(M_p\\phi_*),\\quad \\ell \\ge \\lfloor L\\cdot\\text{layer\\_frac}\\rfloor.$$</p>\n<p class=\"why\">So we do <b>not</b> touch $Q,K,V$, attention weights, or any layer weight directly. We move the <b>input vector</b> that the <i>next</i> layers read. The Q/K/V change is therefore <b>indirect but exact</b>: in attention, $Q=W_Q\\,\\text{LN}(h)$, $K=W_K\\,\\text{LN}(h)$, $V=W_V\\,\\text{LN}(h)$. Once a hooked layer has shifted $h\\to h+\\delta$, every <i>subsequent</i> layer recomputes</p>\n<p style=\"text-align:center\">$$Q' = W_Q\\,\\text{LN}(h+\\delta),\\quad K' = W_K\\,\\text{LN}(h+\\delta),\\quad V' = W_V\\,\\text{LN}(h+\\delta)$$</p>\n<p class=\"why\">from the shifted hidden state. The projection weights $W_Q,W_K,W_V$ are <b>unchanged</b> (backbone frozen); what changes is their <b>input</b>, so the resulting $Q',K',V'$ — hence the attention pattern (who attends to whom) and the value mix written back — all bend in the direction $\\delta$ encodes. Because $\\delta$ is added at <b>every token</b> and at <b>every hooked layer</b>, the shift compounds up the top half of the stack, and the final-token logits over the endorsement tokens (\" Peer 0/1/2\") come out re-ranked.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-top:6px\">\n<tbody><tr style=\"border-bottom:1.5px solid #D1CFC5\"><th style=\"text-align:left;padding:5px\">object</th><th style=\"text-align:left;padding:5px\">changed?</th><th style=\"text-align:left;padding:5px\">how</th></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">residual stream $h_\\ell$ (hooked layers)</td><td style=\"padding:5px\"><b>yes, directly</b></td><td style=\"padding:5px\">$+\\delta$ at every token, every layer $\\ge$ layer_frac</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">$Q,K,V$ of later layers</td><td style=\"padding:5px\"><b>yes, indirectly</b></td><td style=\"padding:5px\">recomputed from $\\text{LN}(h+\\delta)$; weights $W_Q,W_K,W_V$ untouched</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">attention scores / value mix</td><td style=\"padding:5px\">yes, indirectly</td><td style=\"padding:5px\">follow from the shifted $Q',K',V'$</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">final endorsement logits</td><td style=\"padding:5px\">yes (the point)</td><td style=\"padding:5px\">re-ranked $\\log p(\\text{\"Peer }j\\text{\"})$</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">backbone weights ($W_Q,W_K,W_V,W_{\\text{mlp}},\\dots$)</td><td style=\"padding:5px\"><b>no</b></td><td style=\"padding:5px\">frozen throughout</td></tr>\n<tr><td style=\"padding:5px\">lower-half layers (below layer_frac)</td><td style=\"padding:5px\"><b>no</b></td><td style=\"padding:5px\">run untouched; CM reads the prompt normally before the nudge</td></tr>\n</tbody></table>\n<p class=\"why\" style=\"margin-top:6px\"><b>One nuance:</b> adding a constant $\\delta$ to $h$ does not translate $Q',K',V'$ by a constant, because <b>LayerNorm/RMSNorm sits before the projections</b> — it re-centers and re-scales $h+\\delta$, so the effective shift is input-dependent (larger where $h$ is small, damped where $h$ is large). That is why a single learned direction can produce a context-sensitive re-ranking rather than a uniform logit offset — and why this is strictly more expressive than the dropped scalar bias.</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>2. Core Design Principles</h2>\n<div class=\"grid col-2\">\n  <div class=\"card\"><h3>Event-level memory</h3><p>The memory updates once per task outcome, not once per generated token. This makes the state independent of response length and prevents high-frequency token dynamics from overwriting trust evidence.</p></div>\n  <div class=\"card\"><h3>Task-conditioned trust</h3><p>Peer reliability is not represented by a global scalar. Sigma writes evidence along a task address $\\phi_t$, so reliability on one task region can transfer to related regions without forcing a single universal reputation.</p></div>\n  <div class=\"card\"><h3>Symmetric accumulation</h3><p>Each update is a signed rank-one outer product $s_{p,t}\\phi_t\\phi_t^\\top$. Repeated aligned evidence builds stable directions; isolated noisy events have bounded spectral effect.</p></div>\n  <div class=\"card\"><h3>Peer-count invariance</h3><p>The learned parameters do not contain peer-indexed tensors. Each peer has its own runtime state, but the write rule, read rule, steering map, and candidate scorer are shared.</p></div>\n</div>"
   },
   {
-    "text": "Another question: how can we define $-\\Delta$ -> $\\gamma$. And what's the shape of $-\\Delta$? It is just a number or a martrix? Will this decay make Mp unstable like update it to zero or Infinite?",
-    "type": "md"
+    "type": "html",
+    "html": "<h2>3. Sigma Memory State</h2>\n<div class=\"card\">\n<p>For every peer $p$, Sigma-Mem maintains a symmetric matrix</p>\n<p>$$M_{p,t}\\in\\mathbb S^r,\\qquad \\mathbb S^r=\\{M\\in\\mathbb R^{r\\times r}:M=M^\\top\\}.$$</p>\n<p>The current implementation uses $r=16$ and initializes $M_{p,0}=0$ at the beginning of an evaluation stream. After observing feedback for event $t$, the memory is updated as</p>\n<p>$$M_{p,t+1}=\\gamma M_{p,t}+\\eta s_{p,t}\\phi_t\\phi_t^\\top.$$</p>\n<p>Here $\\phi_t\\in\\mathbb R^r$ is an L2-normalized task address, $\\eta>0$ is a learned write strength, and $\\gamma\\in(0,1]$ is a learned retention factor. The update is symmetric by construction: $M_{p,0}$ is symmetric, decay preserves symmetry, and $\\phi_t\\phi_t^\\top$ is symmetric.</p>\n</div>\n<div class=\"callout olive\"><div class=\"callout-h\">Interpretation</div><p>A positive event increases trust for peer $p$ in the task direction $\\phi_t$; a negative event subtracts trust in that same direction. The matrix therefore stores directional evidence about when a peer should or should not be trusted.</p></div>"
   },
   {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: defining $\\gamma$, its shape, and why it stays stable</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">1. How to define $\\gamma$ from $\\Delta$</h3>\n<p class=\"why\">We never learn $\\gamma$ directly (it must stay in $(0,1)$). We learn an unconstrained real parameter $\\theta$ and map:</p>\n<p style=\"text-align:center\">$$\\Delta=\\mathrm{softplus}(\\theta)\\ge 0,\\qquad \\gamma=e^{-\\Delta}\\in(0,1].$$</p>\n<p class=\"why\">The softplus keeps $\\Delta\\ge 0$, so the discrete decay $\\gamma=e^{-\\Delta}$ is automatically in the stable range. Because\n$\\Delta\\ge 0\\Rightarrow\\gamma\\le 1$ <b>for every value of $\\theta$</b>, gradient descent can never push the memory into\nthe unstable region — stability is structural, not a constraint we have to police. ($\\theta$ is trained end-to-end by the\nselection loss; large $\\theta\\to\\gamma\\to0$ = short memory, small/negative $\\theta\\to\\gamma\\to1$ = long memory.)</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">2. Shape of $\\Delta$ — scalar, vector, or matrix?</h3>\n<p class=\"why\">Three valid choices, increasing in flexibility. <b>$\\Delta$ is never a full matrix</b> — that would not commute\nwith the state cleanly. The options act on the <i>eigen-directions</i> of $M_p$:</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-top:4px\">\n<tbody><tr style=\"border-bottom:1.5px solid #D1CFC5\"><th style=\"text-align:left;padding:5px\">shape</th><th style=\"text-align:left;padding:5px\">update</th><th style=\"text-align:left;padding:5px\">meaning</th></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\"><b>scalar</b> $\\gamma$</td><td style=\"padding:5px\">$M\\leftarrow\\gamma M+\\eta s\\phi\\phi^{\\top}$</td><td style=\"padding:5px\">one forgetting rate for the whole peer (simplest; start here)</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\"><b>per-peer scalar</b> $\\gamma_p$</td><td style=\"padding:5px\">each peer its own rate</td><td style=\"padding:5px\">\"this agent's reliability drifts faster than that one's\"</td></tr>\n<tr><td style=\"padding:5px\"><b>diagonal in a fixed basis</b> $\\Gamma=\\mathrm{diag}(\\gamma_1..\\gamma_r)$</td><td style=\"padding:5px\">$M\\leftarrow \\Gamma^{1/2}M\\Gamma^{1/2}+\\eta s\\phi\\phi^{\\top}$</td><td style=\"padding:5px\">different memory length per context-direction; the symmetric-preserving form is the two-sided product $\\Gamma^{1/2}M\\Gamma^{1/2}$</td></tr>\n</tbody></table>\n<p class=\"why\" style=\"margin-top:6px\"><b>Recommendation: scalar $\\gamma$ (or per-peer $\\gamma_p$) to start.</b> The two-sided\n$\\Gamma^{1/2}M\\Gamma^{1/2}$ form keeps $M$ symmetric (since $(\\Gamma^{1/2}M\\Gamma^{1/2})^{\\top}=\\Gamma^{1/2}M^{\\top}\\Gamma^{1/2}$),\nbut a plain $\\Gamma M$ (one-sided) would <b>break symmetry</b> — avoid that. Don't over-parametrize before the scalar version works.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">3. Will the decay make $M_p$ blow up to ∞ or collapse to 0? — No, it is bounded (simulated)</h3>\n<p class=\"why\">This is the whole point of using $\\gamma&lt;1$. The recurrence $M_t=\\gamma M_{t-1}+E_t$ with $\\|E_t\\|_2\\le\\eta$ is a\n<b>contraction plus bounded input</b>, so its spectral norm is bounded by a geometric series:</p>\n<p style=\"text-align:center\">$$\\|M_t\\|_2\\;\\le\\;\\eta\\sum_{k\\ge0}\\gamma^{k}\\;=\\;\\frac{\\eta}{1-\\gamma}\\quad(\\gamma&lt;1).$$</p>\n<p class=\"why\">Verified by simulation (r=16, η=0.3, worst case = every event the same aligned +1 direction):</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>4. Stability of the Update</h2>\n<div class=\"card\">\n<p>The learned parameters are constrained by reparameterization:</p>\n<p>$$\\eta=\\operatorname{softplus}(a),\\qquad \\gamma=\\exp(-\\operatorname{softplus}(\\theta)).$$</p>\n<p>Thus $\\eta>0$ and $0<\\gamma\\le 1$ for all unconstrained $a,\\theta$. Since $\\lVert\\phi_t\\rVert_2=1$, a single event update has spectral norm $\\lVert\\eta s_{p,t}\\phi_t\\phi_t^\\top\\rVert_2=\\eta$. If $\\gamma<1$, repeated bounded updates satisfy</p>\n<p>$$\\lVert M_{p,t}\\rVert_2\\le \\sum_{k=0}^{t-1}\\gamma^k\\eta \\le \\frac{\\eta}{1-\\gamma}.$$</p>\n<p>This is the main reason for using a matrix-valued symmetric event memory rather than a free-form recurrent hidden state: the update is expressive enough to accumulate task-conditioned evidence but remains spectrally controlled.</p>\n</div>"
   },
   {
-    "html": "<h2>2c. Learning the write dynamics: per-peer decay $\\gamma_p$ and write strength $\\eta$</h2><div class=\"card\"><p class=\"why\">§2 introduced the event-axis write $M_p\\leftarrow\\gamma M_p+\\eta s_t\\phi_t\\phi_t^{\\top}$ with a single shared, hand-set $\\gamma$. The full method makes the dynamics <b>learned and per-peer</b>: each peer carries its own decay $\\gamma_p$ (its trust time-constant), and both $\\gamma_p$ and the write strength $\\eta$ are trained end-to-end by the selection loss. The update becomes</p><p style=\"text-align:center\">$$M_p \\;\\leftarrow\\; \\gamma_p\\,M_p \\;+\\; \\eta\\,s_t\\,\\phi_t\\phi_t^{\\top},\\qquad \\gamma_p=e^{-\\mathrm{softplus}(\\theta_p)}\\in(0,1],\\quad \\theta\\in\\mathbb{R}^{P}.$$</p><p class=\"why\">$\\theta_p$ is an unconstrained parameter (one per peer); the softplus keeps $\\gamma_p\\in(0,1]$ for every value, so the bounded/Weyl-stable properties of §2–3 hold automatically. \"<b>How long Gemma stays trusted</b>\" is therefore a learned quantity — Gemma's $\\gamma_{\\text{gemma}}$ is independent of Phi's and Qwen's, so agents whose reliability drifts at different rates get different memory lengths. Because $\\theta$ is a length-$P$ <i>state-shaped</i> vector at a constant init (not a cross-agent weight matrix), a new agent just adds one more $\\theta_p$ at the same init — the agent-count-invariance of §8 is preserved.</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>5. Task Addressing</h2>\n<div class=\"card\">\n<p>Sigma requires a task address $\\phi_t$ that maps semantically related tasks to nearby memory directions. The current method uses a soft-prototype address built from frozen center-model representations.</p>\n<p>Let $h_t$ be a mean-pooled hidden representation of the query from a mid-stack CM layer. Training queries are grouped by task type and summarized into fixed prototype centroids $C_1,\\ldots,C_K$, with whitening statistics $\\mu,\\sigma$ saved in the checkpoint. The whitened query $z_t=(h_t-\\mu)/(\\sigma+\\epsilon)$ is softly assigned to the centroids:</p>\n<p>$$\\alpha_t=\\operatorname{softmax}(\\cos(z_t,C)/\\tau).$$</p>\n<p>A small learned projection maps the prototype mixture into the rank-$r$ memory space:</p>\n<p>$$\\phi_t=\\frac{W_\\phi\\alpha_t}{\\lVert W_\\phi\\alpha_t\\rVert_2}.$$</p>\n<p>The centroids and whitening statistics are buffers, not learned parameters. The learned part is the projection $W_\\phi$, which decides how prototype mixtures should address the memory.</p>\n</div>"
   },
   {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">The subtlety: a no-grad state update gives $\\eta,\\gamma$ no gradient</h3><p class=\"why\">$M_p$ is <b>state</b>, evolved by the recurrence and stored as a buffer; the decision reads it as $\\text{steer}_p=M_p\\phi_*$. If the write that produces $M_p$ runs under <code>no_grad</code> (and reads $\\gamma,\\eta$ detached) — the natural way to advance a state buffer — then $\\eta,\\gamma$ reach the loss <b>only</b> through $M_p$, which is off the autograd graph. The gradient is then literally $\\partial\\mathcal{L}/\\partial\\theta=\\partial\\mathcal{L}/\\partial\\eta=\\textbf{None}$: $\\phi_*$ (hence $W_{\\text{proj}}$) still trains, but the decay and write-strength sit frozen at their inits. So the dynamics must be exposed to the gradient deliberately — they do not train for free.</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>6. Memory Read and Residual Steering</h2>\n<div class=\"card\">\n<p>Before scoring peer $p$'s candidate, Sigma reads the peer's memory using the current task address:</p>\n<p>$$\\nu_{p,t}=M_{p,t}\\phi_t.$$</p>\n<p>This rank-space read is lifted into the hidden dimension of the frozen center model:</p>\n<p>$$\\delta_{p,t}=g W_{\\mathrm{up}}\\nu_{p,t},$$</p>\n<p>where $W_{\\mathrm{up}}$ and scalar gain $g$ are learned. During candidate scoring, $\\delta_{p,t}$ is added to the residual stream of the upper decoder layers. The center model backbone itself remains frozen; Sigma changes the hidden trajectory through a small, memory-derived residual intervention.</p>\n</div>\n<div class=\"callout rec\"><div class=\"callout-h\">Why steering instead of score addition?</div><p>The memory is not a hand-coded bonus such as <code>score + lambda * trust</code>. It conditions the center model's own Yes/No evaluation of the candidate, which keeps the mechanism model-facing rather than method-specific score calibration.</p></div>"
   },
   {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">Mechanism: read through one differentiable write</h3><p class=\"why\">At decision time, before scoring peer $p$, the steer direction is read from the matrix obtained by applying <b>one write step</b> to the stored state $M_p^{(t-1)}$, with the current $\\gamma_p,\\eta$ kept as the free variables we differentiate:</p><p style=\"text-align:center\">$$M_p^{(t)} \\;=\\; \\gamma_p\\,M_p^{(t-1)} \\;+\\; \\eta\\,s_t\\,\\phi_t\\phi_t^{\\top},\\qquad \\text{steer}_p \\;=\\; M_p^{(t)}\\,\\phi_* .$$</p><p class=\"why\">We take the partials w.r.t. the current-step parameters $\\eta,\\theta_p$ only, holding the previous state $M_p^{(t-1)}$ at its stored value — i.e. we do not unroll the gradient back through the whole history (no backprop-through-time). The decision score for each peer is the center model's endorsement log-probability under steering, $\\text{score}_j=\\log p_{\\text{CM}}(\\text{\\\"Peer }j\\text{\\\"}\\mid \\text{steered by }M_j^{(t)}\\phi_*)$, and the loss is the cross-entropy of the softmax over the $P$ peer scores against the correct peer $p^\\star$:</p><p style=\"text-align:center\">$$\\mathcal{L} \\;=\\; -\\log\\frac{e^{\\text{score}_{p^\\star}}}{\\sum_{j=1}^{P} e^{\\text{score}_{j}}} \\;=\\; -\\,\\text{score}_{p^\\star} + \\log\\!\\sum_{j=1}^{P} e^{\\text{score}_{j}} .$$</p><p class=\"why\">Both write parameters now have a non-vanishing partial. With $\\gamma_p=e^{-\\mathrm{softplus}(\\theta_p)}$ so $\\partial\\gamma_p/\\partial\\theta_p=-\\gamma_p\\,\\sigma(\\theta_p)$, and writing $g_p \\equiv \\partial\\mathcal{L}/\\partial M_p^{(t)} = (\\partial\\mathcal{L}/\\partial\\,\\text{score}_p)\\,\\phi_*^{\\top}$ (a rank-1 matrix, since $\\text{steer}_p=M_p^{(t)}\\phi_*$):</p><p style=\"text-align:center\">$$\\frac{\\partial\\mathcal{L}}{\\partial\\eta}=\\big\\langle g_p,\\; s_t\\,\\phi_t\\phi_t^{\\top}\\big\\rangle,\\qquad \\frac{\\partial\\mathcal{L}}{\\partial\\theta_p}=\\big\\langle g_p,\\; M_p^{(t-1)}\\big\\rangle\\,\\big(-\\gamma_p\\,\\sigma(\\theta_p)\\big),\\qquad \\langle A,B\\rangle=\\mathrm{tr}(A^{\\top}B).$$</p><p class=\"why\">where $\\partial\\mathcal{L}/\\partial\\,\\text{score}_p=\\mathrm{softmax}(\\text{score})_p-\\mathbb{1}[p=p^\\star]$ is the usual cross-entropy gradient. Both are generally nonzero, so gradient descent moves $\\eta$ and each $\\theta_p$. (Contrast: if $M_p^{(t)}$ were advanced outside the computation graph and only its stored value were read, $\\partial\\mathcal{L}/\\partial M_p^{(t)}$ never connects to $\\eta,\\theta_p$ and both gradients are exactly zero — the failure mode of the previous section.)</p><p class=\"why\">The sign $s_t\\in\\{+1,-1\\}$ is the peer's <b>ground-truth correctness on this task</b>, available at train time. Using it would leak the label, so this differentiable write is confined to the <b>training</b> decision. At <b>eval</b> the two-phase order is kept — read $\\text{steer}_p=M_p^{(t-1)}\\phi_*$ from the stored state first, <i>then</i> advance $M_p^{(t)}=\\gamma_p M_p^{(t-1)}+\\eta s_t\\phi_t\\phi_t^{\\top}$ — so no label enters a decision and the learned $\\gamma_p,\\eta$ just drive the recurrence.</p><div class=\"callout olive\" style=\"margin-top:8px\"><span class=\"tag\">verified</span><p class=\"why\" style=\"margin:6px 0 0\">One backward through $M_p^{(t)}\\phi_*$ yields finite gradients (<code>_eta_raw.grad</code> ≈ 0.73, <code>_theta.grad</code> ≈ 0.31); the same backward through the read-only $M_p^{(t-1)}\\phi_*$ gives a zero (literally <code>None</code>) gradient for $\\theta$. Over a full run $\\eta:0.30\\!\\to\\!0.40$ and the learned per-peer decays settle at $\\gamma=[\\,\\text{gemma }0.878,\\ \\text{phi }0.891,\\ \\text{qwen }0.886\\,]$ — distinct per peer, all having left the $0.90$ init. Gemma forgets fastest, Phi slowest.</p></div></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>7. Shared Candidate Utility</h2>\n<div class=\"card\">\n<p>The selector does not train a fixed peer-name classifier. Instead, every candidate is evaluated by the same Yes/No utility. For peer $p$, the prompt contains the task, context when available, all peer responses, and marks one response as the candidate under review. The utility is</p>\n<p>$$u_{p,t}=\\log P_{\\mathrm{CM}}(\\text{Yes}\\mid q_{p,t};\\delta_{p,t})-\\log P_{\\mathrm{CM}}(\\text{No}\\mid q_{p,t};\\delta_{p,t}).$$</p>\n<p>The same Yes and No tokens are used for every peer and for every peer count. The prediction is</p>\n<p>$$\\hat p_t=\\arg\\max_{p\\in\\mathcal P_t}u_{p,t}.$$</p>\n<p>This candidate-wise formulation is crucial for train-3/test-$k$ generalization. The model learns a reusable utility function rather than a classifier whose output vocabulary is tied to exactly three named peer slots.</p>\n</div>"
   },
   {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">Result</h3><p class=\"why\">Learning the per-peer dynamics is what lets the larger 8B center model win on all three tasks at once. With a frozen, hand-set decay, scaling 4B→8B <i>hurt</i> math; learning $\\eta,\\gamma_p$ recovers and surpasses it. Accuracy at the clean proportion (p0), proto read:</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>8. Training Objective</h2>\n<div class=\"card\">\n<p>Training examples provide per-peer correctness labels. A deterministic target rule selects one correct peer $p_t^*$ as the gold candidate. Sigma computes utilities for all peers present in the training example and optimizes cross-entropy over those utilities:</p>\n<p>$$\\mathcal L_t=-\\log\\frac{\\exp u_{p_t^*,t}}{\\sum_{p\\in\\mathcal P_t}\\exp u_{p,t}}.$$</p>\n<p>The frozen CM backbone is not updated. The trainable Sigma parameters are $W_\\phi$, $\\eta$, $\\gamma$, $W_{\\mathrm{up}}$, and $g$. In the current configuration, all of these are shared across peers.</p>\n<p>To make the write dynamics learnable without backpropagating through the entire stream, training reads through one differentiable local write applied to a detached historical state:</p>\n<p>$$\\widetilde M_{p,t+1}=\\gamma M_{p,t}^{\\mathrm{stopgrad}}+\\eta s_{p,t}\\phi_t\\phi_t^\\top,\\qquad \\widetilde\\nu_{p,t}=\\widetilde M_{p,t+1}\\phi_t.$$</p>\n<p>The persistent runtime memory is then advanced under no gradient after the optimization step. This exposes $\\eta$, $\\gamma$, and $W_\\phi$ to the loss while keeping the online state an efficient stream buffer.</p>\n</div>"
   },
   {
+    "type": "html",
+    "html": "<h2>9. Online Inference</h2>\n<div class=\"timeline\">\n  <div class=\"tl-entry\"><div class=\"tl-time\">1 · Address</div><div class=\"tl-body\">Encode the current task with the frozen CM and compute $\\phi_t$ using the soft-prototype address.</div></div>\n  <div class=\"tl-entry\"><div class=\"tl-time\">2 · Read</div><div class=\"tl-body\">For each peer $p$, compute $\\nu_{p,t}=M_{p,t}\\phi_t$ and steering vector $\\delta_{p,t}=gW_{\\mathrm{up}}\\nu_{p,t}$.</div></div>\n  <div class=\"tl-entry\"><div class=\"tl-time\">3 · Score</div><div class=\"tl-body\">Evaluate each candidate with the shared Yes/No utility under its corresponding memory steering.</div></div>\n  <div class=\"tl-entry\"><div class=\"tl-time\">4 · Select</div><div class=\"tl-body\">Choose the peer with the largest utility.</div></div>\n  <div class=\"tl-entry\"><div class=\"tl-time\">5 · Write</div><div class=\"tl-body\">After feedback is available, update every peer memory once with $M_{p,t+1}=\\gamma M_{p,t}+\\eta s_{p,t}\\phi_t\\phi_t^\\top$.</div></div>\n</div>\n<div class=\"callout olive\"><div class=\"callout-h\">Statefulness</div><p>Sigma is a stream method. The order of evaluation examples matters because earlier feedback changes later decisions. Reported results therefore correspond to the specified evaluation stream, not to independent shuffled batches.</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>10. Peer-Count Generalization</h2>\n<div class=\"card\">\n<p>Sigma separates peer-specific state from shared learned parameters:</p>\n<p>$$\\underbrace{\\{M_{p,t}\\}_{p\\in\\mathcal P_t}}_{\\text{runtime state; grows with peer count}}\\qquad\\text{vs.}\\qquad\\underbrace{\\Theta=\\{W_\\phi,\\eta,\\gamma,W_{\\mathrm{up}},g,F_{\\mathrm{Yes/No}}\\}}_{\\text{shared parameters; independent of peer count}}.$$</p>\n<p>When evaluating with a new number of peers, the checkpointed learned parameters are reused unchanged. The evaluator only allocates a runtime memory matrix for each peer:</p>\n<p>$$M_{p,0}=0,\\qquad p=1,\\ldots,P_{\\mathrm{test}}.$$</p>\n<p>New peers do not require new trained parameters. They begin with zero evidence and adapt through the same event update. This gives the method a clean train-3/test-$k$ story: the trained object is not a three-way selector, but a shared candidate utility scorer equipped with one symmetric evidence state per peer.</p>\n</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>11. What Belongs to Sigma, and What Does Not</h2>\n<div class=\"procon\">\n  <div class=\"pros\"><ul>\n    <li>Core Sigma: symmetric per-peer matrices $M_{p,t}$.</li>\n    <li>Core Sigma: soft-prototype task address $\\phi_t$.</li>\n    <li>Core Sigma: residual steering through a frozen center model.</li>\n    <li>Core Sigma: shared candidate Yes/No utility.</li>\n    <li>Core Sigma: peer-count-invariant runtime state allocation.</li>\n  </ul></div>\n  <div class=\"cons\"><ul>\n    <li>LoRA baselines are not part of this method section.</li>\n    <li>BCE/AR control heads are not part of Sigma's definition.</li>\n    <li>Uncertainty gating is an inference policy or ablation, not the core memory mechanism.</li>\n    <li>The optional joint matrix $G$ is disabled in the current main configuration and should not be emphasized as the main method.</li>\n  </ul></div>\n</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>12. Reviewer-Facing Claims</h2>\n<div class=\"grid col-2\">\n  <div class=\"card\"><h3>Claim 1 · Memory is structured</h3><p>The state is not an unconstrained hidden vector. It is a symmetric matrix updated by signed rank-one events, which gives a clear interpretation and stability argument.</p></div>\n  <div class=\"card\"><h3>Claim 2 · Trust is task-conditioned</h3><p>The same peer can be trusted in one task region and distrusted in another because memory is addressed by $\\phi_t$, not by a scalar global reputation.</p></div>\n  <div class=\"card\"><h3>Claim 3 · Scoring is peer-count reusable</h3><p>Candidate-wise Yes/No scoring avoids a fixed peer-name output head, so the scoring rule can be applied to any finite peer set.</p></div>\n  <div class=\"card\"><h3>Claim 4 · New peers need only state</h3><p>Additional peers instantiate new $M_p$ matrices but do not add learned parameters. This is the clean theoretical basis for train-3/test-4/5/6 experiments.</p></div>\n</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>13. Paper-Ready Method Text</h2>\n<div class=\"card\">\n<p><b>Sigma-Mem.</b> We propose Sigma-Mem, an online memory mechanism for selecting among multiple peer responses. For each peer $p$, Sigma-Mem maintains a symmetric event memory $M_{p,t}\\in\\mathbb R^{r\\times r}$. Given a task $x_t$, a frozen center model representation is mapped to a normalized task address $\\phi_t$. The memory is read as $M_{p,t}\\phi_t$ and projected into a residual steering vector that conditions the center model while it evaluates peer $p$'s candidate response. Candidate quality is measured by a shared Yes/No utility, $\\log P(\\mathrm{Yes})-\\log P(\\mathrm{No})$, so all peers are scored by the same function rather than by a fixed peer-name classifier.</p>\n<p>After feedback is available, Sigma-Mem updates each peer memory by a signed symmetric rank-one event, $M_{p,t+1}=\\gamma M_{p,t}+\\eta s_{p,t}\\phi_t\\phi_t^\\top$. Positive events add evidence in the current task direction, while negative events subtract it. Because $\\phi_t\\phi_t^\\top$ is symmetric and $\\lVert\\phi_t\\rVert_2=1$, the update preserves symmetry and has bounded spectral effect. The learned parameters controlling addressing, retention, write strength, and steering are shared across peers; peer identity only appears through the runtime state $M_{p,t}$. Consequently, a Sigma-Mem checkpoint trained with three peers can be instantiated with more peers at test time by allocating additional memory matrices without introducing new trained parameters.</p>\n</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>14. Main Algorithm</h2>\n<div class=\"file-diff\"><div class=\"fd-head\"><span class=\"fd-path\">Sigma-Mem online selection</span><span class=\"fd-stat\"><span class=\"a\">paper pseudocode</span></span></div><pre class=\"diff\"><span class=\"dl ctx\">Initialize M_p = 0 for every peer p in the current peer set.</span>\n<span class=\"dl ctx\">For each event t:</span>\n<span class=\"dl ctx\">  Compute task address phi_t from the frozen center model representation of x_t.</span>\n<span class=\"dl ctx\">  For each peer p:</span>\n<span class=\"dl ctx\">    Read nu_p = M_p phi_t.</span>\n<span class=\"dl ctx\">    Convert nu_p to residual steering delta_p.</span>\n<span class=\"dl ctx\">    Score candidate a_p with shared Yes/No utility under delta_p.</span>\n<span class=\"dl ctx\">  Select the peer with maximal utility.</span>\n<span class=\"dl ctx\">  When feedback is observed:</span>\n<span class=\"dl ctx\">    For each peer p, update M_p = gamma M_p + eta s_p phi_t phi_t^T.</span></pre></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>15. Current Implementation Configuration</h2>\n<p>This table is for implementation traceability. The paper method should introduce the concepts above first; configuration values can be moved to an experimental-details appendix.</p>"
+  },
+  {
+    "type": "table",
     "head": [
-      "task",
-      "scalar 4B",
-      "8B, fixed decay",
-      "8B, learned per-peer decay"
+      "Component",
+      "Current value",
+      "Paper interpretation"
     ],
     "rows": [
       [
-        "math",
-        "89.6",
-        "80.0",
-        "90.3"
+        "Training peers",
+        "3",
+        "Gemma, Phi, and Qwen2.5-Coder are the main training peers."
       ],
       [
-        "code",
-        "38.3",
-        "57.9",
-        "67.0"
+        "Memory rank",
+        "16",
+        "Each peer memory is a 16 x 16 symmetric matrix."
       ],
       [
-        "rag",
-        "89.4",
-        "91.0",
-        "91.7"
+        "Task address",
+        "phi_mode=proto, proto_tau=0.1",
+        "Soft-prototype address over frozen CM query representations."
+      ],
+      [
+        "Write rule",
+        "write_mode=addr",
+        "Write along the same task address used for reading."
+      ],
+      [
+        "Retention",
+        "decay_mode=scalar, per_peer_decay=false",
+        "A shared learned decay keeps dynamics peer-count independent."
+      ],
+      [
+        "Differentiable write",
+        "diff_write=true",
+        "Training reads through one local differentiable write."
+      ],
+      [
+        "Scoring",
+        "score_mode=candidate_yesno",
+        "Candidate-wise Yes/No utility rather than peer-name classification."
+      ],
+      [
+        "Prompt scope",
+        "peer_mode=joint",
+        "All peer responses are visible while one candidate is highlighted."
+      ],
+      [
+        "Identity",
+        "identity_mode=anon",
+        "Prompts use anonymous peers rather than real model names."
+      ],
+      [
+        "Backbone",
+        "freeze_backbone=true",
+        "The center model remains frozen; Sigma trains only small memory/steering modules."
+      ],
+      [
+        "Sequence length",
+        "max_length=8192",
+        "Current training and evaluation context length."
+      ],
+      [
+        "Main training data",
+        "data/mixed_train_labeled.jsonl",
+        "Stream with per-peer correctness labels."
+      ],
+      [
+        "Main config",
+        "configs/symmetric_memory_candidate_yesno.yaml",
+        "Peer-count-invariant Sigma candidate scorer."
+      ],
+      [
+        "Core code",
+        "feedback_state/symmetric_memory.py",
+        "Memory state, task address, update, read, and activation steering."
+      ],
+      [
+        "Training/eval",
+        "train_symmetric_memory.py / eval_symmetric_memory.py",
+        "Sequential stream training and evaluation."
       ]
-    ],
-    "type": "table"
+    ]
   },
   {
-    "head": [
-      "γ",
-      "‖M‖ at t=100",
-      "t=500",
-      "t=2000",
-      "bound η/(1−γ)"
-    ],
-    "rows": [
-      [
-        "1.0 (no decay)",
-        "30.0",
-        "150.0",
-        "600.0",
-        "∞ — diverges"
-      ],
-      [
-        "0.99",
-        "19.0",
-        "29.8",
-        "30.0",
-        "30.0"
-      ],
-      [
-        "0.95",
-        "5.96",
-        "6.0",
-        "6.0",
-        "6.0"
-      ],
-      [
-        "0.90",
-        "3.0",
-        "3.0",
-        "3.0",
-        "3.0"
-      ],
-      [
-        "0.50",
-        "0.6",
-        "0.6",
-        "0.6",
-        "0.6"
-      ]
-    ],
-    "type": "table"
-  },
-  {
-    "html": "<div class=\"card\"><p class=\"why\">So with any $\\gamma&lt;1$ the matrix <b>converges to a finite steady state</b>\n$\\le\\eta/(1-\\gamma)$ — never ∞. And it does <b>not</b> collapse to 0 while real evidence keeps arriving: a persistent\naligned signal holds its top eigenvalue at the steady value (γ=0.9 → top λ ≈ 3.0 after 200 events). It only decays toward 0 when\nupdates <b>stop</b> ($M\\leftarrow\\gamma^{t}M\\to0$ after 100 idle steps, top λ → 0.0001) — which is the <b>intended</b>\nbehaviour: an agent you haven't used in a long time gracefully loses its accumulated reputation rather than keeping a stale score\nforever.</p>\n<p class=\"why\" style=\"margin-top:6px\"><b>Only $\\gamma=1$ is dangerous</b> (no decay → unbounded growth, and noise bulk grows as\n$\\sqrt{N}$ without limit). That is precisely why the bounded decay $\\gamma=e^{-\\mathrm{softplus}(\\theta)}&lt;1$ is mandatory, rather than a plain running sum. The decay is the stabilizer; it cannot itself destabilize $M_p$.</p></div>",
-    "type": "html"
-  },
-  {
-    "text": "can this update mechanism keep the Mp always as a symmetrical information matrix? And can this update be more robust and more suitable for agent swarm design (like claude code workflow)?",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer to the questions above</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">1. Does the update keep $M_p$ symmetric forever?</h3>\n<p class=\"why\"><b>Yes, exactly — by construction.</b> The update is $M_p\\leftarrow\\gamma M_p+\\eta s_t\\,\\phi_t\\phi_t^{\\top}$.\nIf $M_p$ is symmetric then $\\gamma M_p$ is symmetric (scalar times symmetric), and $\\phi_t\\phi_t^{\\top}$ is symmetric for\n<b>any</b> vector $\\phi_t$ (its transpose is $(\\phi_t\\phi_t^{\\top})^{\\top}=\\phi_t\\phi_t^{\\top}$). Sum of symmetric matrices is\nsymmetric, and $M_0=0$ is symmetric — so symmetry is preserved at every step, with <b>zero</b> enforcement cost (no\nre-symmetrization $\\frac12(M+M^{\\top})$ needed). This is the structural reason real eigenvalues + Weyl always apply. <i>Contrast:</i>\nDelta-Mem's $v k^{\\top}$ with $v\\ne k$ is a general (non-symmetric) outer product, so its state has complex eigenvalues and no\nWeyl guarantee — that is the property we deliberately gave up to gain stability.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">3. Is this more robust + suitable for an agent swarm (Claude-Code-style)?</h3>\n<p class=\"why\">I read <code>/workspace/cloud_android/fengpeilin/agent-swarm</code> (desplega.ai). Its architecture maps onto ours\nalmost one-to-one, which is encouraging:</p>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li><b>Lead Agent plans &amp; delegates → worker agents in Docker</b>. The <b>Lead = our Center Model</b>; <b>workers = peers</b>.\nDelegation = the selection we are scoring.</li>\n<li><b>Each worker has a persistent Identity (SOUL / CLAUDE.md / persona, expertise) + writes learnings to a shared Memory</b>. That is\nprecisely the \"social attribute / past reputation\" you said a peer must carry beyond a single response — and it is per-agent and\nslowly-varying, the regime our matrix is built for (and Delta-Mem is not).</li>\n<li><b>Tasks carry a role + skill + <code>modelTier</code> intent (smol/regular/smart/ultra)</b> and outcomes are observable (PR merged,\nCI pass, task accepted). This gives a <b>clean event axis with a real $s_t$ signal</b> — one update per delegated task, length-independent.</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\"><b>Why it is more robust here than Delta-Mem:</b> swarm reputation must survive across many tasks\nand ignore one-off flukes (a worker that usually ships good PRs but failed once on a flaky test). Weyl gives exactly that: a single bad\noutcome moves the spectrum by $\\le\\eta$, while a worker's <i>consistent</i> competence on a task-type builds a dominant eigenvalue. A\ntoken-level decaying state cannot represent \"this agent has been reliable for weeks\". <b>The honest gap:</b> a real swarm has\n<b>agent–agent structure</b> (who complements whom, who to delegate to when two are competent) — a set of independent per-peer\nmatrices does not capture that; see §6 Q5 (a joint matrix over agents). That is the main open design question.</p></div>",
-    "type": "html"
-  },
-  {
-    "html": "<h2>3. What the symmetric structure buys (validated by simulation)</h2>\n<div class=\"card\"><p class=\"why\">r=16, η=0.3. The question we tested: does a single update perturb the spectrum mildly, do\nincoherent/sign-flipping updates cancel, and do only <b>persistently aligned</b> signals move the eigenvalues?</p></div>\n<div class=\"flex\" style=\"gap:16px;margin-top:8px\">\n<div class=\"card\" style=\"flex:1;border-left:4px solid #788C5D\"><h3 style=\"margin-top:0\">(a) Single update is bounded (Weyl)</h3>\n<p class=\"why\">Weyl's inequality: for symmetric $M$ and symmetric perturbation $E$, $|\\lambda_i(M+E)-\\lambda_i(M)|\\le\\|E\\|_2$.\nWith a rank-1 update $E=\\eta s\\,\\phi\\phi^{\\top}$, $\\|E\\|_2=\\eta$. Simulation: one update moved the top eigenvalue by\n<b>+0.0011</b> (bound 0.30). <b>No single event can cause an amplified jump</b> — structural, not tuned.</p></div>\n<div class=\"card\" style=\"flex:1;border-left:4px solid #788C5D\"><h3 style=\"margin-top:0\">(b) Aligned signal grows ~N; noise ~√N; flips cancel</h3>\n<p class=\"why\">After N=60 events: persistent aligned + grows the top eigenvalue <b>linearly</b> ($\\propto N\\eta$); random-direction\nnoise grows only as <b>$\\sqrt{N}$</b>; sign-alternating (right/wrong/right/wrong) <b>cancels</b> to ~$\\eta$. So only persistently\naligned evidence meaningfully shifts the spectrum.</p></div>\n</div>",
-    "type": "html"
-  },
-  {
-    "head": [
-      "after N=60 events",
-      "top eigenvalue",
-      "growth law"
-    ],
-    "rows": [
-      [
-        "aligned dir, persistent + (signal)",
-        "18.0",
-        "~ N·η  (linear)"
-      ],
-      [
-        "random dirs, persistent + (noise)",
-        "2.16",
-        "~ √N·η  (stays small)"
-      ],
-      [
-        "aligned dir, +/-/+/- (flips)",
-        "0.0",
-        "cancels → ~η"
-      ]
-    ],
-    "type": "table"
-  },
-  {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">Top-eigenvalue trajectory (top λ vs #events, every 6 steps)</h3>\n<svg viewBox=\"0 0 560 230\" width=\"100%\" style=\"max-width:560px;font-family:system-ui\">\n  <line x1=\"50\" y1=\"195\" x2=\"540\" y2=\"195\" stroke=\"#9a988f\"></line><line x1=\"50\" y1=\"20\" x2=\"50\" y2=\"195\" stroke=\"#9a988f\"></line>\n  <text x=\"8\" y=\"28\" font-size=\"10\" fill=\"#3D3D3A\">topλ</text>\n  <text x=\"500\" y=\"212\" font-size=\"10\" fill=\"#3D3D3A\">events</text>\n  <!-- scale: x 0..54 -> 50..540 ; y 0..18 -> 195..20 -->\n  <!-- aligned (olive): 0.3,2.1,3.9,5.7,7.5,9.3,11.1,12.9,14.7,16.5 -->\n  <polyline fill=\"none\" stroke=\"#788C5D\" stroke-width=\"2.5\" points=\"50,192 104,175 158,157 212,140 266,122 320,105 374,87 428,70 482,52 536,35\"></polyline>\n  <text x=\"455\" y=\"40\" font-size=\"10\" fill=\"#788C5D\">aligned (signal)</text>\n  <!-- incoherent (clay): 0.3,0.63,0.92,1.12,1.22,1.56,1.86,1.97,2.11,2.15 -->\n  <polyline fill=\"none\" stroke=\"#D97757\" stroke-width=\"2.5\" points=\"50,192 104,189 158,186 212,184 266,183 320,180 374,177 428,176 482,175 536,174\"></polyline>\n  <text x=\"430\" y=\"168\" font-size=\"10\" fill=\"#D97757\">random (noise) ~√N</text>\n  <!-- alternating (slate dashed): flat 0.3 -->\n  <polyline fill=\"none\" stroke=\"#141413\" stroke-width=\"2\" stroke-dasharray=\"4 3\" points=\"50,192 536,192\"></polyline>\n  <text x=\"300\" y=\"189\" font-size=\"10\" fill=\"#141413\">+/- flips → cancels</text>\n</svg>\n<p class=\"why\" style=\"margin-top:4px\">The separation is the point: signal climbs linearly, noise saturates low, flips stay at the floor.</p></div>",
-    "type": "html"
-  },
-  {
-    "text": "This looks really wonderful, thank you!",
-    "type": "md"
-  },
-  {
-    "html": "<h2>4. The strongest result: signal recovery from a noisy stream</h2>\n<div class=\"card\"><p class=\"why\">A peer whose feedback is <b>1/3 consistent signal</b> (same context direction $\\phi$) and <b>2/3 noise</b>\n(random direction, random sign). After accumulation:</p>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li>top eigenvalue = <b>6.05</b>; largest bulk eigenvalue = <b>0.90</b> — the signal is cleanly separated from the bulk.</li>\n<li>top <b>eigenvector</b> alignment with the true signal direction $\\phi$ = <b>0.999</b> — the consistent reliability direction is\nalmost perfectly recovered.</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\">A <b>scalar EMA cannot do this</b>: it would average signal and noise into one number. The matrix isolates the\nconsistent direction into its top eigenpair while noise stays in the bulk. <b>This is the irreplaceable advantage of the symmetric\nmatrix over a scalar reputation score.</b></p></div>",
-    "type": "html"
-  },
-  {
-    "html": "<h2>5. Honest boundaries (must respect when building)</h2>\n<div class=\"callout clay\"><span class=\"tag\">what Weyl does NOT promise</span>\n<p class=\"why\" style=\"margin:6px 0 0\">Weyl bounds a <b>single</b> update. It does <b>not</b> stop <i>persistent</i> noise from slowly\nraising the bulk: random-direction noise still grows as $\\sqrt{N}$ (top λ 2.16, not 0). The protection is <b>relative</b> (signal grows\nN, noise grows √N), not absolute. Three consequences:</p>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li><b>Decay $\\gamma&lt;1$ is mandatory</b> (the learned time-constant). It caps the noise bulk at $\\sim\\eta\\sqrt{1/(1-\\gamma)}$ while the\nsignal still rises above it. Without it, $\\sqrt{N}$ noise eventually climbs.</li>\n<li><b>\"Aligned\" is defined in the $\\phi$ space.</b> If $\\phi_t$ is noisy or drifts, \"persistent alignment\" degrades. The choice of\n$\\phi$ (task-type embedding vs CM hidden) decides whether the whole scheme works.</li>\n<li><b>Sign cancellation needs zero-mean noise.</b> Systematically biased noise (e.g. a slot-position artifact) is coherent and\naccumulates as a false signal — must be controlled in the data.</li>\n</ul></div>",
-    "type": "html"
-  },
-  {
-    "html": "<h2>6. Open questions for the multi-agent adaptation (to discuss next)</h2>\n<div class=\"card\"><p class=\"why\">The single-peer math is settled. Adapting it to an agent swarm / workflow raises design choices we have\n<b>not</b> resolved yet:</p>\n<ol class=\"why\" style=\"margin:4px 0 0\">\n<li><b>What is $\\phi_t$?</b> <i>(resolved — see §7.)</i> Neither a task-type one-hot (collides but closed: no transfer to unseen tasks) nor a raw CM query-hidden (open but never collides: $\\approx$ NO-WRITE) works; the soft-prototype address is the validated answer.</li>\n<li><b>Per-peer vs per-(peer, task-type) matrices?</b> The latter encodes contextual reputation (\"Gemma reliable on math, weak on RAG\"\nsimultaneously) but multiplies state count. <i>(Partly resolved — see §2c: the <b>decay</b> $\\gamma_p$ is now per-peer and learned, so each agent has its own trust time-constant without multiplying the matrix count.)</i></li>\n<li><b>How does trust couple into selection?</b> <i>(resolved.)</i> The scalar logit bias $\\phi_*^{\\top}M_p\\phi_*$ proved too weak; the live read injects the trust direction $M_p\\phi_*$ into the CM's activations (steering), which re-ranks its endorsement log-probs.</li>\n<li><b>Inter-agent structure.</b> A swarm has relations between agents (who defers to whom, redundancy, disagreement). Does reputation stay\n<b>per-peer independent</b>, or do we need a joint matrix over agents (off-diagonal = agent-agent agreement/complementarity)? This is the\ngenuinely multi-agent question a per-peer scalar/EMA cannot touch.</li>\n<li><b>What stream proves it?</b> Prior ablations show current CF/balanced streams barely reward history. We need an evaluation where stable\nper-peer contextual reliability genuinely predicts the future, otherwise even a correct memory shows no gain.</li>\n</ol></div>",
-    "type": "html"
-  },
-  {
-    "text": "Yes, I also wonder what this $\\phi_t$ is, maybe you need to check the multi agent design at first, we want to make the update suitable for the MAS design, right? My initial assessment of stable information is that the agent consistently performs well over a period of time.",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: what should $\\phi_t$ be, given the swarm design</span></div>\n<div class=\"card\" style=\"margin-top:8px\">\n<p class=\"why\"><b>First, your definition pins down what $\\phi_t$ is NOT.</b> You said stable reputation = \"the agent <i>consistently performs well over a period of time</i>\". That definition has <b>two parts</b>, and they map onto the two parts of the update — neither of which is $\\phi_t$:</p>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li><b>\"performs well\"</b> → the <b>sign/magnitude</b> $s_t$ (outcome: accepted / CI green → $+$; reverted / rejected → $-$). The scalar reward, <i>not</i> $\\phi_t$.</li>\n<li><b>\"over a period\" / \"consistently\"</b> → the <b>decay $\\gamma$</b> (period length) plus the <b>coherence</b> of $\\phi_t$ (same direction recurring). This is what makes one eigenvalue grow instead of cancelling.</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\">So $\\phi_t$ is the <b>context label: \"well at <i>what</i>\"</b>. \"Consistently good\" is only meaningful relative to a context — an agent strong at math and weak at RAG is not \"inconsistent\", it is <b>context-dependent</b>, and $\\phi_t$ is what lets the matrix separate those.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">What $\\phi_t$ must satisfy — and the one definition that does</h3>\n<p class=\"why\">A usable $\\phi_t$ has to do two things at once: <b>collide</b> (the same kind of task must map to the same direction, or no eigenvalue ever accumulates) <b>and stay open</b> (a new/related task must still land somewhere meaningful, or trust never transfers). Those two requirements rule out the obvious first guesses — and what survives is a single design:</p>\n<p class=\"why\" style=\"margin:6px 0 0\"><b>$\\phi_t$ = the soft-prototype address:</b> $\\phi_t=\\text{normalize}\\big(W_{\\text{proj}}\\,\\operatorname{softmax}(\\cos(z,C)/\\tau)\\big)$, $z=(h_q-\\mu)/\\sigma$, with $C$ = <b>fixed</b> per-task CM centroids. A seen task resolves to ~its own centroid (collision); an unseen/related task lands as a soft <b>mixture</b> over known centroids (openness). Only the small map $W_{\\text{proj}}$ is learned. The full derivation — including the two measured failure modes it sits between — is in §7 below.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">What this gives the read at delegation time</h3>\n<p class=\"why\">For a new task with context $\\phi_*$, the trust direction $M_p\\phi_*$ is injected into the frozen CM's activations, re-ranking each candidate's endorsement log-prob — it amplifies \"how much consistent positive evidence does $p$ have <b>in this task's direction</b>\". A worker with a big eigenvalue along $\\phi_*$ gets steered up; one whose successes were all in <i>other</i> directions does not. That is \"consistently performs well over a period\" made computable and <b>context-aware</b> — what a scalar reputation score or the Delta-Mem state cannot express.</p></div>",
-    "type": "html"
-  },
-  {
-    "text": "Inter-agent structure. A swarm has relations between agents (who defers to whom, redundancy, disagreement). Does reputation stay per-peer independent, or do we need a joint matrix over agents (off-diagonal = agent-agent agreement/complementarity)? This is the genuinely multi-agent question a per-peer scalar/EMA cannot touch.\n\nThis is a really great point, but how can we introduce this joint martrix? I think it should be attributed to Central model, right? In a multi-agent system, the Center Model plays the role of coordinating different peers.",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: the joint matrix is the CM's coordination state — here is how it plugs in</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><p class=\"why\"><b>Yes — you are exactly right that it belongs to the Center Model.</b>\nThis gives a clean division of ownership that mirrors the swarm architecture (Lead coordinates; workers execute):</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-top:4px\">\n<tbody><tr style=\"border-bottom:1.5px solid #D1CFC5\"><th style=\"text-align:left;padding:5px\">object</th><th style=\"text-align:left;padding:5px\">owner</th><th style=\"text-align:left;padding:5px\">shape</th><th style=\"text-align:left;padding:5px\">answers</th></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">$M_p$ (per-peer)</td><td style=\"padding:5px\">each peer's reputation</td><td style=\"padding:5px\">$r\\times r$ over <b>context dims</b></td><td style=\"padding:5px\">\"is agent $p$ reliable <i>on this kind of task</i>?\"</td></tr>\n<tr><td style=\"padding:5px\"><b>$G$ (joint)</b></td><td style=\"padding:5px\"><b>the Center Model</b></td><td style=\"padding:5px\">$P\\times P$ over <b>agents</b></td><td style=\"padding:5px\">\"how do agents <i>relate</i> — who is redundant with whom, who complements whom?\"</td></tr>\n</tbody></table>\n<p class=\"why\" style=\"margin-top:6px\">These are different spaces ($r$ context dimensions vs $P$ agents) and answer different questions. The CM — as the\ncoordinator — is the natural and only place that observes <b>all peers' outcomes jointly</b>, so $G$ is its private\ncoordination memory.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">How $G$ is built (same symmetric / Weyl recipe, now over agents)</h3>\n<p class=\"why\">Per task $t$, form the <b>joint outcome vector</b> $o_t\\in\\mathbb{R}^{P}$ with $o_t[p]=+1$ if peer $p$ was correct,\n$-1$ if wrong, $0$ if not invoked. Update the CM's symmetric joint state:</p>\n<p style=\"text-align:center\">$$G \\leftarrow \\gamma\\,G + \\eta\\,o_t\\,o_t^{\\top}.$$</p>\n<p class=\"why\">Same primitive as $M_p$ (symmetric rank-1, bounded decay, Weyl-stable) — only the vector changed from a context\nembedding $\\phi_t$ to a per-agent outcome $o_t$. Reading it (simulation, P=4, after 300 tasks, normalized):</p></div>",
-    "type": "html"
-  },
-  {
-    "head": [
-      "entry of G",
-      "value",
-      "reads out"
-    ],
-    "rows": [
-      [
-        "diag G[p,p]",
-        "1.00",
-        "agent p's own accumulated reliability"
-      ],
-      [
-        "G[0,1]",
-        "+0.98",
-        "agents 0,1 REDUNDANT — almost always right/wrong together"
-      ],
-      [
-        "G[0,2]",
-        "−0.45",
-        "agents 0,2 COMPLEMENTARY — one tends right when the other is wrong"
-      ],
-      [
-        "G[0,3]",
-        "−0.18",
-        "agent 3 INDEPENDENT / noisy — near zero correlation"
-      ]
-    ],
-    "type": "table"
-  },
-  {
-    "html": "<div class=\"card\"><p class=\"why\">The <b>off-diagonal is the genuinely multi-agent signal</b> a per-peer\nmatrix (or a scalar/EMA) cannot represent: $G[p,q]&gt;0$ = redundant (picking both wastes budget / double-counts a wrong answer),\n$G[p,q]&lt;0$ = complementary (a good team — their errors cancel), $\\approx0$ = independent. Weyl still holds ($G$ symmetric), so\none unusual joint outcome shifts the relationship structure by $\\le\\eta$.</p></div>\n<div class=\"card\" style=\"margin-top:8px\"><h3 style=\"margin-top:0\">How the CM uses $G$ at decision time</h3>\n<p class=\"why\">Two regimes, depending on what the CM is doing:</p>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li><b>Selecting ONE peer (current MAS task):</b> the per-peer steering read $M_p\\phi_*$ already ranks individuals; $G$ adds a\n<b>tie-break / anti-redundancy</b> term — e.g. down-weight a candidate that is highly redundant ($G[p,q]$ large) with peers\nalready trusted, so the CM doesn't just stack near-duplicates.</li>\n<li><b>Assembling a TEAM / sub-swarm (the real swarm use-case):</b> pick the agent subset $S$ that maximizes coverage minus\nredundancy, e.g. $\\sum_{p\\in S}\\text{trust}(p) - \\lambda\\!\\!\\sum_{p\\ne q\\in S}\\!\\!G[p,q]$ — reward individually reliable\nagents, penalize redundant pairs, favour complementary ones. This is exactly \"who defers to whom / redundancy / disagreement\", now a\ncomputable objective over $G$.</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\"><b>Honest caveats:</b> (1) $o_t o_t^{\\top}$ captures only <b>second-order</b> (pairwise)\nagent structure — genuine 3-way coalition effects need a tensor, which we deliberately skip for now. (2) $o_t$ is naturally\n<b>sparse</b> (only invoked agents have $\\pm1$); decide whether non-invoked agents are $0$ (no evidence) vs counterfactually scored.\n(3) The diagonal of $G$ partly duplicates $\\mathrm{tr}$-level info in $M_p$ — keep $G$ for <b>relations</b> and $M_p$ for\n<b>context</b>, don't double-count reliability. (4) Same evaluation gap as before: proving $G$ helps needs a stream where agent\nredundancy/complementarity is real and stable, not i.i.d.</p></div>",
-    "type": "html"
-  },
-  {
-    "text": "How do we fix the phi degeneration? My idea: in $E=\\eta\\,s\\,\\phi\\phi^{\\top}$, the $s$ is NOT ground truth but the CM's own judgement of correct/incorrect. This can be generalized to a CM-assigned label / quality score of the peer's response content — so content quality is implicitly injected. And then keeping $\\phi$ as task_type is fine, right?",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: your $s$ idea is right and worth adopting — but it fixes a DIFFERENT problem than the degeneracy</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><p class=\"why\">The key is that the update $E=\\eta\\,s\\,\\phi\\phi^{\\top}$ has <b>two independent axes</b>, and \"content\" can ride on either one. They do different jobs and must not be conflated:</p>\n<ul class=\"why\" style=\"margin:6px 0 0\">\n<li><b>$s$ — the MAGNITUDE/sign axis (\"how good\").</b> A scalar weight on the rank-1 bump. This is what your idea changes.</li>\n<li><b>$\\phi$ — the DIRECTION axis (\"good at <i>what</i>\").</b> Which eigen-direction the evidence lands on. This is what the degeneracy is about.</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\"><b>The degeneracy is purely a $\\phi$ property.</b> With $\\phi$=task one-hot, every event for a given $(peer, task)$ writes along the <b>same fixed axis</b>, so $M_p$ stays <b>diagonal in a fixed basis</b> — its eigenvectors never rotate, no off-diagonal structure ever forms. Changing $s$ from $\\pm1$ to a graded CM score only changes the <i>value accumulated on that diagonal entry</i>; it cannot create off-diagonal structure. So $M_p$ remains a <b>per-$(peer,task)$ scalar bank</b> — now a content-weighted one, but still a scalar bank. <b>Your $s$ idea does not un-degenerate the matrix.</b></p></div>",
-    "type": "html"
-  },
-  {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">But it solves two real problems — both more important for the swarm than the degeneracy</h3>\n<p class=\"why\"><b>(1) It removes the ground-truth dependency.</b> In a real Claude-Code-style swarm you usually have <b>no oracle</b> at decision time — you can't verify every PR/answer. Ground-truth $s$ is unavailable. Using the CM's own correctness judgement (or a critic/verifier score) as $s$ is exactly how you make the update <b>runnable online without labels</b>. This is necessary for deployment, not optional.</p>\n<p class=\"why\" style=\"margin-top:6px\"><b>(2) It injects content quality through the magnitude.</b> A graded $s\\in[-1,1]$ (\"mostly right with a small bug\" vs \"confidently wrong\") makes a strong-content answer move trust more than a weak one. So content <i>does</i> enter the memory — via the size of the bump, not via a content-derived direction. For a per-$(peer,task)$ reputation that is the right place for it.</p>\n<div class=\"callout clay\" style=\"margin-top:8px\"><span class=\"tag\">one caveat to control: circularity</span>\n<p class=\"why\" style=\"margin:6px 0 0\">If $s$ is the CM's judgement of <b>its own pick</b>, the loop is self-confirming — trust reinforces whatever the CM already believed, and a systematic bias becomes a <b>coherent false signal</b> (the §5 \"biased noise accumulates\" trap; $\\phi\\phi^{\\top}$ cannot sign-cancel a bias). Keep $s$ at least partly <b>independent of the decision it feeds</b>: a separate verifier/critic, a downstream outcome, or cross-evaluation (CM scores a peer it did <i>not</i> select). Otherwise the symmetric integrator faithfully accumulates the CM's own delusion.</p></div></div>",
-    "type": "html"
-  },
-  {
-    "head": [
-      "the two \"content\" routes",
-      "rides on",
-      "what it buys",
-      "fixes degeneracy?"
-    ],
-    "rows": [
-      [
-        "your idea: $s$ = CM judgement / quality score",
-        "magnitude (sign + size)",
-        "oracle-free online + graded content quality",
-        "NO — $\\phi$ axis unchanged, $M_p$ still diagonal"
-      ],
-      [
-        "content in $\\phi$ (direction)",
-        "direction (which eigvec)",
-        "lets the matrix DISCOVER latent reliability axes",
-        "YES — but needs latent sub-task structure"
-      ]
-    ],
-    "type": "table"
-  },
-  {
-    "html": "<div class=\"card\" style=\"border-left:4px solid #788C5D\"><h3 style=\"margin-top:0\">Defining $\\phi$ so the matrix bites AND generalizes — the soft-prototype address (validated)</h3>\n<p class=\"why\">$\\phi$ must sit in the <b>middle regime</b> between two measured failures: $\\phi$=task one-hot <b>collides perfectly but is closed</b> (orthogonal rows → zero transfer between tasks, and an unseen task has no row → falls back to an untrained slot); $\\phi$=raw continuous CM vector is <b>discoverable but never collides</b> (any two high-dim vectors are ~orthogonal → no direction is reinforced → $\\approx$ NO-WRITE). The fix that works is a $\\phi$ that <b>collides on known structure yet stays open to new structure</b>:</p>\n<ul class=\"why\" style=\"margin:6px 0 0\">\n<li><b>Soft-prototype $\\phi$ (the design we ship): $\\phi=\\text{normalize}\\big(W_{\\text{proj}}\\,\\operatorname{softmax}(\\cos(z,C)/\\tau)\\big)$, $z=(h_q-\\mu)/\\sigma$.</b> $C$ are <b>fixed</b> per-task centroids (the CM mean-pool of each training task), $\\mu,\\sigma$ global whitening stats. A seen task resolves to ~its own centroid (recovers the reliable per-$(peer,task)$ behaviour of task one-hot); an <b>unseen / related task lands as a soft mixture</b> over known centroids, so accumulated trust transfers in. Only the small map $W_{\\text{proj}}$ is learned — the centroids are not, so the address cannot drift into a re-encoded label.</li>\n</ul>\n<p class=\"why\" style=\"margin-top:6px\"><b>Keep $s$ orthogonal to $\\phi$:</b> $s$ carries \"how good\" (correctness / quality), $\\phi$ carries \"on what\" (the soft task address). Don't push content into $\\phi$ via $s$ — different axes.</p></div>\n<div class=\"callout olive\" style=\"margin-top:10px\"><span class=\"tag\">validated bottom line</span>\n<p class=\"why\" style=\"margin:6px 0 0\">Held-out-task test (train on math+rag, <b>code never seen</b>, Qwen3-4B + 3 peers): against the honest <b>prompt-only</b> baseline, soft-prototype $\\phi$ scores <b>63.7%</b> vs <b>40.4%</b> on clean code — <b>+23.3 pts of transferred trust on a task it never trained on</b>, with no regression on seen tasks (rag 81.4 vs 76.8). $\\phi$ is <i>not</i> restricted to task type: an open, fixed-centroid address gives the matrix genuine cross-task generalization. <b>Known boundary:</b> the borrowed address is not sharp enough under heavy adversary (code p70 ~40, no gain) — sharpening it (lower $\\tau$) is the open work. The matrix's <i>other</i> non-scalar payoff, the joint $G$ over agents, remains the place to show structure on the swarm side.</p></div>",
-    "type": "html"
-  },
-  {
-    "text": "If $s$ comes from the CM, how do we make the CM give a BETTER $s$ during training? We need to TRAIN the ability to give $s$ at train time, and FREEZE that ability at test time, right? — Decision: $M_p$ accumulates the judge's PREDICTED $s$ (train==test, same dynamics), but during training the judge is CORRECTED with the ground-truth $s$ to improve the CM's ability to give a correct $s$.",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: yes — a TRAINABLE judge head, supervised by GT at train, frozen at test</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><p class=\"why\"><b>You are exactly right, and it exposes a gap in the current code.</b> The smoke-tested <code>cm_judge_sign</code> is <code>@torch.no_grad()</code> frozen Yes/No log-prob scoring — it has <b>zero trainable parameters</b>, so it can never \"get better\". And the selection CE loss cannot teach it: the path select-loss → $M_p$ → $s$ is blocked by the <code>no_grad</code> state update. To <b>train the ability to give $s$</b> you must give the judge its OWN supervision — and the train set conveniently HAS ground-truth labels (<code>peer_correct</code>). That is the standard \"train the skill, freeze it at test\" shape.</p></div>",
-    "type": "html"
-  },
-  {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">The trainable judge head (backbone stays frozen)</h3>\n<p style=\"text-align:center\">$$s\\_\\text{logit}_p=\\text{JudgeHead}\\big(\\,h_{\\text{CM}}(\\text{question},\\text{answer}_p)\\,\\big),\\qquad \\hat s_p=\\operatorname{sign}(s\\_\\text{logit}_p)\\in\\{+1,-1\\}.$$</p>\n<p class=\"why\">A small MLP on the frozen CM's hidden (the <code>Answer:</code> position of the Yes/No prompt) is the <b>only</b> new trainable part — consistent with the project's \"train a tiny adapter, never the backbone\" philosophy. It is a <b>learned verifier/critic</b>: stronger than frozen Yes/No log-prob because GT teaches it what \"correct\" looks like <i>in this CM's feature space</i>.</p>\n<div class=\"code\"><pre>train:  L = L_select( CE to gold slot )                 # the selection objective\n          + lambda * BCE( sigmoid(s_logit), peer_correct )  # GT supervises the JUDGE directly\n        M_p &lt;- gamma*M_p + eta * sign(s_logit.detach()) * phi phi^T   # accumulate PREDICTED s\ntest:   judge frozen (loaded from ckpt); s = sign(s_logit); NO labels used anywhere</pre></div>\n<p class=\"why\" style=\"margin-top:6px\"><b>Your decision — accumulate the predicted $\\hat s$ into $M_p$ (not GT), while BCE corrects the judge with GT — is the right call.</b> Two reasons: (1) <b>train==test dynamics</b>: the memory is built from the same (imperfect) judge signal at train and test, so there is no train/test distribution shift in what $M_p$ contains (the failure mode of \"GT writes M\"). (2) <b>the BCE still fixes the cold-start problem</b> you'd worry about: early on the judge is near-random and $M_p$ eats some garbage $\\hat s$, but the GT-BCE pulls the judge to high accuracy within the warmup, after which the accumulated signal is clean — and because $\\gamma&lt;1$ the early garbage decays out of $M_p$ on its own ($\\eta/(1-\\gamma)$ steady state forgets the cold-start transient). Detach $\\hat s$ before the write so the judge is trained ONLY by its BCE, not by a noisy gradient through the state.</p>\n<div class=\"callout clay\" style=\"margin-top:8px\"><span class=\"tag\">why this beats both alternatives</span>\n<p class=\"why\" style=\"margin:6px 0 0\">vs <b>frozen Yes/No</b> (current sweep): that is now the honest <i>baseline</i> — \"can an untrained judge do it?\". vs <b>GT-writes-M</b>: that leaks the oracle into the memory content and creates a train/test gap. The trained-judge + predicted-$\\hat s$-write is the only option that is both <b>oracle-free at test</b> and <b>train/test consistent</b>.</p></div></div>",
-    "type": "html"
-  },
-  {
-    "text": "Then I have a question. Suppose I now want to GENERALIZE: the CM does not only give correct/incorrect. The CM must DECOMPOSE the task and select, from the peers, answers for DIFFERENT ASPECTS of the task (e.g. results returned by a search agent, a revise agent, a file agent). Here the CM's role is more about JUDGING THE QUALITY of a response and deciding whether to select it.",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: this generalization is the RIGHT direction — and it is what finally makes the matrix earn its keep</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><p class=\"why\"><b>This is not a small tweak — it upgrades all three pieces ($s$, $\\phi$, and the read) at once, and it dissolves the \"no latent structure\" problem I flagged earlier.</b> Map your scenario onto the primitive:</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-top:4px\">\n<tbody><tr style=\"border-bottom:1.5px solid #D1CFC5\"><th style=\"text-align:left;padding:5px\">piece</th><th style=\"text-align:left;padding:5px\">correct/incorrect world (now)</th><th style=\"text-align:left;padding:5px\">multi-aspect quality world (your generalization)</th></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">$s$ (magnitude)</td><td style=\"padding:5px\">$\\pm1$ correct/incorrect</td><td style=\"padding:5px\"><b>graded QUALITY / acceptance score</b> the judge head emits in $[-1,1]$ — \"how good is this response\", the thing you said the CM really does</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">$\\phi$ (direction)</td><td style=\"padding:5px\">task-type one-hot (3 dirs)</td><td style=\"padding:5px\"><b>the ASPECT / sub-skill</b> the answer addresses (search / revise / file / …) — a genuinely richer, overlapping direction set</td></tr>\n<tr><td style=\"padding:5px\">the read / decision</td><td style=\"padding:5px\">$K$-choose-1 argmax</td><td style=\"padding:5px\"><b>per-aspect routing + accept/reject</b>: for aspect $\\phi_*$, steer each peer by $M_p\\phi_*$ and accept the ones whose steered endorsement clears threshold</td></tr>\n</tbody></table>\n<p class=\"why\" style=\"margin-top:8px\"><b>Why this is the dataset the matrix was waiting for.</b> The reason §15 found the matrix $\\equiv$ a scalar bank is that 3 task-types give no <i>latent, overlapping</i> sub-structure for the eigenvectors to discover. A multi-aspect swarm has <b>exactly that structure</b>: a \"revise\" agent is good at <i>polishing</i> regardless of whether the task is math or code; \"search\" quality cuts across task types; aspects <b>overlap</b> (a good file-edit also needs search). These are real latent directions that <b>recur and collide</b> (so the spectrum separates) yet are <b>not predefined task labels</b> (so the matrix must <i>discover</i> them) — precisely the middle regime soft-prototype $\\phi$ targets. <b>Your generalization supplies the sub-skill structure that the current data lacks.</b></p></div>",
-    "type": "html"
-  },
-  {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">What concretely changes</h3>\n<ul class=\"why\" style=\"margin:4px 0 0\">\n<li><b>Judge head → quality head.</b> Same trainable-head machinery, but it now regresses a graded quality $s\\in[-1,1]$ (train target = a quality label / acceptance signal, or still GT-correctness if that's all you have). The accept/reject decision is $s\\_\\text{logit}&gt;\\tau$.</li>\n<li><b>$\\phi$ becomes per-aspect, not per-task.</b> This is where the soft-prototype address extends naturally: centroids become per-aspect rather than per-task, so $\\phi$ soft-addresses the aspect a question needs and $M_p$'s top eigenvector becomes \"the aspect peer $p$ is reliably good at\" — a readable, learned specialization a scalar bank <b>cannot</b> represent.</li>\n<li><b>One task → MULTIPLE events.</b> If the CM decomposes a task into aspects and routes several peers, each (peer, aspect) outcome is its own event $\\eta s\\,\\phi_{\\text{aspect}}\\phi_{\\text{aspect}}^{\\top}$ — more, finer-grained updates per task, which is good for the spectrum.</li>\n<li><b>The joint $G$ wakes up too.</b> With complementary roles (search feeds revise feeds file), agents are <b>genuinely complementary</b>, not redundant — the off-diagonal of $G$ (§ joint matrix) now carries real signal, which it did not on 3 independent task-types.</li>\n</ul>\n<div class=\"callout clay\" style=\"margin-top:8px\"><span class=\"tag\">honest open questions this raises</span>\n<p class=\"why\" style=\"margin:6px 0 0\">(1) <b>Where do aspect labels / quality targets come from?</b> If the CM itself decomposes into aspects, that decomposition is another learned (and supervisable) head — and another circularity risk (§5): the CM grading its own routing. Keep the quality target at least partly external (a verifier, downstream task success). (2) <b>Selection is no longer single-label.</b> The CE-to-gold-slot loss must become per-aspect accept/reject (BCE per peer per aspect) — a real change to the training objective, not just the memory. (3) <b>We need a dataset with aspect-decomposed tasks + per-aspect quality</b>; the current CF streams are single-answer correct/incorrect. This is the main build cost — but it is also the FIRST setting where the matrix's spectral advantage could actually show, so it is the right thing to build next.</p></div></div>",
-    "type": "html"
-  },
-  {
-    "text": "But doesn't this hurt extensibility? Suppose I TRAIN with 3 agents but TEST with 5 agents.",
-    "type": "md"
-  },
-  {
-    "html": "<div class=\"callout olive\"><span class=\"tag\">answer: the opposite — this design is agent-count-INVARIANT by construction; train-3/test-5 just works (verified in code)</span></div>\n<div class=\"card\" style=\"margin-top:8px\"><p class=\"why\"><b>This is actually the single biggest advantage of the per-peer matrix over a concatenated selection network.</b> The reason is a clean separation: <b>every TRAINABLE parameter is agent-count-independent; only the STATE depends on the number of agents, and state is rebuilt from scratch at test time.</b></p>\n<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-top:4px\">\n<tbody><tr style=\"border-bottom:1.5px solid #D1CFC5\"><th style=\"text-align:left;padding:5px\">object</th><th style=\"text-align:left;padding:5px\">shape</th><th style=\"text-align:left;padding:5px\">depends on #agents $P$?</th></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">$\\eta$ (write strength), $\\gamma$ (decay)</td><td style=\"padding:5px\">scalars</td><td style=\"padding:5px\"><b>No</b></td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">phi_proj (content projection), judge head, steerer proj+gain</td><td style=\"padding:5px\">$r\\times d$ / $d\\times r$</td><td style=\"padding:5px\"><b>No</b> — only rank &amp; hidden size</td></tr>\n<tr style=\"border-bottom:1px solid #E8E6DE\"><td style=\"padding:5px\">$M_p$ (per-peer state)</td><td style=\"padding:5px\">$P$ copies of $r\\times r$</td><td style=\"padding:5px\">Yes — but it is STATE (a buffer), cold-reset to 0 at eval and re-accrued from the test stream</td></tr>\n<tr><td style=\"padding:5px\">$G$ (joint state)</td><td style=\"padding:5px\">$P\\times P$</td><td style=\"padding:5px\">Yes — same: state, not a parameter</td></tr>\n</tbody></table>\n<p class=\"why\" style=\"margin-top:8px\">A 5th agent just means a 5th independent $M_p$ buffer, initialized to 0 and filled by the same learned $\\eta,\\gamma,\\phi$-projection that the 3-agent training produced. There is <b>no per-agent weight to learn</b>, so there is nothing missing for agents 4 and 5. <b>Verified directly:</b> a checkpoint trained at <code>num_peers=3</code> loads into a <code>num_peers=5</code> model (dropping the $P$-shaped buffers $M,G$, which reset anyway) and the learned $\\eta,\\phi\\_\\text{proj}$ match bit-for-bit; reading trust for peer&nbsp;4 (which never existed at train) returns a finite steering vector. (One-line eval fix applied so the loader drops $M/G$ instead of erroring on the size mismatch.)</p></div>",
-    "type": "html"
-  },
-  {
-    "html": "<div class=\"card\"><h3 style=\"margin-top:0\">Why this is structural, and what the ONE real constraint is</h3>\n<p class=\"why\">The matrix is a <b>per-peer reputation accumulator with shared, identity-agnostic dynamics</b> — like a Kalman filter you instantiate once per tracked object: adding a 4th object doesn't change the filter's equations. Contrast a <b>concatenated selection head</b> (a network whose input/output width is $P$): it bakes the agent count into its weights, so train-3/test-5 is impossible without retraining. Anonymity (§4 of the method doc) reinforces this: identity is only an address into which $M_p$ to read/write, never a learned per-name weight, so new agents are first-class.</p>\n<div class=\"callout clay\" style=\"margin-top:8px\"><span class=\"tag\">the one thing that must stay fixed: $\\phi$ and $r$, not $P$</span>\n<p class=\"why\" style=\"margin:6px 0 0\">What the trained params DO assume is a <b>fixed context space</b>: the rank $r$ and the meaning of the $\\phi$ axes (the task one-hot block, the aspect set, the content projection). You can add agents freely, but if test introduces a <b>brand-new task-type or aspect</b> that had no $\\phi$ dimension at train, that direction is unlearned — the limit is on the <i>context vocabulary</i> $\\phi$, not on the <i>agent count</i> $P$. For a soft-prototype $\\phi$ this degrades gracefully (a new task projects onto existing centroids as a mixture); for a hard one-hot it does not (no slot for the new type). So: <b>add agents anytime; growing the aspect vocabulary is the case that needs a $\\phi$ that can absorb it.</b></p></div>\n<p class=\"why\" style=\"margin-top:8px\"><b>The joint $G$ has a milder version of the same property:</b> its <i>dynamics</i> ($\\gamma_G,\\eta$) are agent-count-free, and a $5\\times5$ $G$ is just built from 5-dim outcome vectors at test. The only nuance is that off-diagonal relationships involving the two new agents start at 0 and need a few co-occurrence events to form — which is correct (you have no prior on how a brand-new agent relates to the others).</p></div>",
-    "type": "html"
+    "type": "html",
+    "html": "<h2>16. Experimental Story to Support the Method</h2>\n<div class=\"card\">\n<p>The method section above naturally motivates three experiment groups:</p>\n<ul>\n  <li><b>Core CF robustness:</b> compare center-only versus Sigma across p0/p50/p70/p90 streams.</li>\n  <li><b>Peer-count generalization:</b> train with three peers and evaluate with additional unseen peers by allocating new runtime states.</li>\n  <li><b>Ablations:</b> remove memory steering, replace task-conditioned matrix memory with scalar memory, remove candidate-wise Yes/No scoring, or use peer-specific decay to test the peer-count-invariance claim.</li>\n</ul>\n<p>LoRA combinations and uncertainty gating should be introduced later as controls or extensions, not in the first presentation of Sigma itself.</p>\n</div>"
   }
 ]
 </script>

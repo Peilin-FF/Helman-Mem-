@@ -1,8 +1,9 @@
 """Task registry: a modular abstraction over heterogeneous task types.
 
 The trust-state pipeline only ever needs a per-peer correctness label
-``c_j ∈ [0, 1]`` per record. Math equivalence, open-domain QA (EM/F1) and code
-pass@1 all reduce to that scalar. This module is the single place that knows how
+``c_j ∈ [0, 1]`` per record. Math equivalence, multiple-choice accuracy,
+open-domain QA (EM/F1) and code pass@1 all reduce to that scalar. This module
+is the single place that knows how
 to turn a (record, peer_response) into:
 
   * a *soft* target ``target(...) -> [0,1]`` used as the BCE label and for the
@@ -250,6 +251,162 @@ def _boolqa_prompt(record: dict[str, Any], with_context: bool) -> str:
     return f"{prefix}\n\nQuestion: {question}"
 
 
+# ---------------------------------------------------------------------------
+# Multiple-choice and short-answer tasks
+# ---------------------------------------------------------------------------
+
+_PARENS_LABEL_RE = re.compile(r"\(([A-Za-z0-9]+)\)")
+
+
+def _normalise_label(value: Any) -> str:
+    text = str(value or "").strip()
+    text = text.strip().strip("()[]{}").strip()
+    return text.lower()
+
+
+def _choice_labels(record: dict[str, Any]) -> list[str]:
+    labels = record.get("choice_labels") or []
+    if isinstance(labels, (list, tuple)) and labels:
+        return [str(x) for x in labels]
+    choices = record.get("choices") or []
+    return [chr(ord("A") + i) for i in range(len(choices))]
+
+
+def _mcqa_pred_label(text: str, record: dict[str, Any]) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    labels = _choice_labels(record)
+    norm_to_label = {_normalise_label(label): label for label in labels}
+
+    def pick(segment: str) -> str:
+        segment = str(segment or "").strip()
+        if not segment:
+            return ""
+        # Prefer explicit parenthesized options, e.g. "(C)".
+        for match in reversed(list(_PARENS_LABEL_RE.finditer(segment))):
+            key = _normalise_label(match.group(1))
+            if key in norm_to_label:
+                return norm_to_label[key]
+        # Then phrases like "option C", "choice C", or a bare final label.
+        for label in labels:
+            escaped = re.escape(str(label).strip())
+            if re.fullmatch(rf"\(?\s*{escaped}\s*\)?\.?", segment, flags=re.IGNORECASE):
+                return label
+            if re.search(
+                rf"\b(?:option|choice|answer|letter)\s*[:\-]?\s*\(?{escaped}\)?\b",
+                segment,
+                flags=re.IGNORECASE,
+            ):
+                return label
+            if re.search(
+                rf"\b(?:choose|select|is)\s+\(?{escaped}\)?\b",
+                segment,
+                flags=re.IGNORECASE,
+            ):
+                return label
+        key = _normalise_label(segment)
+        return norm_to_label.get(key, "")
+
+    explicit = list(
+        re.finditer(
+            r"(?:final\s+answer|answer)\s*(?:is|:)?\s*([^\n\r]+)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if explicit:
+        found = pick(explicit[-1].group(1))
+        if found:
+            return found
+    for line in reversed([ln.strip() for ln in raw.splitlines() if ln.strip()]):
+        found = pick(line)
+        if found:
+            return found
+    return pick(raw)
+
+
+def mcqa_extract_answer(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    explicit = list(
+        re.finditer(
+            r"(?:final\s+answer|answer)\s*(?:is|:)?\s*([^\n\r]+)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if explicit:
+        return explicit[-1].group(1).strip()
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    return lines[-1] if lines else raw
+
+
+def _mcqa_target(text: str, record: dict[str, Any]) -> float:
+    pred = _normalise_label(_mcqa_pred_label(text, record))
+    gold = _normalise_label(record.get("answer", ""))
+    return 1.0 if pred and gold and pred == gold else 0.0
+
+
+def _mcqa_correct(text: str, record: dict[str, Any]) -> bool:
+    return _mcqa_target(text, record) >= 0.5
+
+
+def _mcqa_prompt(record: dict[str, Any], with_context: bool) -> str:
+    labels = _choice_labels(record)
+    choices = [str(x) for x in (record.get("choices") or [])]
+    options = "\n".join(
+        f"({label}) {choice}" for label, choice in zip(labels, choices)
+    )
+    return (
+        "Answer the multiple-choice question. Choose exactly one option. "
+        "End with exactly 'Final answer: <option label>'.\n\n"
+        f"Question:\n{record.get('problem', '')}\n\nOptions:\n{options}"
+    )
+
+
+def shortqa_extract_answer(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    explicit = list(
+        re.finditer(
+            r"(?:final\s+answer|answer)\s*(?:is|:)?\s*([^\n\r]+)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if explicit:
+        return explicit[-1].group(1).strip().strip(".")
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    return (lines[-1] if lines else raw).strip().strip(".")
+
+
+def _shortqa_norm(text: Any) -> str:
+    # BBH targets mix "(B)", "False", "invalid", short phrases and numbers.
+    # Reuse QA punctuation/whitespace normalization, with label parentheses removed.
+    return _normalize_qa(str(text or "").strip().strip("()[]{}"))
+
+
+def _shortqa_target(text: str, record: dict[str, Any]) -> float:
+    pred = _shortqa_norm(shortqa_extract_answer(text))
+    gold = _shortqa_norm(record.get("answer", ""))
+    return 1.0 if pred and gold and pred == gold else 0.0
+
+
+def _shortqa_correct(text: str, record: dict[str, Any]) -> bool:
+    return _shortqa_target(text, record) >= 0.5
+
+
+def _shortqa_prompt(record: dict[str, Any], with_context: bool) -> str:
+    return (
+        "Answer the question. Give a concise answer and end with "
+        "'Final answer: <answer>'.\n\n"
+        f"Question:\n{record.get('problem', '')}"
+    )
+
+
 def _code_precomputed(record: dict[str, Any], peer_key: str | None) -> float | None:
     table = record.get("peer_correct")
     if isinstance(table, dict) and peer_key is not None and peer_key in table:
@@ -290,6 +447,10 @@ REGISTRY: dict[str, TaskSpec] = {
     "rag": TaskSpec("rag", _rag_target, _rag_correct, qa_extract_answer, _rag_prompt),
     "boolqa": TaskSpec(
         "boolqa", _boolqa_target, _boolqa_correct, boolqa_extract_answer, _boolqa_prompt
+    ),
+    "mcqa": TaskSpec("mcqa", _mcqa_target, _mcqa_correct, mcqa_extract_answer, _mcqa_prompt),
+    "shortqa": TaskSpec(
+        "shortqa", _shortqa_target, _shortqa_correct, shortqa_extract_answer, _shortqa_prompt
     ),
     "code": TaskSpec(
         "code", _code_target, _code_correct, code_extract_answer, _code_prompt, precomputed=True

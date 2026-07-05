@@ -104,7 +104,7 @@ def balanced_targets(records, swap_indices, strong, weaks, seed):
     return assign, used
 
 
-def build_one_dataset(records, task, dataset, proportions):
+def build_one_dataset(records, task, dataset, proportions, keep_all_records: bool = False):
     """Return {p_tag: [records]} for one dataset, with balanced weak targets, plus stats."""
     keys = peer_keys_of(records[0]) if records else []
     acc = per_peer_accuracy(records, keys)
@@ -116,8 +116,12 @@ def build_one_dataset(records, task, dataset, proportions):
     N = len(records)
 
     rng_t = random.Random(_seed(dataset, strong, "T", N, S))
-    T = min(N, int(S / MAX_P)) if S > 0 else 0
-    n_swap_pool = min(S, int(round(MAX_P * T)))
+    if keep_all_records:
+        T = N
+        n_swap_pool = S
+    else:
+        T = min(N, int(S / MAX_P)) if S > 0 else 0
+        n_swap_pool = min(S, int(round(MAX_P * T)))
     n_clean_fill = max(0, T - n_swap_pool)
     swap_pool = list(swappable_idx)
     rng_t.shuffle(swap_pool)
@@ -169,7 +173,9 @@ def build_one_dataset(records, task, dataset, proportions):
     stats = {
         "dataset": dataset, "task_type": task, "N": N, "peer_keys": keys,
         "per_peer_accuracy": acc, "strong_peer": strong, "weak_peers": weaks,
-        "num_swappable": S, "fixed_eval_size_T": T, "proportions": stats_by_p,
+        "num_swappable": S, "fixed_eval_size_T": T,
+        "keep_all_records": bool(keep_all_records),
+        "proportions": stats_by_p,
     }
     return out_by_p, stats
 
@@ -187,6 +193,15 @@ def main() -> None:
     ap.add_argument("--out_dir", default="data/v3_unified")
     ap.add_argument("--datasets", nargs="*", default=DATASETS)
     ap.add_argument("--proportions", nargs="*", type=float, default=PROPORTIONS)
+    ap.add_argument(
+        "--keep_all_records",
+        action="store_true",
+        help=(
+            "Preserve every input record in each proportion. If a requested CF "
+            "fraction is not fully feasible, keep the remaining records clean "
+            "instead of shrinking the evaluation set."
+        ),
+    )
     args = ap.parse_args()
 
     in_dir = Path(args.in_dir)
@@ -205,7 +220,9 @@ def main() -> None:
         for j, r in enumerate(records):
             r["uid"] = f"{ds}:{j}"
         task = TASK_OF.get(ds, "math")
-        out_by_p, stats = build_one_dataset(records, task, ds, args.proportions)
+        out_by_p, stats = build_one_dataset(
+            records, task, ds, args.proportions, keep_all_records=args.keep_all_records
+        )
         all_stats[ds] = stats
         for tag, recs in out_by_p.items():
             pooled[tag].extend(recs)
