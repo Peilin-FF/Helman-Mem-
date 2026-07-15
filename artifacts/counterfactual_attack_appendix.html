@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Appendix Dataset Documentation</div><h1>Counterfactual Attack Dataset</h1><p class=\"lede\">A compact, paper-ready description of the evaluation sources, response-swap construction, attack ratios, and peer correctness in the 3-, 4-, and 5-peer settings.</p><div class=\"summary-band\"><div><span class=\"k\">Evaluation events</span>2,685 at every ratio</div><div><span class=\"k\">Attack ratios</span>0%, 50%, 70%, 90%</div><div><span class=\"k\">Peer settings</span>3 · 4 · 5 peers</div><div><span class=\"k\">Metric</span>peer correctness</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Paper-Ready Description</h2><div class=\"answer\"><p>We construct a controlled counterfactual attack dataset from nine held-out benchmarks covering mathematics, retrieval-augmented question answering, and coding. The mathematics portion is drawn from MATH-500, AMC, OlympiadBench, and College Math; the coding portion is drawn from HumanEval, MBPP, and LiveCodeBench; and the RAG portion is drawn from HotpotQA and TriviaQA. After feasibility filtering, each attack split contains the same 2,685 task events, comprising 1,216 mathematics events, 394 coding events, and 1,075 RAG events.</p><p>For each constituent dataset, we first measure the clean accuracy of the three peers and define the peer with the highest accuracy as the <em>strong peer</em>. An event is eligible for counterfactual construction when the strong peer is correct and at least one of the remaining peers is incorrect. We then swap the complete response and correctness label of the strong peer with those of an incorrect weak peer, while leaving peer identity and metadata unchanged. The attack ratio <em>r</em> denotes the fraction of events counterfactually swapped within each dataset. We evaluate <em>r</em> ∈ {0, 0.5, 0.7, 0.9}; the 0% split is the clean baseline, and all four ratios use the same underlying task events. The nine datasets are finally pooled and deterministically shuffled into one mixed-domain evaluation stream.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Domain", "Source benchmarks", "N in each attack split", "Share"],
+    "rows": [
+      ["Mathematics", "MATH-500; AMC; OlympiadBench; College Math", "1,216", "45.29%"],
+      ["Coding", "HumanEval; MBPP; LiveCodeBench", "394", "14.67%"],
+      ["RAG", "HotpotQA; TriviaQA", "1,075", "40.04%"],
+      ["Overall", "Nine held-out benchmarks", "2,685", "100.00%"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Ratio Construction</h2><p>Let <em>S</em><sub>d</sub> be the number of eligible events in dataset <em>d</em>. To make a 90% attack feasible while keeping evaluation size fixed, the builder selects <em>T</em><sub>d</sub> = min(<em>N</em><sub>d</sub>, floor(<em>S</em><sub>d</sub>/0.9)) events. At ratio <em>r</em>, approximately <em>rT</em><sub>d</sub> eligible events are swapped and the remaining events stay clean. Rounding is performed independently for each dataset, so the pooled realized ratios differ from the requested values by less than 0.06 percentage points.</p>"
+  },
+  {
+    "type": "table",
+    "head": ["Attack split", "Total N", "Counterfactually swapped", "Clean", "Realized ratio"],
+    "rows": [
+      ["p0", "2,685", "0", "2,685", "0.00%"],
+      ["p50", "2,685", "1,344", "1,341", "50.06%"],
+      ["p70", "2,685", "1,878", "807", "69.94%"],
+      ["p90", "2,685", "2,418", "267", "90.06%"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Peer Performance by CF Ratio</h2><p>Correctness of each peer response after counterfactual swapping. Rows correspond to the CF ratio and columns correspond to the three fixed peers. Each entry reports accuracy followed by the number of correct responses over the 2,685 evaluation events.</p>"
+  },
+  {
+    "type": "table",
+    "head": ["CF ratio", "N", "Gemma-3-4B-it", "Phi-4-mini-instruct", "Qwen2.5-Coder-7B-Instruct"],
+    "rows": [
+      ["CF@0%", "2,685", "55.68% (1,495/2,685)", "46.93% (1,260/2,685)", "48.42% (1,300/2,685)"],
+      ["CF@50%", "2,685", "44.69% (1,200/2,685)", "43.43% (1,166/2,685)", "62.91% (1,689/2,685)"],
+      ["CF@70%", "2,685", "40.30% (1,082/2,685)", "41.08% (1,103/2,685)", "69.65% (1,870/2,685)"],
+      ["CF@90%", "2,685", "35.87% (963/2,685)", "39.37% (1,057/2,685)", "75.79% (2,035/2,685)"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Generalization to More Peers</h2><p>The 4-peer setting augments the original three peers with <b>Llama-3.2-3B-Instruct</b>. The 5-peer setting further adds <b>BitCPM-CANN-3B</b>. For each peer count, the counterfactual streams are rebuilt from the same 2,685 task events: the strongest peer is recomputed independently for each source dataset, and swapped responses are balanced across the available incorrect weak peers.</p><h3>Four-Peer Setting</h3>"
+  },
+  {
+    "type": "table",
+    "head": ["CF ratio", "N", "Gemma-3-4B-it", "Phi-4-mini-instruct", "Qwen2.5-Coder-7B-Instruct", "Llama-3.2-3B-Instruct"],
+    "rows": [
+      ["CF@0%", "2,685", "55.68% (1,495/2,685)", "46.93% (1,260/2,685)", "48.42% (1,300/2,685)", "38.70% (1,039/2,685)"],
+      ["CF@50%", "2,685", "40.45% (1,086/2,685)", "37.02% (994/2,685)", "57.06% (1,532/2,685)", "55.20% (1,482/2,685)"],
+      ["CF@70%", "2,685", "34.30% (921/2,685)", "33.00% (886/2,685)", "60.56% (1,626/2,685)", "61.86% (1,661/2,685)"],
+      ["CF@90%", "2,685", "28.27% (759/2,685)", "29.01% (779/2,685)", "63.95% (1,717/2,685)", "68.49% (1,839/2,685)"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h3>Five-Peer Setting</h3>"
+  },
+  {
+    "type": "table",
+    "head": ["CF ratio", "N", "Gemma-3-4B-it", "Phi-4-mini-instruct", "Qwen2.5-Coder-7B-Instruct", "Llama-3.2-3B-Instruct", "BitCPM-CANN-3B"],
+    "rows": [
+      ["CF@0%", "2,685", "55.68% (1,495/2,685)", "46.93% (1,260/2,685)", "48.42% (1,300/2,685)", "38.70% (1,039/2,685)", "46.78% (1,256/2,685)"],
+      ["CF@50%", "2,685", "38.29% (1,028/2,685)", "34.56% (928/2,685)", "53.45% (1,435/2,685)", "51.17% (1,374/2,685)", "59.03% (1,585/2,685)"],
+      ["CF@70%", "2,685", "31.36% (842/2,685)", "29.53% (793/2,685)", "55.53% (1,491/2,685)", "56.09% (1,506/2,685)", "63.99% (1,718/2,685)"],
+      ["CF@90%", "2,685", "24.36% (654/2,685)", "24.47% (657/2,685)", "57.54% (1,545/2,685)", "61.04% (1,639/2,685)", "69.09% (1,855/2,685)"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout olive\"><div class=\"callout-h\">How to read the tables</div><p>These values are the correctness rates attached to peer slots after the response-swap attack, not center-model selection accuracy. As the CF ratio increases, correct responses are intentionally moved away from the peer that was strongest on each source dataset and into an initially incorrect weak-peer slot. Because the weak target is rebalanced after changing the number of peers, peer-level correctness at p50, p70, and p90 is expected to differ across the 3-, 4-, and 5-peer settings.</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Copy-Ready LaTeX</h2><div class=\"card\"><pre><code>\\subsection{Counterfactual Attack Dataset}\n\\label{appendix:counterfactual_attack}\n\nWe construct a controlled counterfactual attack dataset from nine held-out benchmarks spanning mathematics, retrieval-augmented question answering, and coding. The mathematics portion is drawn from MATH-500, AMC, OlympiadBench, and College Math; the coding portion is drawn from HumanEval, MBPP, and LiveCodeBench; and the RAG portion is drawn from HotpotQA and TriviaQA. After feasibility filtering, each attack split contains the same 2,685 task events, comprising 1,216 mathematics events, 394 coding events, and 1,075 RAG events.\n\nFor each constituent dataset, we first measure the clean accuracy of the three peers and define the highest-accuracy peer as the strong peer. An event is eligible for counterfactual construction when the strong peer is correct and at least one remaining peer is incorrect. We then exchange the complete response and correctness label of the strong peer with those of an incorrect weak peer, while leaving peer identity and metadata unchanged. For an attack ratio $r \\in \\{0, 0.5, 0.7, 0.9\\}$, approximately an $r$ fraction of the fixed event set is counterfactually swapped within each dataset; $r=0$ is the clean baseline. The same underlying task events are used at every ratio and are pooled into one mixed-domain stream. Table~\\ref{tab:counterfactual_peer_accuracy} reports the resulting correctness of each peer slot.\n\n\\begin{table*}[t]\n\\centering\n\\caption{Peer correctness under increasing counterfactual attack ratios. Each entry reports accuracy, followed by the number of correct responses and the total number of events in parentheses. The best-performing peer at each ratio is shown in bold.}\n\\label{tab:counterfactual_peer_accuracy}\n\\setlength{\\tabcolsep}{7pt}\n\\renewcommand{\\arraystretch}{1.15}\n\\begin{tabular}{l|c|ccc}\n\\Xhline{1.2pt}\n\\rowcolor{orange!15}\n\\textbf{CF Ratio} &amp; \\textbf{N} &amp; \\textbf{Gemma-3-4B-it} &amp; \\textbf{Phi-4-mini-instruct} &amp; \\textbf{Qwen2.5-Coder-7B-Instruct} \\\\n\\Xhline{1pt}\nCF@0\\%  &amp; 2,685 &amp; \\textbf{55.68\\%} (1,495/2,685) &amp; 46.93\\% (1,260/2,685) &amp; 48.42\\% (1,300/2,685) \\\\nCF@50\\% &amp; 2,685 &amp; 44.69\\% (1,200/2,685) &amp; 43.43\\% (1,166/2,685) &amp; \\textbf{62.91\\%} (1,689/2,685) \\\\nCF@70\\% &amp; 2,685 &amp; 40.30\\% (1,082/2,685) &amp; 41.08\\% (1,103/2,685) &amp; \\textbf{69.65\\%} (1,870/2,685) \\\\nCF@90\\% &amp; 2,685 &amp; 35.87\\% (963/2,685) &amp; 39.37\\% (1,057/2,685) &amp; \\textbf{75.79\\%} (2,035/2,685) \\\\n\\Xhline{1.2pt}\n\\end{tabular}\n\\end{table*}</code></pre></div>"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

@@ -19,7 +19,6 @@ HASH="0000000000000000000000000000000000000000"
 declare -A MAP=(
   [Qwen3-4B-Instruct-2507]="Qwen/Qwen3-4B-Instruct-2507"
   [Phi-4-mini-instruct]="microsoft/Phi-4-mini-instruct"
-  [Ministral-3-3B-Instruct-2512-BF16]="mistralai/Ministral-3-3B-Instruct-2512-BF16"
   [gemma-3-4b-it]="google/gemma-3-4b-it"
   [Qwen2.5-Coder-7B-Instruct]="Qwen/Qwen2.5-Coder-7B-Instruct"
   [Qwen2.5-Coder-3B-Instruct]="Qwen/Qwen2.5-Coder-3B-Instruct"

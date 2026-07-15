@@ -112,14 +112,11 @@ The default model set is:
 | Central model | `Qwen/Qwen3-4B-Instruct-2507` |
 | Peer 0 | `google/gemma-3-4b-it` |
 | Peer 1 | `microsoft/Phi-4-mini-instruct` |
-| Peer 2 | `mistralai/Ministral-3-3B-Instruct-2512-BF16` |
+| Peer 2 | `Qwen/Qwen2.5-Coder-7B-Instruct` |
 
 These are current instruct checkpoints in the roughly 4B class, from different
-model families. Gemma 3 and Ministral 3 are multimodal-capable models, but this
-project sends text-only math prompts. Keep `use_vllm: true` for production
-generation; the Transformers fallback also supports image-text-to-text model
-classes when vLLM is unavailable. The pinned `transformers>=5.0.0` requirement
-keeps the modern fallback classes available.
+model families. Gemma 3 is multimodal-capable, but this project sends text-only
+prompts. Keep `use_vllm: true` for production generation.
 
 Verify the local code before launching GPU jobs:
 
@@ -725,7 +722,7 @@ PYTHONPATH=. python eval_feedback_state.py --config configs/eval_v2_code.yaml \
   --init_state trained --mode online_feedback --output outputs/eval_mixed.json
 # Plot per-task peer selection rate vs. feedback count
 PYTHONPATH=. python scripts/plot_trust_shift.py --eval outputs/eval_mixed.json \
-  --window 50 --peer-names gemma phi ministral qwen-coder \
+  --window 50 --peer-names gemma phi qwen-coder \
   --output outputs/trust_shift.png
 ```
 
@@ -752,7 +749,7 @@ PYTHONPATH=. python eval_feedback_state.py --config configs/eval_v2_rag.yaml \
 # Gemma (peer_0) should be high in by_task["math"].peer_selection_rate but LOW in
 # by_task["rag"].peer_selection_rate — coexisting per-task beliefs.
 PYTHONPATH=. python scripts/plot_trust_shift.py --eval outputs/eval_mathrag.json \
-  --peer-names gemma phi ministral
+  --peer-names gemma phi qwen-coder
 ```
 
 **Math + Code (trust transfer to a specialist).** Add Qwen2.5-Coder as a 4th peer,
@@ -776,7 +773,7 @@ PYTHONPATH=. python scripts/mix_task_datasets.py \
 PYTHONPATH=. python eval_feedback_state.py --config configs/eval_v2_code.yaml \
   --checkpoint outputs/fs_mathcode --offline_data data/v2_mixed_mathcode.jsonl --output outputs/eval_mathcode.json
 PYTHONPATH=. python scripts/plot_trust_shift.py --eval outputs/eval_mathcode.json \
-  --window 50 --peer-names gemma phi ministral qwen-coder
+  --window 50 --peer-names gemma phi qwen-coder
 # by_task["code"].peer_selection_rate for the coder peer should climb over the stream.
 ```
 
@@ -856,11 +853,11 @@ run, independently configurable.
 
 Stable peer ids (always, regardless of displayed slot): `peer_0`=gemma
 (`google/gemma-3-4b-it`), `peer_1`=phi (`microsoft/Phi-4-mini-instruct`),
-`peer_2`=ministral (`Ministral-3-3B-Instruct`).
+`peer_2`=qwen-coder (`Qwen2.5-Coder-7B-Instruct`).
 
 | knob | values | meaning |
 | --- | --- | --- |
-| `train_order` / `test_order` | `orig` \| `swap` | `orig`: slot0=gemma,slot1=phi,slot2=ministral. `swap`: slot0=phi,slot1=gemma,slot2=ministral (swaps the first two). **Independently set.** |
+| `train_order` / `test_order` | `orig` \| `swap` | `orig`: slot0=gemma,slot1=phi,slot2=qwen-coder. `swap`: slot0=phi,slot1=gemma,slot2=qwen-coder (swaps the first two). **Independently set.** |
 | `identity_mode` | `anon` \| `id` | `anon`: encoded block shows only `question` + `Peer response` (no name). `id`: `Peer [google/gemma-3-4b-it] response: …` — the identity string moves with the peer, not the slot. |
 | `state_indexing` | `slot` \| `peer_id` | `slot`: `S` follows the slot position. `peer_id`: `S` follows the stable peer (read/written via `slot_to_peer`). |
 | state mode (eval) | `init_state` × `mode` | `S0+RO`/`trS+RO`/`S0+ON`/`trS+ON` = (zeros\|trained S) × (read_only\|online_feedback). |
@@ -899,7 +896,7 @@ selected_slot, selected_peer_id, selected_peer_name, selected_correct,
 correctness_by_slot, correctness_by_peer_id, logits_by_slot, logits_by_peer_id`.
 
 **Metrics** (`summary.selection`): `accuracy`; `slot_picks` p0/p1/p2 (by SLOT) and
-`peer_picks_by_name` (by identity: gemma/phi/ministral); `accuracy_by_selected_slot`
+`peer_picks_by_name` (by identity: gemma/phi/qwen-coder); `accuracy_by_selected_slot`
 / `accuracy_by_selected_peer`; `position_bias` (slot vs peer entropy). The printed
 one-row table is `Dataset | identity_mode | train_order | test_order | state_mode |
 state_indexing | accuracy | slot p0/p1/p2 | peer picks`.

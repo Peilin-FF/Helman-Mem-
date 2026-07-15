@@ -1,13 +1,13 @@
 """Train the event-axis symmetric trust memory (steering coupling).
 
-The frozen CM scores every " Peer j" with a trust-derived STEERING vector injected into
-its upper-half layers (ActivationSteerer); CE to the gold slot trains the memory's
-parameters (phi embedding, decay theta, write strength eta, and the steering projection +
-gain). The matrices M_p / G themselves are state (buffers): they evolve by the event-axis
-recurrence once per task, under no_grad.
+The frozen CM scores every candidate with a trust-derived STEERING vector injected into
+its upper-half layers (ActivationSteerer). The legacy objective uses CE to the first
+correct slot. The strictly causal objective supervises every peer independently. The
+matrices M_p / G themselves are state (buffers): they evolve by the event-axis recurrence
+once per task, under no_grad.
 
 Per example (stream order, batch=1):
-  for each candidate j: steer_vec=M_pj@phi* -> logp_CM(j|steered) -> CE(gold) -> backward
+  for each candidate j: steer_vec=M_pj@phi* -> logp_CM(j|steered) -> loss -> backward
   then memory.update(j, +/-1, task_type) for each peer + update_joint   (event axis)
 
   PYTHONPATH=. python train_symmetric_memory.py --config configs/symmetric_memory.yaml \
@@ -22,6 +22,10 @@ from pathlib import Path
 
 import torch
 
+from feedback_state.checkpoint_manifest import (
+    sha256_path,
+    write_checkpoint_manifest,
+)
 from feedback_state.newarch_loader import apply_torch_fp8_shim, load_central_model
 
 apply_torch_fp8_shim()
@@ -41,9 +45,26 @@ from feedback_state.joint_data import (
 from feedback_state.joint_models import JointDeltaMemSelector
 from feedback_state.joint_prompt import PEER_SEP, build_joint_prompt
 from feedback_state.permutations import canonical_peer_view
-from feedback_state.symmetric_memory import ActivationSteerer, SymmetricTrustMemory, DEFAULT_TASK_TYPES, cm_context_vector
+from feedback_state.prompt_protocol import (
+    candidate_context_text,
+    candidate_tokenization_format,
+    prompt_context_format,
+    prompt_protocol_name,
+    validate_prompt_protocol,
+)
+from feedback_state.symmetric_memory import (
+    ActivationSteerer,
+    DEFAULT_TASK_TYPES,
+    SymmetricTrustMemory,
+    cm_context_vector,
+)
 from feedback_state.tasks import task_type_of
 from feedback_state.utils import load_config, merge_args_with_config
+
+
+LOSS_FIRST_CORRECT_CE = "first_correct_ce"
+LOSS_CAUSAL_MULTILABEL_BCE = "causal_multilabel_bce"
+CAUSAL_LOSS_MODES = frozenset({LOSS_CAUSAL_MULTILABEL_BCE})
 
 
 def as_bool(v, default=False):
@@ -60,6 +81,13 @@ def parse_args():
     p.add_argument("--central_model", default=None)
     p.add_argument("--num_peers", type=int, default=None)
     p.add_argument("--max_length", type=int, default=None)
+    p.add_argument(
+        "--legacy_prompt_protocol",
+        choices=["on", "off"],
+        default=None,
+        help="Reproduce the original 2,685-row prompt protocol: Python str(context) "
+             "and candidate tokenizer truncation at exactly 8192 tokens.",
+    )
     p.add_argument("--task_state_mode", choices=["shared", "separate"], default=None,
                    help="shared: one online Sigma state for the whole stream. "
                         "separate: maintain one online state per broad task type.")
@@ -72,20 +100,27 @@ def parse_args():
     p.add_argument("--write_mode", choices=["addr", "carry"], default=None)
     p.add_argument("--decay_mode", choices=["scalar", "diag"], default=None)
     p.add_argument("--per_peer_decay", choices=["on", "off"], default=None)
+    p.add_argument("--gamma_init", type=float, default=None,
+                   help="Initial Sigma memory decay; must be in (0, 1].")
     p.add_argument("--diff_write", choices=["on", "off"], default=None)
+    p.add_argument(
+        "--loss_mode",
+        choices=[
+            LOSS_FIRST_CORRECT_CE,
+            LOSS_CAUSAL_MULTILABEL_BCE,
+        ],
+        default=None,
+        help="first_correct_ce preserves the legacy single-target objective. "
+             "causal_multilabel_bce scores every peer against its Yes/No correctness "
+             "label while always reading the pre-update memory state.",
+    )
     p.add_argument("--peer_mode", choices=["joint", "one"], default=None,
                    help="joint: score all peers in one prompt. one: score each peer alone.")
     p.add_argument("--score_mode", choices=["peer_name", "candidate_yesno"], default=None,
                    help="peer_name: score 'Peer j' continuations (legacy). "
                         "candidate_yesno: score each highlighted candidate with shared Yes/No utility.")
-    p.add_argument("--confusion_gate", choices=["off", "entropy", "margin"], default=None,
-                   help="Optional center-uncertainty gate. If enabled, confident examples skip "
-                        "Sigma memory training and online state update.")
-    p.add_argument("--confusion_threshold", type=float, default=None,
-                   help="Gate threshold. entropy: train/update when normalized entropy >= threshold. "
-                        "margin: train/update when top1-top2 score margin <= threshold.")
-    p.add_argument("--confusion_temperature", type=float, default=None,
-                   help="Temperature for entropy softmax over center-only candidate scores.")
+    p.add_argument("--seed", type=int, default=None,
+                   help="Random seed for reproducible memory/projection initialization.")
     p.add_argument("--max_steps", type=int, default=None)
     return p.parse_args()
 
@@ -100,6 +135,71 @@ def _example_view(rec, num_peers):
     return [f"peer_{i}" for i in range(len(keys))], texts, corr, real, peer_ids, tgt
 
 
+def _effective_diff_write(loss_mode: str, requested: bool) -> bool:
+    """Causal scoring must read M^t, never a state containing the current label."""
+    if loss_mode in CAUSAL_LOSS_MODES:
+        return False
+    return bool(requested)
+
+
+def _validate_loss_semantics(loss_mode: str, score_mode: str) -> None:
+    if loss_mode not in {LOSS_FIRST_CORRECT_CE, *CAUSAL_LOSS_MODES}:
+        raise ValueError(f"Unknown loss_mode={loss_mode!r}")
+    if loss_mode in CAUSAL_LOSS_MODES and score_mode != "candidate_yesno":
+        raise ValueError(f"{loss_mode} requires score_mode=candidate_yesno")
+
+
+def _candidate_training_loss(
+    logit_vec: torch.Tensor,
+    correctness: list[int],
+    *,
+    loss_mode: str,
+) -> torch.Tensor | None:
+    """Return the peer-selection loss, or ``None`` when the objective is undefined/zero."""
+    logits = logit_vec.float().reshape(-1)
+    labels = torch.as_tensor(correctness, dtype=torch.float32, device=logits.device).reshape(-1)
+    if logits.numel() != labels.numel():
+        raise ValueError(
+            f"logit/correctness size mismatch: {logits.numel()} != {labels.numel()}"
+        )
+    if loss_mode == LOSS_FIRST_CORRECT_CE:
+        correct_slots = torch.nonzero(labels > 0.5, as_tuple=False).reshape(-1)
+        if correct_slots.numel() == 0:
+            return None
+        target = correct_slots[0].reshape(1).to(dtype=torch.long)
+        return torch.nn.functional.cross_entropy(logits.unsqueeze(0), target)
+    if loss_mode == LOSS_CAUSAL_MULTILABEL_BCE:
+        return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+    raise ValueError(f"Unknown loss_mode={loss_mode!r}")
+
+
+def _skip_training_event(
+    real: int,
+    target: int | None,
+    loss_mode: str,
+) -> bool:
+    """Return whether an event has no backward objective under ``loss_mode``."""
+    if real < 1:
+        return True
+    if loss_mode == LOSS_FIRST_CORRECT_CE:
+        return target is None or target >= real
+    return False
+
+
+def _planned_backward_events(
+    records: list[dict], num_peers: int, total_events: int, loss_mode: str
+) -> int:
+    """Count events that will contribute gradients across the planned stream."""
+    if not records or total_events < 1:
+        return 0
+    count = 0
+    for index in range(total_events):
+        rec = records[index % len(records)]
+        _, _, _, real, _, target = _example_view(rec, num_peers)
+        count += int(not _skip_training_event(real, target, loss_mode))
+    return count
+
+
 def _probe_grad(params_named, label="param"):
     tot = 0.0
     for n, p in params_named:
@@ -108,38 +208,27 @@ def _probe_grad(params_named, label="param"):
     print(f"[grad-probe] {label} grad |.|1 sum = {tot:.4e} -> {'TRAIN' if tot > 0 else 'NO GRAD (bug)'}", flush=True)
 
 
-def _center_uncertainty(scores, temperature=1.0):
-    vals = torch.tensor(scores, dtype=torch.float32)
-    temp = max(float(temperature), 1e-6)
-    probs = torch.softmax(vals / temp, dim=0)
-    entropy = float(-(probs * probs.clamp_min(1e-9).log()).sum())
-    if len(scores) > 1:
-        entropy /= math.log(len(scores))
-        top2 = torch.topk(vals, k=2).values
-        margin = float(top2[0] - top2[1])
-    else:
-        margin = 1e9
-    return entropy, margin
-
-
-def _use_memory_for_confusion(gate, entropy, margin, threshold):
-    if gate == "entropy":
-        return entropy >= threshold
-    if gate == "margin":
-        return margin <= threshold
-    return True
-
-
 def main():
     args = parse_args()
     cfg = merge_args_with_config(args, load_config(args.config))
+    seed = int(cfg.get("seed", 0))
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    cfg["seed"] = seed
     device = torch.device(str(cfg.get("device", "cuda:0" if torch.cuda.is_available() else "cpu")))
-    dtype = dtype_from_name(str(cfg.get("dtype", "bfloat16")))
+    dtype_name = str(cfg.get("dtype", "bfloat16")).lower()
+    dtype = dtype_from_name(dtype_name)
     out_dir = Path(cfg.get("output_dir", "outputs/sym")); out_dir.mkdir(parents=True, exist_ok=True)
     model_name = str(cfg.get("central_model", "Qwen/Qwen3-0.6B"))
     lora_ckpt = Path(cfg["center_lora_checkpoint"]) if cfg.get("center_lora_checkpoint") else None
     num_peers = int(cfg.get("num_peers", 3))
     max_len = int(cfg.get("max_length", 8192))
+    legacy_prompt_protocol = as_bool(cfg.get("legacy_prompt_protocol"), False)
+    validate_prompt_protocol(
+        legacy_prompt_protocol=legacy_prompt_protocol,
+        max_length=max_len,
+    )
     task_state_mode = str(cfg.get("task_state_mode", "shared")).lower()
     use_joint = str(cfg.get("use_joint", "off")) == "on"
     rank = int(cfg.get("rank", 16))
@@ -149,16 +238,41 @@ def main():
     decay_mode = str(cfg.get("decay_mode", "scalar"))
     write_mode = str(cfg.get("write_mode", "addr"))  # addr (A) | carry (B: write peer-vs-gold diff direction)
     per_peer_decay = as_bool(cfg.get("per_peer_decay"), False)  # idea-3: each peer its own decay theta
-    diff_write = as_bool(cfg.get("diff_write"), False)          # idea-2: read thru a differentiable write -> theta/eta learn
+    gamma_init = float(cfg.get("gamma_init", 0.9))
+    loss_mode = str(cfg.get("loss_mode", LOSS_FIRST_CORRECT_CE)).lower()
+    requested_diff_write = as_bool(cfg.get("diff_write"), False)
+    diff_write = _effective_diff_write(loss_mode, requested_diff_write)
     peer_mode = str(cfg.get("peer_mode", "joint")).lower()
     score_mode = str(cfg.get("score_mode", "peer_name")).lower()
     train_center_lora = as_bool(cfg.get("train_center_lora"), False)
     whiten = as_bool(cfg.get("whiten"), write_mode == "carry")
     grad_accum = int(cfg.get("gradient_accumulation_steps", 4))
-    confusion_gate = str(cfg.get("confusion_gate", "off")).lower()
-    confusion_temp = float(cfg.get("confusion_temperature", 1.0))
-    if confusion_gate not in {"off", "entropy", "margin"}:
-        raise ValueError(f"confusion_gate must be off/entropy/margin, got {confusion_gate!r}")
+    _validate_loss_semantics(loss_mode, score_mode)
+    if not 0.0 < gamma_init <= 1.0:
+        raise ValueError(f"gamma_init must be in (0, 1], got {gamma_init}")
+    if requested_diff_write and not diff_write:
+        print(
+            f"[sym/steer] {loss_mode} forces diff_write=off "
+            "to prevent current-label leakage",
+            flush=True,
+        )
+    cfg["loss_mode"] = loss_mode
+    cfg["diff_write"] = "on" if diff_write else "off"
+    cfg["gamma_init"] = gamma_init
+    cfg["legacy_prompt_protocol"] = "on" if legacy_prompt_protocol else "off"
+    cfg["prompt_protocol"] = prompt_protocol_name(legacy_prompt_protocol)
+    cfg["prompt_context_format"] = prompt_context_format(legacy_prompt_protocol)
+    cfg["candidate_tokenization_format"] = candidate_tokenization_format(
+        legacy_prompt_protocol
+    )
+    cfg["dtype"] = dtype_name
+    cfg["max_length"] = max_len
+    cfg["freeze_backbone"] = "true"
+    cfg["center_lora_checkpoint"] = str(lora_ckpt.resolve()) if lora_ckpt else None
+    cfg["center_lora_checkpoint_sha256"] = (
+        sha256_path(lora_ckpt / "lora_adapter") if lora_ckpt is not None else None
+    )
+    cfg["train_center_lora"] = "on" if train_center_lora else "off"
     if task_state_mode not in {"shared", "separate"}:
         raise ValueError(f"task_state_mode must be shared/separate, got {task_state_mode!r}")
     if score_mode not in {"peer_name", "candidate_yesno"}:
@@ -166,13 +280,6 @@ def main():
     if score_mode == "candidate_yesno" and peer_mode != "joint":
         print("[sym/steer] score_mode=candidate_yesno uses joint candidate prompts; "
               f"peer_mode={peer_mode!r} is kept only for legacy metrics.", flush=True)
-    confusion_threshold = cfg.get("confusion_threshold")
-    if confusion_gate != "off":
-        if confusion_threshold is None:
-            confusion_threshold = 0.8 if confusion_gate == "entropy" else 2.0
-        confusion_threshold = float(confusion_threshold)
-        print(f"[sym/steer] confusion_gate={confusion_gate} threshold={confusion_threshold} "
-              f"temperature={confusion_temp}", flush=True)
 
     tok_src = str(lora_ckpt) if lora_ckpt is not None and (lora_ckpt / "tokenizer_config.json").exists() else model_name
     tok = AutoTokenizer.from_pretrained(tok_src, local_files_only=bool(cfg.get("local_files_only", False)))
@@ -238,20 +345,38 @@ def main():
                                write_mode=write_mode,
                                value_in_dim=(base.config.hidden_size if write_mode == "carry" else None),
                                whiten=whiten,
+                               gamma_init=gamma_init,
                                decay_mode=decay_mode,
                                per_peer_decay=per_peer_decay,
                                use_joint=use_joint, device=device).to(device)
+    if loss_mode in CAUSAL_LOSS_MODES:
+        # Event states are intentionally detached between examples. Gamma/eta therefore
+        # cannot receive a causal gradient without cross-event BPTT; keep them explicit
+        # fixed hyperparameters instead of leaving zero-gradient entries in the optimizer.
+        mem._eta_raw.requires_grad_(False)
+        mem._theta.requires_grad_(False)
+        mem._theta_joint.requires_grad_(False)
+        cfg["dynamics_training"] = "fixed_causal"
+    else:
+        cfg["dynamics_training"] = "legacy_diff_write" if diff_write else "fixed"
     mem.train()
     steerer = ActivationSteerer(base, rank=rank).to(device)
 
-    memory_params = list(mem.parameters()) + list(steerer.parameters())
+    memory_params = [
+        param for param in list(mem.parameters()) + list(steerer.parameters())
+        if param.requires_grad
+    ]
     lora_named = [(n, p) for n, p in model.named_parameters() if "lora_" in n and p.requires_grad]
     lora_params = [p for _, p in lora_named]
     params = memory_params + lora_params
-    named = list(mem.named_parameters()) + list(steerer.named_parameters()) + lora_named
+    named = [
+        (name, param)
+        for name, param in list(mem.named_parameters()) + list(steerer.named_parameters())
+        if param.requires_grad
+    ] + lora_named
     print(f"[sym/steer] trainable params: total={sum(p.numel() for p in params)} "
           f"(lora={sum(p.numel() for _, p in lora_named)}, peer_mode={peer_mode}, "
-          f"score_mode={score_mode})", flush=True)
+          f"score_mode={score_mode}, loss_mode={loss_mode}, diff_write={diff_write})", flush=True)
     memory_lr = float(cfg.get("learning_rate", 1e-3))
     lora_lr = float(cfg.get("lora_learning_rate", cfg.get("learning_rate", 1e-4)))
     weight_decay = float(cfg.get("weight_decay", 0.0))
@@ -265,8 +390,27 @@ def main():
     cand_ids = candidate_token_ids(tok, num_peers)
     yes_ids, no_ids = yes_no_token_ids(tok)
     records = JsonlDataset(cfg["offline_data"]).records
+    if not records:
+        raise ValueError("Training data is empty")
     total_steps = int(cfg.get("max_steps", len(records)))
-    sched = get_cosine_schedule_with_warmup(optim, int(total_steps * float(cfg.get("warmup_ratio", 0.03))), total_steps)
+    planned_backward = _planned_backward_events(
+        records, num_peers, total_steps, loss_mode
+    )
+    if planned_backward < 1:
+        raise ValueError("Training stream has no events with a valid objective")
+    planned_optimizer_steps = math.ceil(planned_backward / grad_accum)
+    warmup_steps = int(planned_optimizer_steps * float(cfg.get("warmup_ratio", 0.03)))
+    sched = get_cosine_schedule_with_warmup(
+        optim, warmup_steps, planned_optimizer_steps
+    )
+    cfg["planned_backward_events"] = planned_backward
+    cfg["planned_optimizer_steps"] = planned_optimizer_steps
+    cfg["warmup_optimizer_steps"] = warmup_steps
+    print(
+        f"[sym/steer] schedule: events={total_steps} backward={planned_backward} "
+        f"optimizer_steps={planned_optimizer_steps} warmup_steps={warmup_steps}",
+        flush=True,
+    )
 
     # phi=proto: precompute FIXED task centroids from the training data (one CM mean per task
     # present in the train stream) + global whitening stats, then install. Tasks ABSENT from
@@ -279,22 +423,27 @@ def main():
             continue
         q = str(rec.get("problem", rec.get("question", "")))
         with torch.no_grad():
-            h = cm_context_vector(base, tok, q, device=device, layer_frac=phi_layer_frac)
+            h = cm_context_vector(
+                base, tok, q, device=device, layer_frac=phi_layer_frac
+            )
         by_task.setdefault(tt, []).append(h.float())
     proto_tasks = sorted(by_task)
-    cents = torch.stack([torch.stack(by_task[t]).mean(0) for t in proto_tasks])  # [n_proto, H]
+    cents = torch.stack([
+        torch.stack(by_task[t]).mean(0) for t in proto_tasks
+    ])
     allh = torch.cat([torch.stack(by_task[t]) for t in proto_tasks])
     mem.set_prototypes(cents, allh.mean(0), allh.std(0))
-    print(f"[sym/steer] phi=proto centroids from tasks={proto_tasks} "
-          f"(n={ {t: len(by_task[t]) for t in proto_tasks} })", flush=True)
+    print(
+        f"[sym/steer] phi=proto centroids from tasks={proto_tasks} "
+        f"(n={ {t: len(by_task[t]) for t in proto_tasks} })",
+        flush=True,
+    )
 
     mem.reset()
     base_snap = mem.snapshot()
     task_snaps = {}
     step = 0; probed = False
     backward_steps = 0
-    gate_total = gate_used = 0
-    entropy_sum = margin_sum = 0.0
     last_loss = None
     log_every = int(cfg.get("logging_steps", 50))
     while step < total_steps:
@@ -302,14 +451,20 @@ def main():
             if step >= total_steps:
                 break
             slot_names, texts, corr, real, peer_ids, tgt = _example_view(rec, num_peers)
-            if real < 1 or tgt is None or tgt >= real:
+            # Preserve legacy CE behavior: an event with no target is skipped entirely.
+            skip_objective = _skip_training_event(real, tgt, loss_mode)
+            if real < 1 or (loss_mode == LOSS_FIRST_CORRECT_CE and skip_objective):
                 step += 1
                 continue
             if task_state_mode == "separate":
                 task_key = task_type_of(rec)
                 mem.restore(task_snaps.get(task_key, base_snap))
             q = str(rec.get("problem", rec.get("question", "")))
-            rag_ctx = str(rec.get("retrieved_context", rec.get("context", ""))) if cfg.get("include_context") else ""
+            rag_ctx = candidate_context_text(
+                rec,
+                include_context=as_bool(cfg.get("include_context"), False),
+                legacy_prompt_protocol=legacy_prompt_protocol,
+            )
             pid = pmask = None
             one_pids = None
             candidate_pids = candidate_mask = None
@@ -321,6 +476,7 @@ def main():
                     real=real,
                     max_length=max_len,
                     device=device,
+                    legacy_prompt_protocol=legacy_prompt_protocol,
                 )
             else:
                 prompt = build_joint_prompt(q, slot_names, texts, context=rag_ctx or None,
@@ -365,58 +521,45 @@ def main():
                 steerer.steer_vec = None
                 return lp
 
-            def score_center_slots():
-                steerer.steer_vec = None
-                if score_mode == "candidate_yesno":
-                    vals = score_candidate_batch()
-                    return [float(vals[s]) for s in range(real)]
-                if peer_mode == "joint":
-                    vals = model.score_candidates(pid, pmask, cand_ids)[0]
-                    return [float(vals[s]) for s in range(real)]
-                return [float(score_slot(s)) for s in range(real)]
-
-            use_memory_now = True
-            if confusion_gate != "off":
-                with torch.no_grad():
-                    center_scores = score_center_slots()
-                center_entropy, center_margin = _center_uncertainty(center_scores, confusion_temp)
-                use_memory_now = _use_memory_for_confusion(
-                    confusion_gate, center_entropy, center_margin, confusion_threshold)
-                gate_total += 1
-                gate_used += int(use_memory_now)
-                entropy_sum += center_entropy
-                margin_sum += center_margin
-
-            if use_memory_now:
-                # score each candidate WITH the steering vector in-graph; logp_CM under steering
-                # carries the gradient back to the memory params (phi/phi_proj/theta/proj/gain).
-                steer_vecs = []
-                for s in range(real):
-                    pj = peer_ids[s]
-                    if diff_write:
-                        # idea-2: read through one DIFFERENTIABLE write so loss reaches theta/eta.
-                        # sign = ground-truth correctness of THIS peer (train-only signal).
-                        vv = value_vecs[s] if value_vecs is not None else None
-                        steer_vecs.append(mem.steer_vector_diff(
-                            pj, phi_ctx, 1.0 if corr[s] else -1.0, value_vec=vv))
-                    else:
-                        steer_vecs.append(mem.steer_vector(pj, phi_ctx))
-                if score_mode == "candidate_yesno":
-                    logit_vec = score_candidate_batch(torch.stack(steer_vecs))
+            # Every processed event is scored with Sigma steering. There is no
+            # center-only fallback; Base is an evaluation-only explicit ablation.
+            steer_vecs = []
+            for s in range(real):
+                pj = peer_ids[s]
+                if diff_write:
+                    # idea-2: read through one DIFFERENTIABLE write so loss reaches theta/eta.
+                    # sign = ground-truth correctness of THIS peer (train-only signal).
+                    vv = value_vecs[s] if value_vecs is not None else None
+                    steer_vecs.append(mem.steer_vector_diff(
+                        pj, phi_ctx, 1.0 if corr[s] else -1.0, value_vec=vv))
                 else:
-                    logits = []
-                    for s in range(real):
-                        steerer.steer_vec = steer_vecs[s]
-                        logits.append(score_slot(s))
-                    logit_vec = torch.stack(logits)
-                loss = torch.nn.functional.cross_entropy(
-                    logit_vec.unsqueeze(0).float(), torch.tensor([tgt], device=device)) / grad_accum
+                    steer_vecs.append(mem.steer_vector(pj, phi_ctx))
+            if score_mode == "candidate_yesno":
+                steered_logit_vec = score_candidate_batch(torch.stack(steer_vecs))
+            else:
+                logits = []
+                for s in range(real):
+                    steerer.steer_vec = steer_vecs[s]
+                    logits.append(score_slot(s))
+                steered_logit_vec = torch.stack(logits)
+            logit_vec = steered_logit_vec
+            raw_loss = _candidate_training_loss(
+                logit_vec,
+                corr[:real],
+                loss_mode=loss_mode,
+            )
+            if raw_loss is None:
+                if not skip_objective:
+                    raise RuntimeError("processed event unexpectedly has no training target")
+                last_loss = None
+            else:
+                loss = raw_loss / grad_accum
                 loss.backward()
                 backward_steps += 1
                 last_loss = float(loss) * grad_accum
                 if not probed and backward_steps >= grad_accum * 3:
-                    # probe AFTER the matrices are warm — at step 0 M=0 so read==0 and grad is
-                    # legitimately zero (d/dphi of phi^T 0 phi = 0); that is not a bug.
+                    # Probe after the matrices are warm: at step 0 M=0, so a zero read
+                    # gradient is legitimate rather than evidence of a broken path.
                     _probe_grad(named, "all trainable params")
                     if lora_named:
                         _probe_grad(lora_named, "LoRA params")
@@ -428,26 +571,23 @@ def main():
             # correctness. (A trainable judge head -> learned s was tried and dropped: from a
             # frozen-CM mid-layer feature, "answer correctness" is not linearly readable
             # (probe AUC ~0.69), so the judge could not produce a usable s; see git history.)
-            if use_memory_now:
-                signs = [1.0 if corr[s] else -1.0 for s in range(real)]
-                for s in range(real):
-                    vv = value_vecs[s] if value_vecs is not None else None
-                    mem.update(peer_ids[s], signs[s], phi_ctx, value_vec=vv)
-                mem.update_joint(list(signs) + [0.0] * (num_peers - real))
-                if task_state_mode == "separate":
-                    task_snaps[task_type_of(rec)] = mem.snapshot()
+            signs = [1.0 if corr[s] else -1.0 for s in range(real)]
+            for s in range(real):
+                vv = value_vecs[s] if value_vecs is not None else None
+                mem.update(peer_ids[s], signs[s], phi_ctx, value_vec=vv)
+            joint_outcomes = list(signs) + [0.0] * (num_peers - real)
+            mem.update_joint(joint_outcomes)
+            if task_state_mode == "separate":
+                task_snaps[task_type_of(rec)] = mem.snapshot()
             step += 1
             if step % log_every == 0:
                 gd = mem.gamma().detach()
                 gstr = (f"{float(gd):.3f}" if gd.ndim == 0
                         else "[" + ",".join(f"{x:.3f}" for x in gd.reshape(gd.shape[0], -1).mean(-1).tolist()) + "]")
-                gate_msg = ""
-                if confusion_gate != "off" and gate_total:
-                    gate_msg = f" gate_use={gate_used}/{gate_total}({gate_used/gate_total:.3f})"
-                loss_msg = f"{last_loss:.4f}" if last_loss is not None else "nan"
+                loss_msg = f"{last_loss:.4f}" if last_loss is not None else "skip"
                 print(f"[sym/steer] step {step}/{total_steps} loss={loss_msg} "
-                      f"gamma={gstr} eta={float(mem.eta):.3f} gain={float(steerer.gain):.3f}"
-                      f"{gate_msg}", flush=True)
+                      f"gamma={gstr} eta={float(mem.eta):.3f} "
+                      f"steer_gain={float(steerer.gain):.3f}", flush=True)
 
     # save trained params + final matrices
     if backward_steps % grad_accum != 0:
@@ -460,24 +600,14 @@ def main():
         adapter_dir = out_dir / "lora_adapter"
         base.save_pretrained(adapter_dir)
         tok.save_pretrained(out_dir)
-    (out_dir / "train_config.json").write_text(json.dumps({k: str(v) for k, v in cfg.items()}, indent=1))
-    if confusion_gate != "off":
-        (out_dir / "train_metrics.json").write_text(json.dumps({
-            "score_mode": score_mode,
-            "peer_mode": peer_mode,
-            "num_peers": num_peers,
-            "per_peer_decay": per_peer_decay,
-            "task_state_mode": task_state_mode,
-            "confusion_gate": confusion_gate,
-            "confusion_threshold": confusion_threshold,
-            "confusion_temperature": confusion_temp,
-            "memory_used": gate_used,
-            "memory_gate_total": gate_total,
-            "memory_use_rate": round(gate_used / gate_total, 6) if gate_total else 0.0,
-            "mean_center_entropy": round(entropy_sum / gate_total, 6) if gate_total else None,
-            "mean_center_margin": round(margin_sum / gate_total, 6) if gate_total else None,
-            "backward_steps": backward_steps,
-        }, indent=1))
+    serialized_config = {
+        key: (None if value is None else str(value))
+        for key, value in cfg.items()
+    }
+    (out_dir / "train_config.json").write_text(
+        json.dumps(serialized_config, indent=1) + "\n"
+    )
+    write_checkpoint_manifest(out_dir, Path(cfg["offline_data"]))
     print(f"[sym/steer] saved to {out_dir}", flush=True)
 
 

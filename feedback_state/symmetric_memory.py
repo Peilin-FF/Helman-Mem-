@@ -24,6 +24,7 @@ arriving — collapse). Only this module's params train; the CM backbone stays f
 """
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import torch
@@ -32,6 +33,24 @@ import torch.nn as nn
 # Task types used to build phi_t. Order fixes the embedding rows; "math/code/rag" cover
 # the CF unified streams (feedback_state/tasks.py::task_type_of returns these lowercased).
 DEFAULT_TASK_TYPES = ("math", "code", "rag")
+RELIABILITY_ZSCORE_EPS = 1e-3
+
+
+def zscore_peer_values(
+    values: torch.Tensor, *, eps: float = RELIABILITY_ZSCORE_EPS
+) -> torch.Tensor:
+    """Standardize peer values with a finite near-tie sensitivity.
+
+    ``sqrt(var + eps^2)`` behaves like an ordinary z-score once peers differ,
+    while preventing a nearly constant reliability vector from amplifying
+    floating-point noise or producing a gradient proportional to ``1e6``.
+    """
+    vals = torch.as_tensor(values)
+    if vals.ndim != 1:
+        vals = vals.reshape(-1)
+    centered = vals - vals.mean()
+    scale = (centered.square().mean() + float(eps) ** 2).sqrt()
+    return centered / scale
 
 
 class Whitener(nn.Module):
@@ -291,7 +310,7 @@ class SymmetricTrustMemory(nn.Module):
 
     @torch.no_grad()
     def update_joint(self, outcome_vec: Sequence[float]) -> None:
-        """G <- gamma_G*G + eta*o o^T  (CM-owned agent-agent reputation; symmetric)."""
+        """G <- gamma_G*G + eta*o o^T (symmetric joint state)."""
         if not self.use_joint:
             return
         o = torch.zeros(self.num_peers, dtype=self._mdtype, device=self.G.device)

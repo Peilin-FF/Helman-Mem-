@@ -7,7 +7,6 @@ central_model: Qwen/Qwen3-4B-Instruct-2507
 peer_models:
   - google/gemma-3-4b-it
   - microsoft/Phi-4-mini-instruct
-  - mistralai/Ministral-3-3B-Instruct-2512-BF16
   - Qwen/Qwen2.5-Coder-7B-Instruct
 deprive_context_models: []
 generation_batch_size: 4

@@ -80,6 +80,22 @@
   },
   {
     "type": "html",
+    "html": "<h2>7. SuperGLUE Breakdown · Qwen3 and Qwen3.5</h2><p>Accuracy on the six full SuperGLUE validation subsets used in the 3-peer generalization evaluation. Each Delta is <b>Sigma − Center</b> in percentage points. Qwen3 values are the reported experiment results; Qwen3.5 values were recomputed from the corresponding <code>selections.jsonl</code> files.</p><div class='callout'><div class='callout-h'>Result version</div><p>These directly comparable runs use the shared candidate Yes/No scorer with <code>use_joint=false</code>. They therefore precede the newly enabled joint matrix $G$ and should be retained as the pre-$G$ result version.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Dataset", "N", "Qwen3-0.6B Center", "Qwen3-0.6B Sigma", "Delta", "Qwen3-4B Center", "Qwen3-4B Sigma", "Delta", "Qwen3-8B Center", "Qwen3-8B Sigma", "Delta", "Qwen3.5-4B Center", "Qwen3.5-4B Sigma", "Delta", "Qwen3.5-9B Center", "Qwen3.5-9B Sigma", "Delta"],
+    "rows": [
+      ["superglue_wic", "638", "54.23%", "61.60%", "+7.37 pp", "54.86%", "61.29%", "+6.43 pp", "59.25%", "61.60%", "+2.35 pp", "55.33%", "61.76%", "+6.43 pp", "58.31%", "61.29%", "+2.98 pp"],
+      ["superglue_rte", "277", "50.90%", "88.09%", "+37.18 pp", "45.85%", "86.28%", "+40.43 pp", "60.65%", "88.09%", "+27.44 pp", "87.36%", "87.36%", "+0.00 pp", "86.28%", "85.92%", "-0.36 pp"],
+      ["superglue_cb", "56", "44.64%", "82.14%", "+37.50 pp", "48.21%", "82.14%", "+33.93 pp", "35.71%", "80.36%", "+44.64 pp", "67.86%", "82.14%", "+14.29 pp", "73.21%", "82.14%", "+8.93 pp"],
+      ["superglue_copa", "100", "95.00%", "96.00%", "+1.00 pp", "96.00%", "96.00%", "+0.00 pp", "96.00%", "92.00%", "-4.00 pp", "96.00%", "92.00%", "-4.00 pp", "96.00%", "93.00%", "-3.00 pp"],
+      ["superglue_wsc", "104", "36.54%", "41.35%", "+4.81 pp", "36.54%", "42.31%", "+5.77 pp", "36.54%", "41.35%", "+4.81 pp", "36.54%", "43.27%", "+6.73 pp", "39.42%", "43.27%", "+3.85 pp"],
+      ["superglue_multirc", "4,848", "81.11%", "84.55%", "+3.44 pp", "83.97%", "83.99%", "+0.02 pp", "83.70%", "84.78%", "+1.07 pp", "83.07%", "84.28%", "+1.22 pp", "84.10%", "85.15%", "+1.05 pp"]
+    ]
+  },
+  {
+    "type": "html",
     "html": "<h2>Sources</h2><div class='card'><p>参考来源：<a href='https://super.gluebenchmark.com/tasks'>SuperGLUE tasks</a>；<a href='https://www.tensorflow.org/datasets/catalog/super_glue'>TensorFlow Datasets SuperGLUE</a>；<a href='https://allenai.org/open-data'>AI2 ARC open data</a>；<a href='https://www.tensorflow.org/datasets/catalog/piqa'>PIQA TFDS</a>；<a href='https://rowanzellers.com/hellaswag/'>HellaSwag project page</a>；<a href='https://huggingface.co/datasets/allenai/winogrande'>WinoGrande dataset card</a>；<a href='https://huggingface.co/datasets/allenai/openbookqa'>OpenBookQA dataset card</a>；<a href='https://huggingface.co/datasets/allenai/sciq'>SciQ dataset card</a>；<a href='https://aclanthology.org/N19-1421/'>CommonsenseQA paper</a>；<a href='https://leaderboard.allenai.org/socialiqa/submissions/public'>SocialIQA leaderboard</a>；<a href='https://huggingface.co/datasets/cais/mmlu'>CAIS MMLU dataset card</a>；<a href='https://github.com/suzgunmirac/BIG-Bench-Hard'>BIG-Bench Hard repository</a>。</p></div>"
   }
 ]

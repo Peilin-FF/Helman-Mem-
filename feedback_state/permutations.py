@@ -16,9 +16,9 @@ Conventions (single source of truth)
   canonical-ordered sequence (responses, names, targets) into slot order.
 * ``invert_perm(perm)[peer_id] = slot`` (``peer_to_slot``).
 
-Fixed orders (peer_0=gemma, peer_1=phi, peer_2=ministral):
-    orig = [0, 1, 2]  -> slot0=gemma, slot1=phi,   slot2=ministral
-    swap = [1, 0, 2]  -> slot0=phi,   slot1=gemma, slot2=ministral   (swaps the first two)
+Fixed orders (peer_0=gemma, peer_1=phi, peer_2=qwen-coder):
+    orig = [0, 1, 2]  -> slot0=gemma, slot1=phi,   slot2=qwen-coder
+    swap = [1, 0, 2]  -> slot0=phi,   slot1=gemma, slot2=qwen-coder   (swaps the first two)
 """
 from __future__ import annotations
 
@@ -93,11 +93,11 @@ def apply_perm(seq: Sequence[Any], perm: Sequence[int]) -> list[Any]:
 # Canonical peer view of a record + short identity names
 # ---------------------------------------------------------------------------
 
-_SHORT_NAME_TOKENS = ("gemma", "phi", "ministral", "qwen", "mistral", "llama")
+_SHORT_NAME_TOKENS = ("gemma", "phi", "qwen", "llama", "bitcpm")
 
 
 def short_peer_name(model_name: str) -> str:
-    """Map a full model id to a short label (gemma / phi / ministral / ...).
+    """Map a full model id to a short label (gemma / phi / qwen / ...).
 
     Falls back to the raw name when no known token matches, so logging is robust
     when peers are added or swapped out.

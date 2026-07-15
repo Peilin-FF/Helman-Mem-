@@ -16,16 +16,8 @@ CKPT="${CKPT:-outputs/sigma_candidate_yesno_${TAG}/proto}"
 EVAL_ROOT="${EVAL_ROOT:-outputs/eval_sigma_candidate_yesno_${TAG}}"
 LOG_ROOT="${LOG_ROOT:-logs/candidate_yesno_${TAG}}"
 TEST_DIR="${TEST_DIR:-data/CF_unified}"
-THRESHOLD_ARGS=()
 
 mkdir -p "$LOG_ROOT"
-
-if [ -n "${CONFUSION_GATE:-}" ] && [ "$CONFUSION_GATE" != "off" ]; then
-  THRESHOLD_ARGS+=(--confusion_gate "$CONFUSION_GATE")
-  if [ -n "${CONFUSION_THRESHOLD:-}" ]; then
-    THRESHOLD_ARGS+=(--confusion_threshold "$CONFUSION_THRESHOLD")
-  fi
-fi
 
 if [ -f "$PID_FILE" ]; then
   train_pid="$(cat "$PID_FILE")"
@@ -51,7 +43,6 @@ for split in p0 p50 p70 p90; do
     --score_mode candidate_yesno \
     --peer_mode joint \
     --per_peer_decay off \
-    "${THRESHOLD_ARGS[@]}" \
     > "$LOG_ROOT/eval_${split}.log" 2>&1
   tail -3 "$LOG_ROOT/eval_${split}.log"
 done

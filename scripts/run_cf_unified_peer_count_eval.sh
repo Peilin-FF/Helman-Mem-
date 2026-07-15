@@ -22,11 +22,14 @@ MAX_LENGTH="${MAX_LENGTH:-8192}"
 GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-16}"
 GEN_MAX_NEW_TOKENS="${GEN_MAX_NEW_TOKENS:-1024}"
 GEN_MAX_NEW_TOKENS_BY_TASK="${GEN_MAX_NEW_TOKENS_BY_TASK:-math=2048,code=1024,rag=256,boolqa=48}"
-PEER3_TAG="${PEER3_TAG:-peer3_ministral}"
-PEER3_MODEL="${PEER3_MODEL:-/mnt/data/peilin/HF_MODEL/Ministral-3-3B-Instruct-2512-BF16}"
+PEER3_TAG="${PEER3_TAG:-peer3_llama}"
+PEER3_MODEL="${PEER3_MODEL:-/mnt/data/peilin/HF_MODEL/Llama-3.2-3B-Instruct}"
 PEER3_KEY="${PEER3_KEY:-peer_3}"
-PEER3_SHARDS="${PEER3_SHARDS:-3}"
-PEER3_FLAVOR="${PEER3_FLAVOR:-ministral}"
+PEER3_SHARDS="${PEER3_SHARDS:-2}"
+PEER4_TAG="${PEER4_TAG:-peer4_bitcpm}"
+PEER4_MODEL="${PEER4_MODEL:-/mnt/data/peilin/HF_MODEL/BitCPM-CANN-3B}"
+PEER4_KEY="${PEER4_KEY:-peer_4}"
+PEER4_SHARDS="${PEER4_SHARDS:-2}"
 
 mkdir -p "$WORK_DIR"/extra "$OUT_ROOT" "$LOGD"
 
@@ -168,39 +171,24 @@ fill_peer_correct() {
   require_count "$labeled" "$base_n"
 }
 
-peer3_extra_args=()
-if [[ "$PEER3_FLAVOR" == "ministral" ]]; then
-  peer3_extra_args=(--tokenizer_mode mistral --config_format mistral --load_format mistral --enforce_eager true)
-fi
-
 if [[ "$(count_jsonl "$WORK_DIR/extra/${PEER3_TAG}.labeled.jsonl")" != "$base_n" ]]; then
   launch_add_peer_shards \
     "$PEER3_TAG" "$PEER3_KEY" "$PEER3_MODEL" \
-    "$PEER3_SHARDS" "${GPU_PEER3:-0,1,2}" \
-    "${peer3_extra_args[@]}"
+    "$PEER3_SHARDS" "${GPU_PEER3:-3,4}"
   combine_shards "$PEER3_TAG"
   fill_peer_correct "$PEER3_TAG" "$PEER3_KEY"
 fi
 
-if [[ "$(count_jsonl "$WORK_DIR/extra/peer4_llama.labeled.jsonl")" != "$base_n" || "$(count_jsonl "$WORK_DIR/extra/peer5_bitcpm.labeled.jsonl")" != "$base_n" ]]; then
-  pids=()
-  if [[ "$(count_jsonl "$WORK_DIR/extra/peer4_llama.labeled.jsonl")" != "$base_n" ]]; then
-    (launch_add_peer_shards peer4_llama peer_4 /mnt/data/peilin/HF_MODEL/Llama-3.2-3B-Instruct 2 "${GPU_PEER4:-3,4}"; combine_shards peer4_llama; fill_peer_correct peer4_llama peer_4) \
-      > "$LOGD/driver_peer4_llama.log" 2>&1 &
-    pids+=("$!")
-  fi
-  if [[ "$(count_jsonl "$WORK_DIR/extra/peer5_bitcpm.labeled.jsonl")" != "$base_n" ]]; then
-    (launch_add_peer_shards peer5_bitcpm peer_5 /mnt/data/peilin/HF_MODEL/BitCPM-CANN-3B 2 "${GPU_PEER5:-5,6}"; combine_shards peer5_bitcpm; fill_peer_correct peer5_bitcpm peer_5) \
-      > "$LOGD/driver_peer5_bitcpm.log" 2>&1 &
-    pids+=("$!")
-  fi
-  for pid in "${pids[@]}"; do
-    wait "$pid"
-  done
+if [[ "$(count_jsonl "$WORK_DIR/extra/${PEER4_TAG}.labeled.jsonl")" != "$base_n" ]]; then
+  launch_add_peer_shards \
+    "$PEER4_TAG" "$PEER4_KEY" "$PEER4_MODEL" \
+    "$PEER4_SHARDS" "${GPU_PEER4:-5,6}"
+  combine_shards "$PEER4_TAG"
+  fill_peer_correct "$PEER4_TAG" "$PEER4_KEY"
 fi
 
 build_clean_p0() {
-  mkdir -p "$WORK_DIR/clean/peers4" "$WORK_DIR/clean/peers5" "$WORK_DIR/clean/peers6"
+  mkdir -p "$WORK_DIR/clean/peers4" "$WORK_DIR/clean/peers5"
   "$PY" -u scripts/merge_peer_from_reference.py \
     --target "$BASE_DIR/p0.jsonl" \
     --reference "$WORK_DIR/extra/${PEER3_TAG}.labeled.jsonl" \
@@ -208,17 +196,11 @@ build_clean_p0() {
     --reference_peer_key "$PEER3_KEY" --target_peer_key peer_3
   "$PY" -u scripts/merge_peer_from_reference.py \
     --target "$WORK_DIR/clean/peers4/p0.jsonl" \
-    --reference "$WORK_DIR/extra/peer4_llama.labeled.jsonl" \
+    --reference "$WORK_DIR/extra/${PEER4_TAG}.labeled.jsonl" \
     --output "$WORK_DIR/clean/peers5/p0.jsonl" \
-    --reference_peer_key peer_4 --target_peer_key peer_4
-  "$PY" -u scripts/merge_peer_from_reference.py \
-    --target "$WORK_DIR/clean/peers5/p0.jsonl" \
-    --reference "$WORK_DIR/extra/peer5_bitcpm.labeled.jsonl" \
-    --output "$WORK_DIR/clean/peers6/p0.jsonl" \
-    --reference_peer_key peer_5 --target_peer_key peer_5
+    --reference_peer_key "$PEER4_KEY" --target_peer_key peer_4
   require_count "$WORK_DIR/clean/peers4/p0.jsonl" "$base_n"
   require_count "$WORK_DIR/clean/peers5/p0.jsonl" "$base_n"
-  require_count "$WORK_DIR/clean/peers6/p0.jsonl" "$base_n"
 }
 
 split_clean_p0_by_dataset() {
@@ -272,7 +254,7 @@ build_cf_splits_for_peers() {
 }
 
 build_clean_p0 > "$LOGD/build_clean_p0.log" 2>&1
-for peers in 4 5 6; do
+for peers in 4 5; do
   build_cf_splits_for_peers "$peers" > "$LOGD/build_cf_peers${peers}.log" 2>&1
 done
 echo "[$(date '+%F %T')] built peer-count CF-balanced streams from clean p0"
@@ -314,7 +296,7 @@ fi
 
 pids=()
 job_i=0
-for peers in 4 5 6; do
+for peers in 4 5; do
   for split in p0 p50 p70 p90; do
     for arm in center sigma; do
       gpu="${eval_gpus[$((job_i % ${#eval_gpus[@]}))]}"

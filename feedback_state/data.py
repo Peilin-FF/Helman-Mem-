@@ -336,8 +336,8 @@ class FeedbackDataCollator:
         # the peer-memory prefix.
         self.task = str(task).lower()
         # FIXED deterministic slot order for ALL training examples (no randomness):
-        #   "orig" -> slot0=gemma, slot1=phi, slot2=ministral
-        #   "swap" -> slot0=phi,   slot1=gemma, slot2=ministral
+        #   "orig" -> slot0=gemma, slot1=phi, slot2=qwen-coder
+        #   "swap" -> slot0=phi,   slot1=gemma, slot2=qwen-coder
         self.peer_order = str(peer_order).lower()
         # "id" embeds each peer's model identity into its encoded block (identity
         # moves with the peer); "anon" leaks no identity (only slot is observable).

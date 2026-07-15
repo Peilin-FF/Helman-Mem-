@@ -25,6 +25,7 @@ from feedback_state.joint_prompt import (
     peer_response_char_spans,
 )
 from feedback_state.permutations import apply_perm, canonical_peer_view, invert_perm, named_order
+from feedback_state.prompt_protocol import validate_prompt_protocol
 
 VARIANT_AR = "ar_shared_state_selector"
 VARIANT_BCE = "joint_bce_shared_state_selector"
@@ -54,6 +55,7 @@ def batch_candidate_judge_inputs(
     real: int,
     max_length: int,
     device: torch.device | None = None,
+    legacy_prompt_protocol: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Tokenize all candidate Yes/No judge prompts for one example as a batch.
 
@@ -73,12 +75,35 @@ def batch_candidate_judge_inputs(
         )
         for s in range(int(real))
     ]
-    encoded = [
-        tokenizer(p, add_special_tokens=True, truncation=True, max_length=max_length)["input_ids"]
-        for p in prompts
-    ]
-    if not encoded:
+    if not prompts:
         raise ValueError("real must be >= 1 for candidate judge batching")
+    validate_prompt_protocol(
+        legacy_prompt_protocol=legacy_prompt_protocol,
+        max_length=max_length,
+    )
+    encoded = []
+    for slot, prompt in enumerate(prompts):
+        if legacy_prompt_protocol:
+            ids = tokenizer(
+                prompt,
+                add_special_tokens=True,
+                truncation=True,
+                max_length=int(max_length),
+            )["input_ids"]
+            encoded.append(ids)
+            continue
+        ids = tokenizer(
+            prompt,
+            add_special_tokens=True,
+            truncation=False,
+        )["input_ids"]
+        prompt_length = len(ids)
+        if prompt_length > int(max_length):
+            raise ValueError(
+                "Candidate judge prompt exceeds max_length: "
+                f"slot={slot}, length={prompt_length}, max_length={int(max_length)}"
+            )
+        encoded.append(ids)
     pad_id = tokenizer.pad_token_id
     if pad_id is None:
         pad_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0

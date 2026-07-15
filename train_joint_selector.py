@@ -16,7 +16,7 @@ from pathlib import Path
 
 import torch
 
-# Newer center models (Ministral-3, Qwen3.5) need transformers>=5.x, which references
+# Newer center models such as Qwen3.5 need transformers>=5.x, which references
 # torch.float8_e8m0fnu at import time. Shim it before transformers is imported.
 from feedback_state.newarch_loader import apply_torch_fp8_shim, load_central_model
 

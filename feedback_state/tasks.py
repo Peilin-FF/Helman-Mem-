@@ -64,13 +64,25 @@ def qa_extract_answer(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
         return ""
-    # Prefer an explicit "Answer: X" tail if present.
-    match = list(re.finditer(r"(?:final\s+answer|answer)\s*(?:is|:)\s*([^\n\r]+)", raw, flags=re.IGNORECASE))
-    if match:
-        return match[-1].group(1).strip().strip(".")
-    # Else the last non-empty line (models often end with the short answer).
-    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-    return (lines[-1] if lines else raw).strip().strip(".")
+    # Prefer an explicit "Answer: X" tail. Horizontal whitespace is deliberate:
+    # \s would cross a newline and turn a marker-only line into a bogus answer.
+    matches = list(
+        re.finditer(
+            r"(?:final\s+answer|answer)[ \t]*(?:(?:is)[ \t]*:?[ \t]*|:[ \t]*)([^\n\r]+)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    for match in reversed(matches):
+        candidate = match.group(1).strip().strip(".")
+        if any(ch.isalnum() for ch in candidate):
+            return candidate
+    # Ignore trailing formatting fragments such as ":", "[", or ".".
+    lines = [ln.strip().strip(".") for ln in raw.splitlines() if ln.strip()]
+    for candidate in reversed(lines):
+        if any(ch.isalnum() for ch in candidate):
+            return candidate
+    return raw.strip().strip(".")
 
 
 def qa_f1(pred: str, golds: list[str]) -> float:
@@ -102,15 +114,36 @@ def qa_exact_match(pred: str, golds: list[str]) -> bool:
 # Code extraction (used for reporting + by the offline scorer)
 # ---------------------------------------------------------------------------
 
-_CODE_FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", flags=re.DOTALL | re.IGNORECASE)
+_TAGGED_CODE_FENCE_RE = re.compile(
+    r"```(?:python|py)[^\S\r\n]*\r?\n(.*?)(?=```)",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+_CODE_FENCE_RE = re.compile(r"```")
 
 
 def code_extract_answer(text: str) -> str:
     """Extract a code block from a peer response (fenced block, else raw text)."""
     raw = str(text or "")
-    blocks = _CODE_FENCE_RE.findall(raw)
+    # The closer is a lookahead so a same-line sequence such as
+    # ````` ```python`` still exposes the second tagged opener to findall().
+    tagged = [block.strip() for block in _TAGGED_CODE_FENCE_RE.findall(raw) if block.strip()]
+    if tagged:
+        return tagged[-1]
+
+    # For untagged or malformed fences, inspect every adjacent pair. This also
+    # recovers a real block after a stray closer without pairing that closer with
+    # the next opener. A language-only gap is not code.
+    fences = list(_CODE_FENCE_RE.finditer(raw))
+    blocks = []
+    for left, right in zip(fences, fences[1:]):
+        block = raw[left.end():right.start()].strip()
+        lines = block.splitlines()
+        if lines and lines[0].strip().lower() in {"python", "py"}:
+            block = "\n".join(lines[1:]).strip()
+        if block:
+            blocks.append(block)
     if blocks:
-        return blocks[-1].strip()
+        return blocks[-1]
     return raw.strip()
 
 

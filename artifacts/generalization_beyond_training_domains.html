@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Appendix Experiment</div><h1>Generalization Beyond Training Domains</h1><p class=\"lede\">Correctness of the three fixed peers on six out-of-distribution benchmark groups beyond the math, RAG, and code domains used for training.</p><div class=\"summary-band\"><div><span class=\"k\">Target examples</span>17,403</div><div><span class=\"k\">OOD groups</span>6</div><div><span class=\"k\">Fixed peers</span>3</div><div><span class=\"k\">Task-dependent leaders</span>Gemma · Phi · Qwen-Coder</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Paper-Ready Description</h2><div class=\"answer\"><p>Although <strong>Σ-Mem</strong> is trained only on math, RAG, and code events, it can map an unseen task onto the closest learned competence directions through <b>φ(x)</b>. To evaluate whether this mechanism supports generalization beyond the training domains, we test the three fixed peers on out-of-distribution (OOD) benchmarks covering physical commonsense reasoning (PIQA), broad-domain knowledge understanding (MMLU), science question answering (OpenBookQA and SciQ), complex reasoning (BBH), and natural-language understanding (SuperGLUE). Table <em>Peer Performance on OOD Benchmarks</em> summarizes the correctness of each peer on these unseen domains.</p></div><div class=\"callout\"><div class=\"callout-h\">Table convention</div><p>Each entry reports <b>accuracy (correct responses / total examples)</b>. SuperGLUE is micro-averaged over all 6,023 instances from WiC, RTE, CB, COPA, WSC, and MultiRC.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": ["OOD benchmark", "Evaluation split", "N", "Capability outside training domains"],
+    "rows": [
+      ["PIQA", "Validation", "1,838", "Physical commonsense reasoning"],
+      ["MMLU", "Validation", "1,531", "Broad-domain knowledge understanding"],
+      ["OpenBookQA", "Validation", "500", "Elementary science question answering"],
+      ["SciQ", "Validation", "1,000", "Science question answering"],
+      ["BBH", "Test", "6,511", "Diverse complex reasoning tasks"],
+      ["SuperGLUE", "Six validation subsets", "6,023", "Natural-language understanding"],
+      ["Overall", "Pooled micro-average", "17,403", "All six OOD benchmark groups"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Peer Performance on OOD Benchmarks</h2><p>Peer-response correctness (%) computed directly from the labeled 3-peer OOD dataset. The best peer varies across benchmark families, providing the heterogeneous competence profiles required by the selector.</p>"
+  },
+  {
+    "type": "table",
+    "head": ["Dataset", "N", "Gemma-3-4B-it", "Phi-4-mini-instruct", "Qwen2.5-Coder-7B-Instruct"],
+    "rows": [
+      ["PIQA", "1,838", "76.99% (1,415/1,838)", "80.14% (1,473/1,838)", "84.44% (1,552/1,838)"],
+      ["MMLU", "1,531", "54.08% (828/1,531)", "64.08% (981/1,531)", "56.17% (860/1,531)"],
+      ["OpenBookQA", "500", "72.80% (364/500)", "76.40% (382/500)", "79.80% (399/500)"],
+      ["SciQ", "1,000", "87.10% (871/1,000)", "90.10% (901/1,000)", "92.10% (921/1,000)"],
+      ["BBH", "6,511", "28.67% (1,867/6,511)", "10.69% (696/6,511)", "12.78% (832/6,511)"],
+      ["SuperGLUE", "6,023", "77.47% (4,666/6,023)", "79.15% (4,767/6,023)", "80.67% (4,859/6,023)"],
+      ["Overall", "17,403", "57.52% (10,011/17,403)", "52.86% (9,200/17,403)", "54.15% (9,423/17,403)"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"grid\"><div class=\"card\"><div class=\"eyebrow\">Physical and science QA</div><h3>Qwen-Coder leads</h3><p>Qwen2.5-Coder is the strongest peer on PIQA, OpenBookQA, and SciQ, reaching 84.44%, 79.80%, and 92.10%, respectively.</p></div><div class=\"card\"><div class=\"eyebrow\">Broad knowledge</div><h3>Phi leads MMLU</h3><p>Phi obtains 64.08% on MMLU, compared with 54.08% for Gemma and 56.17% for Qwen2.5-Coder.</p></div><div class=\"card\"><div class=\"eyebrow\">Complex reasoning</div><h3>Gemma leads BBH</h3><p>Gemma reaches 28.67% on BBH, substantially above Phi (10.69%) and Qwen2.5-Coder (12.78%).</p></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>SuperGLUE Breakdown</h2><p>The main table merges the six validation subsets by instance count. The following supplementary table reports peer correctness on each subset separately.</p>"
+  },
+  {
+    "type": "table",
+    "head": ["SuperGLUE subset", "N", "Gemma-3-4B-it", "Phi-4-mini-instruct", "Qwen2.5-Coder-7B-Instruct"],
+    "rows": [
+      ["WiC", "638", "54.70% (349/638)", "62.70% (400/638)", "59.56% (380/638)"],
+      ["RTE", "277", "54.15% (150/277)", "30.32% (84/277)", "88.81% (246/277)"],
+      ["CB", "56", "48.21% (27/56)", "5.36% (3/56)", "82.14% (46/56)"],
+      ["COPA", "100", "93.00% (93/100)", "93.00% (93/100)", "97.00% (97/100)"],
+      ["WSC", "104", "37.50% (39/104)", "43.27% (45/104)", "47.12% (49/104)"],
+      ["MultiRC", "4,848", "82.67% (4,008/4,848)", "85.44% (4,142/4,848)", "83.35% (4,041/4,848)"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout rec\"><div class=\"callout-h\">Reporting note</div><p>The combined SuperGLUE result is a micro-average and is therefore dominated by MultiRC (4,848 of 6,023 instances). Retaining the breakdown shows that Phi leads WiC and MultiRC, whereas Qwen2.5-Coder leads RTE, CB, COPA, and WSC.</p></div><h2>Implementation Source</h2><div class=\"card\"><p><b>Evaluation data:</b> <code>data/peer_generalization/hf_generalization_all_canonical_peers/hf_generalization_all_peer012.labeled.jsonl</code></p><p><b>Metric:</b> the fraction of records with <code>peer_correct[peer_i] &gt; 0.5</code> within each dataset. SuperGLUE is merged by source prefix and weighted by instance count.</p></div>"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

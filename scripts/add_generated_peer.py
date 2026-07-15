@@ -3,7 +3,7 @@
 
 This is for peer-count generalization runs where the original peers have already
 answered the test stream. It can also remap peer keys before adding the new peer,
-for example old 4-peer data with Qwen/Ministral swapped:
+for example when preserving stable peer identities after changing a peer list:
 
   old peer_0 -> new peer_0
   old peer_1 -> new peer_1

@@ -33,8 +33,29 @@ except Exception:  # pragma: no cover
 
 _HASH_ANSWER_RE = re.compile(r"####\s*([^\n\r]+)")
 _FINAL_ANSWER_RE = re.compile(
-    r"(?:final\s+answer|answer)\s*(?:is|:)\s*([^\n\r]+)",
+    r"(?:final\s+answer|answer)[ \t]*(?:is[ \t]*:?|:)[ \t]*([^\n\r]+)",
     flags=re.IGNORECASE,
+)
+_FINAL_DISPLAY_ANSWER_RE = re.compile(
+    r"(?:final\s+answer|answer)[ \t]*(?:is[ \t]*:?[ \t]*|:[ \t]*)?"
+    r"\r?\n[ \t]*(?:\$\$|\$|\\\[|\\\()[ \t]*(.*?)[ \t]*"
+    r"(?:\$\$|\$|\\\]|\\\))(?=[ \t]*(?:\r?\n|$))",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_FINAL_BARE_NEXT_LINE_RE = re.compile(
+    r"final[ \t]+answer[ \t]*(?:is[ \t]*:?[ \t]*|:[ \t]*)?"
+    r"\r?\n(?:[ \t]*\r?\n)*[ \t]*([^\n\r]+)",
+    flags=re.IGNORECASE,
+)
+_FINAL_SECTION_MARKER_RE = re.compile(
+    r"^[ \t]*(?:\#{1,6}[ \t]*)?final[ \t]+answer[ \t]*:?[ \t]*\r?$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+_DISPLAY_MATH_PATTERNS = (
+    re.compile(r"\$\$(.*?)\$\$", flags=re.DOTALL),
+    re.compile(r"\\\[(.*?)\\\]", flags=re.DOTALL),
+    re.compile(r"\\\((.*?)\\\)", flags=re.DOTALL),
+    re.compile(r"(?<!\$)\$(?!\$)(.*?)(?<!\$)\$(?!\$)", flags=re.DOTALL),
 )
 _NUMBER_RE = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:/[+-]?\d+(?:\.\d+)?)?")
 _FRAC_RE = re.compile(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}")
@@ -172,6 +193,15 @@ def _locate_final_answer(text: Any) -> str:
     hashed = _last_regex_group(_HASH_ANSWER_RE, raw)
     if hashed:
         return hashed.strip()
+    section_math = _last_final_section_math(raw)
+    if section_math:
+        return section_math
+    display = _last_regex_group(_FINAL_DISPLAY_ANSWER_RE, raw)
+    if display and display.strip():
+        return display.strip()
+    next_line = _last_regex_group(_FINAL_BARE_NEXT_LINE_RE, raw)
+    if next_line and next_line.strip():
+        return next_line.strip()
     final = _last_regex_group(_FINAL_ANSWER_RE, raw)
     if final:
         return final.strip()
@@ -235,6 +265,22 @@ def _last_regex_group(pattern: re.Pattern[str], text: str) -> str | None:
     return matches[-1].group(1)
 
 
+def _last_final_section_math(text: str) -> str | None:
+    """Return the last math span after a marker-only ``Final Answer`` heading."""
+    markers = list(_FINAL_SECTION_MARKER_RE.finditer(text))
+    if not markers:
+        return None
+    suffix = text[markers[-1].end():]
+    spans: list[tuple[int, str]] = []
+    for pattern in _DISPLAY_MATH_PATTERNS:
+        spans.extend(
+            (match.start(), match.group(1).strip())
+            for match in pattern.finditer(suffix)
+            if match.group(1).strip()
+        )
+    return max(spans, key=lambda item: item[0])[1] if spans else None
+
+
 def normalize_answer(ans: Any) -> str:
     text = str(ans or "").strip()
     text = text.replace("\\left", "").replace("\\right", "")
@@ -251,7 +297,11 @@ def normalize_answer(ans: Any) -> str:
     # Dataset golds often carry a trailing unit the model omits; this normalizes
     # both sides. Done after \frac so it doesn't eat fraction braces.
     text = re.sub(r"\^\s*\\circ", "", text)            # degree symbol
-    text = re.sub(r"\\text\s*\{[^{}]*\}", "", text)    # \text{ cents}, \text{ m}, ...
+    sole_text = re.fullmatch(r"\\text\s*\{([^{}]*)\}", text)
+    if sole_text:
+        text = sole_text.group(1)
+    else:
+        text = re.sub(r"\\text\s*\{[^{}]*\}", "", text)  # \text{ cents}, \text{ m}, ...
     text = text.replace("\\%", "").replace("%", "")    # percent sign
     text = re.sub(r"\\[\s!,;:]", "", text)             # spacing commands incl. "\ "
     text = re.sub(r"\\(?:quad|qquad)", "", text)
