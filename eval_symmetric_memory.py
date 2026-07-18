@@ -23,6 +23,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from feedback_state.checkpoint_manifest import (
@@ -123,8 +124,35 @@ def parse_args():
                         "candidate_yesno: score each highlighted candidate with shared Yes/No utility.")
     p.add_argument("--max_examples", type=int, default=None,
                    help="Optional cap for quick diagnostic evals; full eval by default.")
+    p.add_argument("--feedback_percent", type=int, default=None,
+                   help="Exact percentage of post-decision correctness feedback to observe.")
+    p.add_argument("--feedback_seed", type=int, default=None,
+                   help="Seed for the exact-quota selective-feedback mask.")
     p.add_argument("--output", type=Path, default=None)
     return p.parse_args()
+
+
+def _selective_feedback_mask(
+    num_events: int,
+    *,
+    percent: int,
+    seed: int,
+) -> tuple[np.ndarray, str]:
+    """Return the same exact-quota mask used by the OOD M-route ablation."""
+
+    if num_events < 1:
+        raise ValueError("num_events must be positive")
+    if percent <= 0 or percent > 100:
+        raise ValueError("feedback_percent must lie in (0, 100]")
+    permutation = np.random.default_rng(int(seed)).permutation(num_events)
+    count = int(round(num_events * int(percent) / 100.0))
+    mask = np.zeros(num_events, dtype=bool)
+    mask[permutation[:count]] = True
+    digest = hashlib.sha256()
+    digest.update(str(mask.size).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(np.packbits(mask.astype(np.uint8)).tobytes())
+    return mask, digest.hexdigest()
 
 
 def _example_view(rec, num_peers):
@@ -358,6 +386,17 @@ def main():
     max_examples = cfg.get("max_examples")
     if max_examples is not None:
         records = records[:int(max_examples)]
+    feedback_percent = int(cfg.get("feedback_percent", 100))
+    feedback_seed = int(cfg.get("feedback_seed", 0))
+    feedback_mask, feedback_mask_sha256 = _selective_feedback_mask(
+        len(records), percent=feedback_percent, seed=feedback_seed
+    )
+    print(
+        f"[eval_sym/feedback] percent={feedback_percent} seed={feedback_seed} "
+        f"observed={int(feedback_mask.sum())}/{len(records)} "
+        f"mask_sha256={feedback_mask_sha256}",
+        flush=True,
+    )
     correct = total = 0
     selections = []  # per-example: which peer was picked, was it right, per-peer scores+labels
     with torch.no_grad():
@@ -513,6 +552,7 @@ def main():
                 "peer_correct": {int(peer_ids[s]): int(corr[s]) for s in range(real)},
                 "memory_used": not ablate,
                 "score_source": score_source,
+                "feedback_observed": bool(feedback_mask[rec_idx - 1]),
             })
             if graph_posterior != "off" and not ablate:
                 selections[-1]["sigma_peer_scores"] = {
@@ -524,7 +564,7 @@ def main():
             # event-axis update AFTER the pick (one update per peer per task).
             # sign s: ground-truth correctness. (The trainable-judge s was dropped — correctness
             # is not linearly readable from the frozen CM feature; see git history / train script.)
-            if not ablate:
+            if not ablate and bool(feedback_mask[rec_idx - 1]):
                 signs = [1.0 if corr[s] else -1.0 for s in range(real)]
                 for s in range(real):
                     vv = value_vecs[s] if value_vecs is not None else None
@@ -552,10 +592,19 @@ def main():
                     graph_write = graph_eta_g * torch.outer(z, z)
                     graph_G.mul_(graph_decay_g).add_(graph_write)
                     graph_G.fill_diagonal_(0.0)
-                if reset_state == "stream" and task_state_mode == "separate":
-                    task_key = task_type_of(rec)
-                    task_snaps[task_key] = mem.snapshot()
-                    graph_task_snaps[task_key] = graph_G.detach().clone()
+            elif not ablate:
+                mem.decay_without_feedback()
+                if graph_posterior != "off":
+                    graph_G.mul_(graph_decay_g)
+                    graph_G.fill_diagonal_(0.0)
+            if (
+                not ablate
+                and reset_state == "stream"
+                and task_state_mode == "separate"
+            ):
+                task_key = task_type_of(rec)
+                task_snaps[task_key] = mem.snapshot()
+                graph_task_snaps[task_key] = graph_G.detach().clone()
             if rec_idx == 1 or rec_idx % 100 == 0 or rec_idx == len(records):
                 running_acc = correct / total if total else 0.0
                 print(
@@ -600,6 +649,11 @@ def main():
         "init_state": init_state, "reset_state": reset_state, "ablate_memory": ablate, "use_joint": use_joint,
         "graph_posterior": graph_posterior,
         "task_state_mode": task_state_mode,
+        "feedback_percent": feedback_percent,
+        "feedback_seed": feedback_seed,
+        "feedback_count": int(feedback_mask.sum()),
+        "feedback_mask_sha256": feedback_mask_sha256,
+        "selective_feedback_protocol": "decide_then_observe_else_decay_only",
         "gamma": mem.gamma_scalar(),
         "eta": float(mem.eta),
         "peer_selection": peer_selection,

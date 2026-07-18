@@ -320,6 +320,26 @@ class SymmetricTrustMemory(nn.Module):
         e = self.eta.to(self._mdtype).detach()
         self.G = g * self.G + e * torch.outer(o, o)
 
+    @torch.no_grad()
+    def decay_without_feedback(self) -> None:
+        """Advance one event without adding a correctness-driven innovation.
+
+        Selective-feedback experiments still advance the event clock on every
+        example.  This applies exactly the decay term from ``update`` to every
+        peer matrix and, when enabled, to the joint state ``G``.
+        """
+        for peer in range(self.num_peers):
+            g = self.gamma_for(peer).to(self._mdtype).detach()
+            if self.decay_mode == "scalar":
+                self.M[peer].mul_(g)
+            else:
+                gh = g.sqrt()
+                self.M[peer].copy_(
+                    gh.unsqueeze(1) * self.M[peer] * gh.unsqueeze(0)
+                )
+        if self.use_joint:
+            self.G.mul_(self.gamma_joint().to(self._mdtype).detach())
+
     def steer_vector(self, peer: int, ctx) -> torch.Tensor:
         """Rank-dim trust direction for steering: M_peer @ phi*  (differentiable thru phi*).
 
