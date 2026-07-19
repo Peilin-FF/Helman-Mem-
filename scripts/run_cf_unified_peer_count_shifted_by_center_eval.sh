@@ -60,39 +60,6 @@ task_done() {
   [[ -f "$(out_dir "$tag" "$peers" "$arm" "$split")/eval_metrics.json" ]]
 }
 
-copy_result_dir() {
-  local src="$1" dst="$2" label="$3"
-  if [[ -f "$src/eval_metrics.json" && ! -f "$dst/eval_metrics.json" ]]; then
-    mkdir -p "$(dirname "$dst")"
-    cp -a "$src" "$dst"
-    echo "[$(date '+%F %T')] copied $label from $src"
-  fi
-}
-
-bootstrap_existing() {
-  local tag peers split arm src dst
-  for peers in "${PEER_COUNTS[@]}"; do
-    for split in "${SPLITS[@]}"; do
-      for arm in center sigma; do
-        src="outputs/eval_cf_unified_peer_counts_llama_bitcpm_shifted_q3_0.6b/peers${peers}/${arm}_${split}"
-        dst="$(out_dir q3_0.6b "$peers" "$arm" "$split")"
-        copy_result_dir "$src" "$dst" "q3_0.6b peers${peers} $arm $split"
-      done
-    done
-  done
-
-  for entry in "${MODELS[@]}"; do
-    IFS='|' read -r tag _model _ckpt _pybin <<< "$entry"
-    for split in "${SPLITS[@]}"; do
-      for arm in center sigma; do
-        src="outputs/eval_cf_peer3_llama_by_center/$tag/${arm}_${split}"
-        dst="$(out_dir "$tag" 4 "$arm" "$split")"
-        copy_result_dir "$src" "$dst" "$tag peers4 $arm $split"
-      done
-    done
-  done
-}
-
 in_allowed_gpus() {
   local gpu="$1" x
   for x in "${ALLOWED_GPUS[@]}"; do
@@ -140,9 +107,6 @@ launch_eval() {
     --max_length "$MAX_LENGTH" \
     --offline_data "$data" \
     --output "$out" \
-    --score_mode candidate_yesno \
-    --peer_mode joint \
-    --per_peer_decay off \
     "${ablate[@]}" \
     > "$log" 2>&1 &
   local pid=$!
@@ -222,7 +186,6 @@ remaining_count() {
 }
 
 validate_inputs
-bootstrap_existing
 
 echo "[$(date '+%F %T')] start shifted 4/5-peer by-center scheduler"
 echo "data=$DATA_ROOT"

@@ -218,8 +218,6 @@ def replay_m_route(
         rank=rank,
         gamma=gamma,
         eta=eta,
-        gamma_g=0.9,
-        eta_g=0.1,
     )
     correct = 0
     ties = 0
@@ -264,7 +262,7 @@ def replay_m_route(
 
         state.update(phi, correctness_signed)
 
-    final_m, _ = state.snapshot()
+    final_m = state.snapshot()
     total = len(records)
     summary = {
         "accuracy": _metric(correct, total),

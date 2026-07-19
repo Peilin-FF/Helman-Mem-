@@ -48,4 +48,3 @@ gpu_memory_utilization: 0.45
 local_files_only: true
 dtype: bfloat16
 device: cuda:0
-adversarial_rate: 0.0

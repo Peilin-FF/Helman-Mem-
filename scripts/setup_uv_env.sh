@@ -41,14 +41,13 @@ else
 fi
 
 "${VENV_DIR}/bin/python" - <<'PY'
-import torch, transformers, datasets, wandb, accelerate, deepspeed, flash_attn, peft
+import torch, transformers, datasets, wandb, accelerate, deepspeed, flash_attn
 print({
     "python": "ok",
     "torch": torch.__version__,
     "cuda": torch.cuda.is_available(),
     "transformers": transformers.__version__,
     "datasets": datasets.__version__,
-    "peft": peft.__version__,
     "deepspeed": deepspeed.__version__,
     "flash_attn": flash_attn.__file__,
 })

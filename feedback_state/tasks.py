@@ -6,7 +6,7 @@ open-domain QA (EM/F1) and code pass@1 all reduce to that scalar. This module
 is the single place that knows how
 to turn a (record, peer_response) into:
 
-  * a *soft* target ``target(...) -> [0,1]`` used as the BCE label and for the
+  * a *soft* target ``target(...) -> [0,1]`` used for correctness supervision and
     selection floors/ceiling, and
   * a *binary* ``is_correct(...) -> bool`` used for reported accuracy, and
   * ``extract_answer(...)`` for human-readable predictions, and
@@ -154,7 +154,7 @@ def code_extract_answer(text: str) -> str:
 @dataclass(frozen=True)
 class TaskSpec:
     name: str
-    # (peer_text, record) -> soft correctness in [0, 1] (BCE target)
+    # (peer_text, record) -> soft correctness in [0, 1]
     target_fn: Callable[[str, dict[str, Any]], float]
     # (peer_text, record) -> binary correctness (reported accuracy)
     correct_fn: Callable[[str, dict[str, Any]], bool]
@@ -507,7 +507,7 @@ def register_task(spec: TaskSpec) -> None:
 # ---------------------------------------------------------------------------
 
 def peer_target_value(record: dict[str, Any], peer_key: str | None, peer_text: str) -> float:
-    """Soft per-peer correctness in [0,1] (the BCE training target / coverage)."""
+    """Soft per-peer correctness in [0,1]."""
     # Precomputed labels (any task): if the record carries a peer_correct map, trust
     # it. Lets us pre-grade slow math (sympy) ONCE offline and have eval read it
     # instead of re-running the grader per eval job (which can hang on pathological

@@ -5,8 +5,7 @@ huggingface-hub==0.35.3
 tokenizers==0.22.2
 numpy==1.26.4
 
-# --- training / adapters ---
-peft==0.19.1
+# --- training ---
 accelerate==1.13.0
 datasets==4.8.5
 safetensors==0.7.0

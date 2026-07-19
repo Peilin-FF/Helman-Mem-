@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import random
 from pathlib import Path
 
 from tqdm.auto import tqdm
 
-from feedback_state.adversarial import make_numeric_perturbation_response
 from feedback_state.datasets import REGISTRY as MATH_REGISTRY
 from feedback_state.datasets import load_math_dataset
 from feedback_state.eval_datasets import REGISTRY as EVAL_REGISTRY
@@ -24,8 +22,8 @@ from feedback_state.utils import (
 def load_any_dataset(dataset_key: str, *, split, start_index, max_samples, cfg) -> list[dict]:
     """Load math, RAG, or code records, all tagged with task_type.
 
-    Math goes through the math registry (keeps adversarial-math behaviour); RAG and
-    code go through eval_datasets. A dataset name not in either registry falls back
+    Math goes through the math registry; RAG and code go through eval_datasets. A
+    dataset name not in either registry falls back
     to the math loader (custom HF path).
     """
     key = dataset_key.lower().replace("-", "_")
@@ -82,7 +80,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--shard_index", type=int, default=None)
     parser.add_argument("--num_shards", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--dataset",
         default=None,
@@ -99,20 +96,11 @@ def build_peer_prompt(problem: str) -> str:
     )
 
 
-def build_adversarial_prompt(problem: str, answer: str) -> str:
-    return (
-        "Produce a plausible but incorrect solution to this math problem. "
-        f"The final answer must not equal {answer}.\n\nProblem:\n{problem}"
-    )
-
-
 def main() -> None:
     args = parse_args()
     cfg = merge_args_with_config(args, load_config(args.config))
     split = str(cfg.get("split", "train"))
     output = Path(cfg.get("output", f"data/deepmath_setting_a_{split}.jsonl"))
-    seed = int(cfg.get("seed", 42))
-    rng = random.Random(seed)
 
     dataset_key = str(cfg.get("dataset", cfg.get("dataset_name", "deepmath")))
     if cfg.get("datasets"):
@@ -135,10 +123,6 @@ def main() -> None:
     peer_keys = [str(x) for x in cfg.get("peer_keys", [])]
     if peer_keys and len(peer_keys) != len(peer_models):
         raise ValueError("Config peer_keys must have the same length as peer_models")
-    adversarial_rates = cfg.get("adversarial_rate", 0.0)
-    if not isinstance(adversarial_rates, list):
-        adversarial_rates = [float(adversarial_rates)] * len(peer_models)
-    adversarial_mode = str(cfg.get("adversarial_mode", "numeric_perturb"))
     # Peers that receive NO retrieved context for RAG records (e.g. Gemma is kept
     # bad at RAG-QA by withholding documents, while staying good at math). This is
     # the mechanism that creates per-task reliability differences for the trust
@@ -198,22 +182,11 @@ def main() -> None:
             generator = TextGenerator(str(model_name), gen_cfg)
             try:
                 prompts: list[str] = []
-                adversarial_flags: list[bool] = []
                 for record in chunk:
-                    task_type = str(record.get("task_type", "math"))
-                    # Adversarial corruption is a math-only control; skip for rag/code.
-                    rate = float(adversarial_rates[min(peer_index, len(adversarial_rates) - 1)])
-                    is_adv = task_type == "math" and rng.random() < rate
-                    adversarial_flags.append(is_adv)
-                    if is_adv and adversarial_mode == "numeric_perturb":
-                        prompts.append("")
-                    elif is_adv:
-                        prompts.append(render_instruction_prompt(generator.tokenizer, build_adversarial_prompt(record["problem"], record["answer"])))
-                    else:
-                        # Task-aware peer prompt; RAG context withheld from deprived peers.
-                        with_context = peer_gets_context(model_name)
-                        prompt_text = task_peer_prompt(record, with_context=with_context)
-                        prompts.append(render_instruction_prompt(generator.tokenizer, prompt_text))
+                    # Task-aware peer prompt; RAG context can be withheld from selected peers.
+                    with_context = peer_gets_context(model_name)
+                    prompt_text = task_peer_prompt(record, with_context=with_context)
+                    prompts.append(render_instruction_prompt(generator.tokenizer, prompt_text))
                 # samples_per_peer > 1 builds a per-peer SAMPLE POOL (peer_samples),
                 # enabling counterfactual same-question pairing in the counter-trust
                 # scenario. Needs temperature > 0 to get distinct samples. Default 1
@@ -233,15 +206,8 @@ def main() -> None:
                         for idx, text in zip(chunk_indices, chunk_outputs):
                             generated[idx] = text
                     for row_index, record in enumerate(chunk):
-                        is_adv = adversarial_flags[row_index]
-                        text = generated[row_index]
-                        if is_adv and not text:
-                            text = make_numeric_perturbation_response(record["answer"], rng) or (
-                                "A plausible but incorrect solution gives a different final answer."
-                            )
-                        per_row_samples[row_index].append(text)
+                        per_row_samples[row_index].append(generated[row_index])
                 for row_index, record in enumerate(chunk):
-                    is_adv = adversarial_flags[row_index]
                     samples = per_row_samples[row_index]
                     key = peer_keys[peer_index] if peer_keys else f"peer_{peer_index}"
                     record["peer_responses"][key] = samples[0]
@@ -249,8 +215,6 @@ def main() -> None:
                         record.setdefault("peer_samples", {})[key] = samples
                     record["peer_metadata"][key] = {
                         "model": str(model_name),
-                        "is_adversarial": bool(is_adv),
-                        "known_incorrect": bool(is_adv),
                         "received_context": bool(
                             str(record.get("task_type", "math")) != "rag" or peer_gets_context(model_name)
                         ),

@@ -125,9 +125,6 @@ launch_eval() {
     --central_model "${MODEL_PATH[$tag]}" \
     --offline_data "$DATA_DIR/${split}.jsonl" \
     --output "$out" \
-    --score_mode candidate_yesno \
-    --peer_mode joint \
-    --per_peer_decay off \
     --max_length "$MAX_LENGTH" \
     "${ablate[@]}" \
     > "$log" 2>&1 &

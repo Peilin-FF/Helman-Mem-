@@ -27,13 +27,12 @@ def load_central_model(model_name: str, dtype, local_files_only: bool, device_ma
     device_map: passed to from_pretrained for multi-GPU sharding (e.g. "auto" splits a big
     model across visible GPUs). Default None = single-device (caller does .to(device)).
     max_memory: optional per-device cap dict (e.g. {0:"40GiB",1:"40GiB"}) to force an even
-    split so one GPU does not get loaded to OOM during the backward of diff_write."""
+    split so one GPU does not get loaded to OOM during training."""
     apply_torch_fp8_shim()
     from transformers import AutoModelForCausalLM
 
-    # Qwen3.5 (qwen3_5) registers a *ForCausalLM and loads directly (hybrid: only the
-    # full-attention layers are Delta-Mem-wrappable; the GatedDeltaNet layers are left
-    # untouched). Everything else also goes through the plain loader.
+    # Qwen3.5 registers a standard causal-LM class; all supported centers use the
+    # same loading path here.
     kw = {"dtype": dtype, "local_files_only": local_files_only}
     if device_map is not None:
         kw["device_map"] = device_map

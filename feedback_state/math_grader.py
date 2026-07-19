@@ -11,7 +11,7 @@ This module is a thin, fail-closed wrapper:
   offline test runs without it still work (callers fall back to the old scorer).
 - `verify_equiv` never raises into callers (any parse/verify error -> False).
 - math-verify's default timeout is SIGALRM-based (main-thread only); since
-  `math_equal` is reached from inside asyncio tasks (Setting B rollout scoring),
+  `math_equal` can be reached from inside asynchronous grading tasks,
   we DISABLE the signal timeout (`timeout_seconds=None`) and keep calls cheap.
 """
 from __future__ import annotations

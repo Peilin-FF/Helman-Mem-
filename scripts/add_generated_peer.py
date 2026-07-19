@@ -219,7 +219,6 @@ def main() -> None:
                 record.setdefault("peer_responses", {})[key] = generated_by_local[local_idx]
                 record.setdefault("peer_metadata", {})[key] = {
                     "model": str(args.model),
-                    "is_adversarial": False,
                     "known_incorrect": False,
                     "received_context": bool(task_type_of(record) != "rag" or with_context),
                     "num_samples": 1,

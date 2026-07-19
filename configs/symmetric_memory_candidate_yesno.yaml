@@ -15,11 +15,6 @@ proto_tau: 0.1
 phi_layer_frac: 0.5
 eta_init: 0.3
 gamma_init: 0.9
-use_joint: off
-write_mode: addr
-decay_mode: scalar
-per_peer_decay: false
-diff_write: true
 
 identity_mode: anon
 peer_mode: joint

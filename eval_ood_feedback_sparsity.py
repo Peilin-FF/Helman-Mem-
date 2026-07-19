@@ -188,8 +188,6 @@ def replay_sparse_feedback(
         rank=rank,
         gamma=gamma,
         eta=eta,
-        gamma_g=0.9,
-        eta_g=0.1,
     )
     scopes = {"full_stream": _empty_scope(), "paper_ood": _empty_scope()}
     selections: Counter[int] = Counter()
@@ -236,7 +234,7 @@ def replay_sparse_feedback(
         else:
             state.decay_without_feedback()
 
-    final_m, _ = state.snapshot()
+    final_m = state.snapshot()
     metrics: dict[str, Any] = {}
     for scope_name, values in scopes.items():
         total = values["total"]

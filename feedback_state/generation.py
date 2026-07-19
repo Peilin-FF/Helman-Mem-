@@ -35,13 +35,7 @@ class GenerationConfig:
     load_format: str = "auto"
     max_model_len: int | None = None
     gpu_memory_utilization: float | None = None
-    # Optional PEFT LoRA adapter directory. When set with the vllm backend, the
-    # engine is started with enable_lora=True and every request carries a
-    # LoRARequest, so the adapter is applied on top of the base weights.
-    lora_path: str | None = None
-    max_lora_rank: int = 16
-    # vLLM: skip CUDA-graph capture. LoRA + spawn multiprocessing can hang during
-    # graph capture on vLLM 0.8.5; eager mode avoids it at a small speed cost.
+    # vLLM: optionally skip CUDA-graph capture.
     enforce_eager: bool = False
     # When set, models whose name is a key here are served by a running vLLM
     # OpenAI-compatible server instead of being loaded in-process. The value is a
@@ -75,7 +69,6 @@ class TextGenerator:
         self._endpoint_cursor = 0
         self._clients: list[Any] = []
         self._sem = None
-        self._lora_request = None
         # vLLM OpenAI-compatible server backend: no weights in-process, only the
         # tokenizer (for render_instruction_prompt). Generation goes over HTTP.
         endpoint = config.endpoints.get(model_name) if config.endpoints else None
@@ -100,49 +93,24 @@ class TextGenerator:
             try:
                 from vllm import LLM
 
-                if config.lora_path:
-                    from vllm.lora.request import LoRARequest
-
-                    vllm_kwargs = {}
-                    if str(config.config_format).lower() != "auto":
-                        vllm_kwargs["config_format"] = str(config.config_format)
-                    if str(config.load_format).lower() != "auto":
-                        vllm_kwargs["load_format"] = str(config.load_format)
-                    if config.max_model_len is not None:
-                        vllm_kwargs["max_model_len"] = int(config.max_model_len)
-                    if config.gpu_memory_utilization is not None:
-                        vllm_kwargs["gpu_memory_utilization"] = float(
-                            config.gpu_memory_utilization
-                        )
-                    self.llm = LLM(
-                        model=model_name,
-                        tokenizer_mode=str(config.tokenizer_mode),
-                        dtype=str(config.dtype),
-                        enable_lora=True,
-                        max_lora_rank=int(config.max_lora_rank),
-                        enforce_eager=bool(config.enforce_eager),
-                        **vllm_kwargs,
+                vllm_kwargs = {}
+                if str(config.config_format).lower() != "auto":
+                    vllm_kwargs["config_format"] = str(config.config_format)
+                if str(config.load_format).lower() != "auto":
+                    vllm_kwargs["load_format"] = str(config.load_format)
+                if config.max_model_len is not None:
+                    vllm_kwargs["max_model_len"] = int(config.max_model_len)
+                if config.gpu_memory_utilization is not None:
+                    vllm_kwargs["gpu_memory_utilization"] = float(
+                        config.gpu_memory_utilization
                     )
-                    self._lora_request = LoRARequest("adapter", 1, config.lora_path)
-                else:
-                    vllm_kwargs = {}
-                    if str(config.config_format).lower() != "auto":
-                        vllm_kwargs["config_format"] = str(config.config_format)
-                    if str(config.load_format).lower() != "auto":
-                        vllm_kwargs["load_format"] = str(config.load_format)
-                    if config.max_model_len is not None:
-                        vllm_kwargs["max_model_len"] = int(config.max_model_len)
-                    if config.gpu_memory_utilization is not None:
-                        vllm_kwargs["gpu_memory_utilization"] = float(
-                            config.gpu_memory_utilization
-                        )
-                    self.llm = LLM(
-                        model=model_name,
-                        tokenizer_mode=str(config.tokenizer_mode),
-                        dtype=str(config.dtype),
-                        enforce_eager=bool(config.enforce_eager),
-                        **vllm_kwargs,
-                    )
+                self.llm = LLM(
+                    model=model_name,
+                    tokenizer_mode=str(config.tokenizer_mode),
+                    dtype=str(config.dtype),
+                    enforce_eager=bool(config.enforce_eager),
+                    **vllm_kwargs,
+                )
                 try:
                     self.tokenizer = self.llm.get_tokenizer()
                     if self.tokenizer.pad_token_id is None:
@@ -188,10 +156,7 @@ class TextGenerator:
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
             )
-            if self._lora_request is not None:
-                outputs = self.llm.generate(prompts, params, lora_request=self._lora_request)
-            else:
-                outputs = self.llm.generate(prompts, params)
+            outputs = self.llm.generate(prompts, params)
             return [item.outputs[0].text for item in outputs]
         assert self.model is not None and self.tokenizer is not None
         if self.processor is not None:

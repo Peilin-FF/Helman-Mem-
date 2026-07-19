@@ -40,9 +40,6 @@ for split in p0 p50 p70 p90; do
     --central_model "$MODEL" \
     --offline_data "$TEST_DIR/${split}.jsonl" \
     --output "$EVAL_ROOT/proto_${split}" \
-    --score_mode candidate_yesno \
-    --peer_mode joint \
-    --per_peer_decay off \
     > "$LOG_ROOT/eval_${split}.log" 2>&1
   tail -3 "$LOG_ROOT/eval_${split}.log"
 done

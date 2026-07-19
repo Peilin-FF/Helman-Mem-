@@ -159,9 +159,7 @@ def test_paired_comparison_counts_wins_losses_and_ties() -> None:
     values = {
         "original_sigma_with_g": [1, 0, 1, 0],
         "route_M": [1, 1, 0, 0],
-        "route_MG": [1, 1, 0, 0],
         "vote_M": [1, 1, 0, 0],
-        "vote_MG": [1, 1, 0, 0],
         "vote_majority": [1, 1, 0, 0],
     }
     scopes = {

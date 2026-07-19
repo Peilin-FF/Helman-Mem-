@@ -1,7 +1,7 @@
-"""Evaluate the training-free OOD memory readout from ``instruction.md``.
+"""Evaluate training-free M-Route, M-Vote, and majority voting on OOD streams.
 
 The frozen Sigma checkpoint is used only to construct the competence direction
-``phi``.  Runtime M/G state is rebuilt from the teacher-specified cold starts, all
+``phi``. Runtime M state is rebuilt from a cold start, all
 decisions are made before the event labels are read, and no residual steering or
 candidate-scoring forward pass is performed.
 """
@@ -28,10 +28,7 @@ from transformers import AutoTokenizer
 from feedback_state.data import JsonlDataset
 from feedback_state.generation import dtype_from_name
 from feedback_state.ood_routing import (
-    DEFAULT_RIDGE,
     INVALID_ANSWER,
-    ROBUSTNESS_RIDGES,
-    DecayedLabelDictionary,
     OODRoutingState,
     canonical_answer,
     canonical_gold_answer,
@@ -71,12 +68,8 @@ PAPER_OOD_GROUPS = {
 PEER_KEYS = ("peer_0", "peer_1", "peer_2")
 MAIN_METHODS = (
     "route_M",
-    "route_MG",
-    "route_dictionary",
     "vote_majority",
-    "vote_G",
     "vote_M",
-    "vote_MG",
 )
 SIGMA_WITH_G_REPLAY = {
     "center_weight": 0.6,
@@ -339,10 +332,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--max-length", type=int, default=2048)
-    parser.add_argument("--gamma-g", type=float, default=0.9)
-    parser.add_argument("--eta-g", type=float, default=0.1)
-    parser.add_argument("--ridge", type=float, default=DEFAULT_RIDGE)
-    parser.add_argument("--random-seeds", default="0,1,2")
     parser.add_argument("--max-examples", type=int, default=None)
     parser.add_argument("--local-files-only", action="store_true", default=True)
     parser.add_argument(
@@ -437,11 +426,6 @@ def _load_checkpoint_encoder(
         phi_mode="proto",
         phi_in_dim=int(base.config.hidden_size),
         proto_tau=proto_tau,
-        write_mode="addr",
-        decay_mode=str(train_config.get("decay_mode", "scalar")),
-        per_peer_decay=str(train_config.get("per_peer_decay", "off")).lower()
-        in {"1", "true", "yes", "on"},
-        use_joint=False,
         device=device,
     ).to(device)
 
@@ -455,7 +439,7 @@ def _load_checkpoint_encoder(
     runtime_free_state = {
         key: value
         for key, value in memory_state.items()
-        if key not in {"M", "G"}
+        if key not in {"M", "G", "_theta_joint"}
     }
     current = memory.state_dict()
     incompatible = {}
@@ -482,7 +466,6 @@ def _load_checkpoint_encoder(
         "gamma": float(memory.gamma_scalar()),
         "eta": float(memory.eta.detach().cpu()),
         "checkpoint_sha256": _sha256_file(checkpoint_file),
-        "checkpoint_runtime_state_ignored": ["M", "G"],
     }
     return base, tokenizer, memory, metadata
 
@@ -852,7 +835,7 @@ def _paired_comparisons(
 
     if reference not in correctness:
         return {}
-    methods = ("route_M", "route_MG", "vote_M", "vote_MG", "vote_majority")
+    methods = ("route_M", "vote_M", "vote_majority")
     result: dict[str, Any] = {
         "reference": reference,
         "bootstrap_seed": seed,
@@ -959,9 +942,6 @@ def main() -> None:
             ),
             "dtype": (str(args.dtype).lower(), "bfloat16"),
             "max_length": (int(args.max_length), 2048),
-            "gamma_G": (float(args.gamma_g), 0.9),
-            "eta_G": (float(args.eta_g), 0.1),
-            "lambda": (float(args.ridge), 0.1),
             "gamma": (checkpoint_gamma, profile.gamma),
             "eta": (checkpoint_eta, profile.eta),
         }
@@ -1056,27 +1036,16 @@ def main() -> None:
         rank=rank,
         gamma=gamma,
         eta=eta,
-        gamma_g=float(args.gamma_g),
-        eta_g=float(args.eta_g),
     )
-    dictionary = DecayedLabelDictionary(num_peers=len(PEER_KEYS), gamma=gamma)
-    seeds = tuple(int(value) for value in str(args.random_seeds).split(","))
-    if seeds != (0, 1, 2):
-        raise ValueError("The preregistered random seeds are exactly 0,1,2")
-    random_generators = {seed: np.random.default_rng(seed) for seed in seeds}
 
     correctness: defaultdict[str, list[int]] = defaultdict(list)
     selections: defaultdict[str, list[int]] = defaultdict(list)
-    robustness_correctness: defaultdict[str, list[int]] = defaultdict(list)
     route_ties = 0
-    dictionary_ties = 0
     parser_label_mismatches = 0
     answer_group_label_conflicts = 0
     invalid_peer_answers = 0
     invalid_gold_answers = 0
     n_distinct_counts: Counter[int] = Counter()
-    flip_counts = Counter()
-    maximum_condition = {str(ridge): 0.0 for ridge in ROBUSTNESS_RIDGES}
     records_tmp = args.output / "records.jsonl.tmp"
     with records_tmp.open("w") as record_handle:
         for event_index, (record, phi_raw) in enumerate(zip(records, phis)):
@@ -1088,42 +1057,20 @@ def main() -> None:
 
             # Decisions happen before peer_correct is accessed for this event.
             route = state.route(phi, event_index)
-            route_mg = state.route_mg(phi, event_index, ridge=float(args.ridge))
-            dictionary_route = dictionary.route(source, event_index)
-            main_votes = state.all_votes(
+            main_votes = state.votes(
                 phi,
                 decision_record,
                 answers,
-                ridge=float(args.ridge),
-                clipped=False,
             )
-            robustness_votes = state.robustness_votes(
-                phi, decision_record, answers, ridges=ROBUSTNESS_RIDGES
-            )
-            random_peers = {
-                seed: int(generator.choice(len(PEER_KEYS)))
-                for seed, generator in random_generators.items()
-            }
             canonical_answers = [
                 canonical_answer(decision_record, answer) for answer in answers
             ]
             n_distinct = len(set(canonical_answers))
             n_distinct_counts[n_distinct] += 1
             route_ties += int(route.tied)
-            dictionary_ties += int(dictionary_route.tied)
             invalid_peer_answers += sum(
                 answer == INVALID_ANSWER for answer in canonical_answers
             )
-            for ridge in ROBUSTNESS_RIDGES:
-                condition = float(
-                    np.linalg.cond(
-                        state.G + float(ridge) * np.eye(len(PEER_KEYS))
-                    )
-                )
-                maximum_condition[str(ridge)] = max(
-                    maximum_condition[str(ridge)], condition
-                )
-
             # Current-event supervision is read only after every arm has decided.
             peer_correct, correctness_signed = _record_labels(record)
             gold = canonical_gold_answer(record)
@@ -1145,52 +1092,16 @@ def main() -> None:
                 arm: _frozen_vote_correctness(
                     main_votes.answers[arm], canonical_answers, peer_correct
                 )[0]
-                for arm in ("maj", "G", "M", "MG")
+                for arm in ("maj", "M")
             }
             event_correct = {
                 "route_M": int(peer_correct[route.peer]),
-                "route_MG": int(peer_correct[route_mg.peer]),
-                "route_dictionary": int(peer_correct[dictionary_route.peer]),
                 "vote_majority": vote_correct["maj"],
-                "vote_G": vote_correct["G"],
                 "vote_M": vote_correct["M"],
-                "vote_MG": vote_correct["MG"],
             }
             for method, value in event_correct.items():
                 correctness[method].append(value)
             selections["route_M"].append(route.peer)
-            selections["route_MG"].append(route_mg.peer)
-            selections["route_dictionary"].append(dictionary_route.peer)
-            for peer in range(len(PEER_KEYS)):
-                correctness[f"fixed_peer_{peer}"].append(int(peer_correct[peer]))
-            for seed, peer in random_peers.items():
-                method = f"random_seed_{seed}"
-                correctness[method].append(int(peer_correct[peer]))
-                selections[method].append(peer)
-
-            for (ridge, clipped), result in robustness_votes.items():
-                for arm in ("G", "M", "MG"):
-                    method = (
-                        f"vote_{arm}_{'clipped' if clipped else 'raw'}_"
-                        f"lambda_{ridge:g}"
-                    )
-                    robustness_correctness[method].append(
-                        _frozen_vote_correctness(
-                            result.answers[arm], canonical_answers, peer_correct
-                        )[0]
-                    )
-
-            majority_correct = event_correct["vote_majority"]
-            mg_correct = event_correct["vote_MG"]
-            if main_votes.answers["maj"] != main_votes.answers["MG"]:
-                if not majority_correct and mg_correct:
-                    flip_counts["helpful"] += 1
-                elif majority_correct and not mg_correct:
-                    flip_counts["harmful"] += 1
-                else:
-                    flip_counts["same_correctness"] += 1
-            else:
-                flip_counts["same_answer"] += 1
 
             row = {
                 "t": event_index,
@@ -1203,10 +1114,6 @@ def main() -> None:
                 "peer_correct": peer_correct.tolist(),
                 "route_M_peer": route.peer,
                 "route_M_scores": route.scores.tolist(),
-                "route_MG_peer": route_mg.peer,
-                "route_MG_scores": route_mg.scores.tolist(),
-                "route_dictionary_peer": dictionary_route.peer,
-                "random_peers": random_peers,
                 "vote_answers": dict(main_votes.answers),
                 "vote_weights": {
                     name: weights.tolist()
@@ -1218,7 +1125,6 @@ def main() -> None:
 
             # Exactly one state write per event, after decision and logging.
             state.update(phi, correctness_signed)
-            dictionary.update(source, correctness_signed)
             count = event_index + 1
             if count == 1 or count % 1000 == 0 or count == len(records):
                 running = sum(correctness["route_M"]) / count
@@ -1286,56 +1192,13 @@ def main() -> None:
     else:
         historical_sigma_with_g = None
 
-    all_correctness = dict(correctness) | dict(robustness_correctness)
-    for arm in ("G", "M", "MG"):
-        main_name = f"vote_{arm}"
-        robustness_name = f"vote_{arm}_raw_lambda_0.1"
-        if correctness[main_name] != robustness_correctness[robustness_name]:
-            raise ValueError(
-                f"Main {main_name} differs from preregistered raw lambda=0.1 replay"
-            )
-    accuracy = _summarize_correctness(all_correctness, scopes)
-    for scope, methods in accuracy.items():
-        fixed = [methods[f"fixed_peer_{peer}"] for peer in range(len(PEER_KEYS))]
-        best_peer = max(
-            range(len(PEER_KEYS)), key=lambda peer: fixed[peer]["accuracy"]
-        )
-        methods["best_fixed_peer"] = dict(fixed[best_peer]) | {"peer": best_peer}
-        random_accuracies = [
-            methods[f"random_seed_{seed}"]["accuracy"] for seed in seeds
-        ]
-        methods["random_routing_3seed"] = {
-            "seeds": list(seeds),
-            "accuracies": random_accuracies,
-            "mean_accuracy": float(np.mean(random_accuracies)),
-            "std_accuracy": float(np.std(random_accuracies, ddof=0)),
-            "total_per_seed": int(scopes[scope].sum()),
-        }
-
+    accuracy = _summarize_correctness(correctness, scopes)
     paper_mask = scopes["paper_ood"]
-    paper_flip_counts = Counter()
-    with (args.output / "records.jsonl").open() as handle:
-        for keep, line in zip(paper_mask, handle):
-            if not keep:
-                continue
-            row = json.loads(line)
-            maj_answer = row["vote_answers"]["maj"]
-            mg_answer = row["vote_answers"]["MG"]
-            if maj_answer == mg_answer:
-                paper_flip_counts["same_answer"] += 1
-            elif not row["correct"]["vote_majority"] and row["correct"]["vote_MG"]:
-                paper_flip_counts["helpful"] += 1
-            elif row["correct"]["vote_majority"] and not row["correct"]["vote_MG"]:
-                paper_flip_counts["harmful"] += 1
-            else:
-                paper_flip_counts["same_correctness"] += 1
-
-    final_m, final_g = state.snapshot()
+    final_m = state.snapshot()
     summary = {
         "status": "complete" if strict_full_run else "diagnostic",
-        "experiment": "teacher_training_free_ood_memory_readout",
+        "experiment": "training_free_ood_memory_readout",
         "profile": profile.name,
-        "instruction_file": str(Path("instruction.md")),
         "training_performed": False,
         "residual_steering_used": False,
         "candidate_yes_no_scoring_used": False,
@@ -1367,11 +1230,6 @@ def main() -> None:
             "rank": rank,
             "gamma": gamma,
             "eta": eta,
-            "gamma_G": float(args.gamma_g),
-            "eta_G": float(args.eta_g),
-            "lambda_main": float(args.ridge),
-            "lambda_robustness": list(ROBUSTNESS_RIDGES),
-            "random_seeds": list(seeds),
             "route_tie_epsilon": 1e-9,
             "main_weights": "raw_signed",
             "clipping": "appendix_only",
@@ -1390,17 +1248,12 @@ def main() -> None:
         "selection": _selection_summary(selections, correctness, scopes),
         "diagnostics": {
             "route_all_equal_ties": route_ties,
-            "dictionary_all_equal_ties": dictionary_ties,
             "n_distinct_answer_counts": dict(sorted(n_distinct_counts.items())),
             "invalid_peer_answers": invalid_peer_answers,
             "invalid_gold_answers": invalid_gold_answers,
             "parser_vs_external_label_mismatches": parser_label_mismatches,
             "canonical_group_label_conflicts": answer_group_label_conflicts,
-            "majority_to_MG_flips_full": dict(flip_counts),
-            "majority_to_MG_flips_paper_ood": dict(paper_flip_counts),
-            "max_condition_number_G_plus_lambda_I": maximum_condition,
             "final_M_frobenius_norm": float(np.linalg.norm(final_m)),
-            "final_G": final_g.tolist(),
         },
         "historical_label_protocol": {
             "frozen": True,

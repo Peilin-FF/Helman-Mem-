@@ -22,8 +22,7 @@ huggingface-hub==1.18.0
 tokenizers==0.22.2          # within transformers 5.10.2's >=0.22,<=0.23 range
 numpy==1.26.4
 
-# --- training / adapters ---
-peft==0.19.1
+# --- training ---
 accelerate==1.13.0
 datasets==4.8.5
 safetensors==0.7.0

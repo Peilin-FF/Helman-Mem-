@@ -19,4 +19,3 @@ top_p: 0.95
 use_vllm: true
 dtype: bfloat16
 device: cuda:0
-adversarial_rate: 0.0

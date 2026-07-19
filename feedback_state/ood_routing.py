@@ -1,10 +1,9 @@
 """Training-free OOD routing and reliability-weighted voting.
 
-This module is intentionally independent from the residual-steering evaluator.  It
-implements the decide-then-update algorithms in ``instruction.md`` without loading
-or modifying the runtime ``M``/``G`` buffers stored in a Sigma checkpoint.  The
-caller supplies the already-normalized competence direction ``phi`` produced by the
-frozen encoder.
+This module is intentionally independent from the residual-steering evaluator. It
+implements decide-then-update M-Route, M-Vote, and majority voting without loading
+or modifying the runtime memory buffers stored in a Sigma checkpoint. The caller
+supplies the normalized competence direction ``phi`` produced by the frozen encoder.
 """
 from __future__ import annotations
 
@@ -27,8 +26,6 @@ from feedback_state.tasks import (
 )
 
 
-DEFAULT_RIDGE = 0.1
-ROBUSTNESS_RIDGES = (0.05, 0.1, 0.5)
 ROUTE_TIE_EPS = 1e-9
 INVALID_ANSWER = "<invalid>"
 
@@ -43,14 +40,12 @@ class RouteDecision:
 
 
 @dataclass(frozen=True)
-class FactorialVoteResult:
-    """The four factorial vote arms and the exact weights they used."""
+class VoteResult:
+    """Majority and M-weighted vote answers with their exact weights."""
 
     answers: Mapping[str, str]
     weights: Mapping[str, np.ndarray]
     reliability: np.ndarray
-    ridge: float
-    clipped: bool
 
 
 def _as_phi(phi: Any, rank: int) -> np.ndarray:
@@ -224,20 +219,8 @@ def vote(
     return min(tied, key=lambda answer: _answer_tie_key(record, answer))
 
 
-def gls_weights(matrix: Any, rhs: Sequence[float], ridge: float) -> np.ndarray:
-    """Solve ``(G + ridge I) w = rhs`` exactly; no pseudo-inverse fallback."""
-
-    G = np.asarray(matrix, dtype=np.float64)
-    b = np.asarray(rhs, dtype=np.float64).reshape(-1)
-    if G.shape != (b.size, b.size):
-        raise ValueError(f"G shape {G.shape} is incompatible with rhs {b.shape}")
-    if float(ridge) <= 0.0:
-        raise ValueError("ridge must be positive")
-    return np.linalg.solve(G + float(ridge) * np.eye(b.size, dtype=np.float64), b)
-
-
 class OODRoutingState:
-    """Float64 M/G state for pre-hoc routing and factorial voting."""
+    """Float64 M state for pre-hoc routing and weighted voting."""
 
     def __init__(
         self,
@@ -246,8 +229,6 @@ class OODRoutingState:
         rank: int,
         gamma: float,
         eta: float,
-        gamma_g: float,
-        eta_g: float,
     ) -> None:
         self.num_peers = int(num_peers)
         self.rank = int(rank)
@@ -255,19 +236,16 @@ class OODRoutingState:
             raise ValueError("num_peers and rank must be positive")
         self.gamma = float(gamma)
         self.eta = float(eta)
-        self.gamma_g = float(gamma_g)
-        self.eta_g = float(eta_g)
-        if not (0.0 <= self.gamma <= 1.0 and 0.0 <= self.gamma_g <= 1.0):
-            raise ValueError("gamma and gamma_g must lie in [0, 1]")
-        if self.eta < 0.0 or self.eta_g < 0.0:
-            raise ValueError("eta and eta_g must be nonnegative")
+        if not 0.0 <= self.gamma <= 1.0:
+            raise ValueError("gamma must lie in [0, 1]")
+        if self.eta < 0.0:
+            raise ValueError("eta must be nonnegative")
         self.M = np.zeros(
             (self.num_peers, self.rank, self.rank), dtype=np.float64
         )
-        self.G = np.eye(self.num_peers, dtype=np.float64)
 
-    def snapshot(self) -> tuple[np.ndarray, np.ndarray]:
-        return self.M.copy(), self.G.copy()
+    def snapshot(self) -> np.ndarray:
+        return self.M.copy()
 
     def reliability(self, phi: Any) -> np.ndarray:
         direction = _as_phi(phi, self.rank)
@@ -279,28 +257,12 @@ class OODRoutingState:
         peer = int(event_index) % self.num_peers if tied else int(np.argmax(scores))
         return RouteDecision(peer=peer, scores=scores.copy(), tied=tied)
 
-    def route_mg(
-        self,
-        phi: Any,
-        event_index: int,
-        *,
-        ridge: float = DEFAULT_RIDGE,
-    ) -> RouteDecision:
-        reliability = self.reliability(phi)
-        scores = gls_weights(self.G, reliability, ridge)
-        tied = float(scores.max() - scores.min()) < ROUTE_TIE_EPS
-        peer = int(event_index) % self.num_peers if tied else int(np.argmax(scores))
-        return RouteDecision(peer=peer, scores=scores.copy(), tied=tied)
-
-    def all_votes(
+    def votes(
         self,
         phi: Any,
         record: Mapping[str, Any],
         answers: Sequence[Any],
-        *,
-        ridge: float = DEFAULT_RIDGE,
-        clipped: bool = False,
-    ) -> FactorialVoteResult:
+    ) -> VoteResult:
         if len(answers) != self.num_peers:
             raise ValueError(
                 f"expected {self.num_peers} peer answers, got {len(answers)}"
@@ -309,48 +271,20 @@ class OODRoutingState:
         ones = np.ones(self.num_peers, dtype=np.float64)
         weights = {
             "maj": ones / self.num_peers,
-            "G": gls_weights(self.G, ones, ridge),
             "M": reliability.copy(),
-            "MG": gls_weights(self.G, reliability, ridge),
         }
-        if clipped:
-            weights = {name: np.maximum(values, 0.0) for name, values in weights.items()}
         selections = {
             name: vote(record, answers, arm_weights)
             for name, arm_weights in weights.items()
         }
-        return FactorialVoteResult(
+        return VoteResult(
             answers=selections,
             weights={name: values.copy() for name, values in weights.items()},
             reliability=reliability.copy(),
-            ridge=float(ridge),
-            clipped=bool(clipped),
         )
 
-    def robustness_votes(
-        self,
-        phi: Any,
-        record: Mapping[str, Any],
-        answers: Sequence[Any],
-        *,
-        ridges: Sequence[float] = ROBUSTNESS_RIDGES,
-    ) -> dict[tuple[float, bool], FactorialVoteResult]:
-        """Return the declared lambda sweep for both raw and clipped weights."""
-
-        return {
-            (float(ridge), clipped): self.all_votes(
-                phi,
-                record,
-                answers,
-                ridge=float(ridge),
-                clipped=clipped,
-            )
-            for ridge in ridges
-            for clipped in (False, True)
-        }
-
     def update(self, phi: Any, correctness: Sequence[float]) -> None:
-        """Apply Eqs. 1--3 after all decisions for the event are logged."""
+        """Apply the feedback-grounded M update after the event decision."""
 
         direction = _as_phi(phi, self.rank)
         c = _as_correctness(correctness, self.num_peers)
@@ -359,48 +293,8 @@ class OODRoutingState:
             self.gamma * self.M
             + self.eta * c[:, None, None] * outer[None, :, :]
         )
-        q = c - c.mean()
-        self.G = self.gamma_g * self.G + self.eta_g * np.outer(q, q)
-        np.fill_diagonal(self.G, 1.0)
 
     def decay_without_feedback(self) -> None:
         """Advance one event while masking the unavailable label innovation."""
 
         self.M = self.gamma * self.M
-        self.G = self.gamma_g * self.G
-        np.fill_diagonal(self.G, 1.0)
-
-
-class DecayedLabelDictionary:
-    """True-dataset-name oracle baseline with post-decision updates."""
-
-    def __init__(self, *, num_peers: int, gamma: float) -> None:
-        self.num_peers = int(num_peers)
-        self.gamma = float(gamma)
-        self.numerator: defaultdict[tuple[str, int], float] = defaultdict(float)
-        self.denominator: defaultdict[tuple[str, int], float] = defaultdict(float)
-
-    def rates(self, dataset_name: str) -> np.ndarray:
-        name = str(dataset_name)
-        result = np.zeros(self.num_peers, dtype=np.float64)
-        for peer in range(self.num_peers):
-            key = (name, peer)
-            den = self.denominator[key]
-            result[peer] = self.numerator[key] / den if den > 0.0 else 0.0
-        return result
-
-    def route(self, dataset_name: str, event_index: int) -> RouteDecision:
-        scores = self.rates(dataset_name)
-        tied = float(scores.max() - scores.min()) < ROUTE_TIE_EPS
-        peer = int(event_index) % self.num_peers if tied else int(np.argmax(scores))
-        return RouteDecision(peer=peer, scores=scores.copy(), tied=tied)
-
-    def update(self, dataset_name: str, correctness: Sequence[float]) -> None:
-        c = _as_correctness(correctness, self.num_peers)
-        name = str(dataset_name)
-        for peer in range(self.num_peers):
-            key = (name, peer)
-            self.numerator[key] = (
-                self.gamma * self.numerator[key] + float(c[peer] == 1.0)
-            )
-            self.denominator[key] = self.gamma * self.denominator[key] + 1.0

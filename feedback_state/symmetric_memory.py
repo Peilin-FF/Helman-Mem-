@@ -1,26 +1,10 @@
-"""Event-axis symmetric information-matrix trust memory for multi-agent selection.
+"""Event-axis symmetric competence memory for multi-agent selection.
 
-Replaces the token-level Delta-Mem feedback channel (which self-overwrites: per-token
-keep^~800 ~ 1e-7, so trust never survives to the next decision). Here the trust state
-is updated ONCE PER TASK (event axis, response-length-independent) and is a real
-SYMMETRIC matrix, so Weyl's inequality applies: a single noisy update moves the
-spectrum by <= the update's norm, while only persistently aligned signals build a
-dominant eigenvalue. See artifacts/symmetric_memory_design.html for the full rationale.
-
-Two states:
-  * per-peer  M_p  in R^{r x r}, symmetric, init 0:  M_p <- gamma*M_p + eta*s*phi phi^T
-    where s in {+1,-1} = peer correct/incorrect, phi = L2-normalized soft-prototype address
-    (a query soft-addressed over FIXED per-task CM centroids; see set_prototypes / phi_of).
-    Read at decision time:  steer_vec = M_p @ phi*  -> a rank-dim direction injected into the
-    frozen CM's activations (ActivationSteerer), re-ranking its " Peer j" log-probs. The trust
-    is therefore conditioned on the task, not on this round's raw response.
-  * CM-owned joint  G  in R^{P x P}, symmetric, init 0:  G <- gamma_G*G + eta*o o^T
-    where o[p] in {+1,-1,0} = per-peer outcome on the task. Off-diagonal G[p,q] reads out
-    redundancy (>0, agents right/wrong together) vs complementarity (<0).
-
-gamma = exp(-softplus(theta)) in (0,1] (S4D-style: structurally stable for any theta;
-||M|| <= eta/(1-gamma), so the state can neither blow up nor — while evidence keeps
-arriving — collapse). Only this module's params train; the CM backbone stays frozen.
+For each peer, the state is a symmetric matrix ``M_p`` updated once per event:
+``M_p <- gamma*M_p + eta*s*phi phi^T``.  The task-conditioned readout
+``M_p @ phi`` is projected into the frozen center model's residual stream.  The
+second-order topology ``G`` used by Sigma-Mem is maintained by the evaluation
+posterior, separately from this first-order memory module.
 """
 from __future__ import annotations
 
@@ -36,65 +20,8 @@ DEFAULT_TASK_TYPES = ("math", "code", "rag")
 RELIABILITY_ZSCORE_EPS = 1e-3
 
 
-def zscore_peer_values(
-    values: torch.Tensor, *, eps: float = RELIABILITY_ZSCORE_EPS
-) -> torch.Tensor:
-    """Standardize peer values with a finite near-tie sensitivity.
-
-    ``sqrt(var + eps^2)`` behaves like an ordinary z-score once peers differ,
-    while preventing a nearly constant reliability vector from amplifying
-    floating-point noise or producing a gradient proportional to ``1e6``.
-    """
-    vals = torch.as_tensor(values)
-    if vals.ndim != 1:
-        vals = vals.reshape(-1)
-    centered = vals - vals.mean()
-    scale = (centered.square().mean() + float(eps) ** 2).sqrt()
-    return centered / scale
-
-
-class Whitener(nn.Module):
-    """Running mean/var standardizer for raw CM hidden vectors (buffers, not params).
-
-    Raw LM hidden states are strongly ANISOTROPIC: all problem embeddings collapse to
-    cosine ~0.99 along one dominant direction, so a projection of the raw vector cannot
-    address content (this is exactly why the earlier phi=desc/query failed). Subtracting
-    the running mean and dividing by running std recovers the content structure (probed:
-    within-task cosine 0.99 -> ~0.2). Stats update via EMA on each .observe(); .forward()
-    standardizes. Stats are detached (a fixed-ish preprocessing frame), so gradient flows
-    only through the downstream trainable projection, not into the whitening frame.
-    """
-
-    def __init__(self, dim: int, momentum: float = 0.99, dtype=torch.float32):
-        super().__init__()
-        self.momentum = float(momentum)
-        self.register_buffer("mean", torch.zeros(dim, dtype=dtype))
-        self.register_buffer("var", torch.ones(dim, dtype=dtype))
-        self.register_buffer("count", torch.zeros(1, dtype=dtype))
-
-    @torch.no_grad()
-    def observe(self, x: torch.Tensor) -> None:
-        x = x.detach().to(self.mean.dtype).reshape(-1)
-        m = self.momentum if float(self.count) > 0 else 0.0
-        self.mean.mul_(m).add_(x * (1 - m))
-        self.var.mul_(m).add_((x - self.mean).pow(2) * (1 - m))
-        self.count += 1
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        mean = self.mean.to(x.dtype).detach()
-        std = (self.var.to(x.dtype).detach() + 1e-5).sqrt()
-        return (x - mean) / std
-
-
-
 class SymmetricTrustMemory(nn.Module):
-    """Per-peer symmetric trust matrices + an optional CM-owned joint agent matrix.
-
-    All trainable knobs (phi embedding, decay theta, write strength eta) live here so the
-    trainer can optimize ``self.parameters()`` together with the steerer's projection/gain.
-    The matrices M_p / G are NON-trainable BUFFERS that evolve by the event-axis recurrence
-    at train and eval time alike (they are state, not parameters).
-    """
+    """Peer-specific symmetric competence matrices and their learned dynamics."""
 
     def __init__(
         self,
@@ -105,15 +32,8 @@ class SymmetricTrustMemory(nn.Module):
         phi_mode: str = "proto",         # only "proto" (soft task-centroid address); see set_prototypes()
         phi_in_dim: int | None = None,   # raw CM hidden dim the proto address whitens/compares (e.g. 1024)
         proto_tau: float = 0.1,          # softmax temperature over centroid cosines
-        write_mode: str = "addr",        # "addr" (A: write phi phi^T) | "carry" (B: write u u^T from a value vec)
-        value_in_dim: int | None = None, # raw dim of the carried value vector (carry mode)
-        whiten: bool = False,            # standardize raw CM vectors before projection (fixes anisotropy)
         eta_init: float = 0.3,
         gamma_init: float = 0.9,
-        decay_mode: str = "scalar",      # "scalar" (one gamma) | "diag" (per-direction gamma)
-        use_joint: bool = True,
-        spectral_clip: float | None = None,
-        per_peer_decay: bool = False,
         device=None,
         dtype=torch.float32,
     ) -> None:
@@ -121,11 +41,7 @@ class SymmetricTrustMemory(nn.Module):
         self.num_peers = int(num_peers)
         self.rank = int(rank)
         self.task_types = tuple(t.lower() for t in task_types)
-        self._task_index = {t: i for i, t in enumerate(self.task_types)}
         self.phi_mode = str(phi_mode)
-        self.write_mode = str(write_mode)
-        self.use_joint = bool(use_joint)
-        self.spectral_clip = spectral_clip  # optional eigenvalue clip to [-rho, rho]
         self._mdtype = dtype
 
         # ---- trainable params (the only things the optimizer touches) ----
@@ -143,9 +59,6 @@ class SymmetricTrustMemory(nn.Module):
         assert phi_in_dim, "phi_mode='proto' needs phi_in_dim (raw CM hidden dim)"
         self.phi_in_dim = int(phi_in_dim)
         self._proto_tau = float(proto_tau)
-        self.phi = None
-        self.phi_proj = None
-        self.phi_whitener = None
         # prototypes + whitening stats are FIXED buffers, filled by set_prototypes() before
         # training. n_proto defaults to #task_types but is overwritten on set_prototypes.
         n_proto = len(self.task_types)
@@ -156,43 +69,13 @@ class SymmetricTrustMemory(nn.Module):
         # the ONLY learnable part: maps the [n_proto] soft-address dist -> rank direction.
         self.proto_proj = nn.Linear(n_proto, self.rank, bias=False)
         nn.init.normal_(self.proto_proj.weight, std=1.0 / (n_proto ** 0.5))
-        # Carry mode (B): the WRITTEN value direction u is a projection of a raw value vector
-        # (e.g. CM_hidden(peer_answer) - CM_hidden(gold)), NOT phi. phi is still used for READS.
-        if self.write_mode == "carry":
-            assert value_in_dim, "write_mode='carry' needs value_in_dim (raw value vector dim)"
-            self.value_in_dim = int(value_in_dim)
-            self.diff_proj = nn.Linear(self.value_in_dim, self.rank, bias=False)
-            nn.init.normal_(self.diff_proj.weight, std=1.0 / (self.value_in_dim ** 0.5))
-            self.diff_whitener = Whitener(self.value_in_dim, dtype=dtype) if whiten else None
-        else:
-            self.diff_proj = None
-            self.diff_whitener = None
         # write strength eta > 0 via softplus; bounds the per-event Weyl step ||E|| = eta.
         self._eta_raw = nn.Parameter(torch.tensor(float(_inv_softplus(eta_init))))
         # decay: gamma = exp(-softplus(theta)) in (0,1]; structurally stable for any theta.
-        #   decay_mode="scalar": one theta -> one gamma for the whole matrix.
-        #   decay_mode="diag":   a per-eigen-direction gamma vector in the FIXED basis (rank
-        #     diagonal). Update keeps symmetry via the two-sided form
-        #     M <- diag(g)^{1/2} M diag(g)^{1/2} + eta s phi phi^T, so directions can forget
-        #     at different rates (long-memory dims vs fast-adapting dims). Stays bounded since
-        #     every g_i in (0,1].
-        self.decay_mode = str(decay_mode)
-        # per_peer_decay: give EACH peer its own decay theta, so e.g. gemma's trust time-constant
-        # is learned separately from phi's. Shape gains a leading num_peers axis. Default off keeps
-        # the original single shared theta (and old checkpoints loadable).
-        self.per_peer_decay = bool(per_peer_decay)
-        np_ax = (self.num_peers,) if self.per_peer_decay else ()
-        if self.decay_mode == "scalar":
-            self._theta = nn.Parameter(torch.full(np_ax, float(_inv_softplus(-_log(gamma_init)))))
-        elif self.decay_mode == "diag":
-            self._theta = nn.Parameter(torch.full((*np_ax, self.rank), float(_inv_softplus(-_log(gamma_init)))))
-        else:
-            raise ValueError(f"decay_mode must be 'scalar' or 'diag', got {self.decay_mode}")
-        self._theta_joint = nn.Parameter(torch.tensor(float(_inv_softplus(-_log(gamma_init)))))
+        self._theta = nn.Parameter(torch.tensor(float(_inv_softplus(-_log(gamma_init)))))
 
-        # ---- non-trainable state buffers (the matrices themselves) ----
+        # ---- non-trainable state buffer ----
         self.register_buffer("M", torch.zeros(self.num_peers, self.rank, self.rank, dtype=dtype))
-        self.register_buffer("G", torch.zeros(self.num_peers, self.num_peers, dtype=dtype))
         if device is not None:
             self.to(device)
 
@@ -204,17 +87,9 @@ class SymmetricTrustMemory(nn.Module):
     def gamma(self) -> torch.Tensor:
         return torch.exp(-nn.functional.softplus(self._theta))
 
-    def gamma_for(self, peer: int) -> torch.Tensor:
-        """Decay for one peer: indexes the leading peer axis when per_peer_decay, else shared."""
-        g = self.gamma()
-        return g[peer] if self.per_peer_decay else g
-
-    def gamma_joint(self) -> torch.Tensor:
-        return torch.exp(-nn.functional.softplus(self._theta_joint))
-
     def gamma_scalar(self) -> float:
-        """Mean gamma as a python float (works for scalar or diag decay; logging only)."""
-        return float(self.gamma().mean())
+        """Shared scalar decay as a Python float for logging."""
+        return float(self.gamma())
 
     # ---- phi_t : L2-normalized context direction (soft-prototype address) ----
     def _device(self):
@@ -256,69 +131,30 @@ class SymmetricTrustMemory(nn.Module):
         v = self.proto_proj(p)                                        # [rank]
         return v / (v.norm() + 1e-8)
 
-    def value_of(self, raw_value) -> torch.Tensor:
-        """Carry mode (B): L2-normalized rank-dim WRITE direction from a raw value vector
-        (e.g. CM_hidden(peer_answer) - CM_hidden(gold)). Whitened then projected by diff_proj."""
-        dev = self._device()
-        raw = raw_value if torch.is_tensor(raw_value) else torch.as_tensor(raw_value, device=dev)
-        raw = raw.to(dev, self.diff_proj.weight.dtype)
-        if self.diff_whitener is not None:
-            self.diff_whitener.observe(raw)
-            raw = self.diff_whitener(raw)
-        v = self.diff_proj(raw)
-        return v / (v.norm() + 1e-8)
-
     # ---- state lifecycle ----
     def reset(self) -> None:
         with torch.no_grad():
             self.M.zero_()
-            self.G.zero_()
 
     def snapshot(self) -> dict:
-        return {"M": self.M.detach().clone(), "G": self.G.detach().clone()}
+        return {"M": self.M.detach().clone()}
 
     def restore(self, snap: dict) -> None:
         with torch.no_grad():
             self.M.copy_(snap["M"])
-            self.G.copy_(snap["G"])
 
     # ---- event-axis updates (called ONCE PER TASK, after the outcome is known) ----
     @torch.no_grad()
-    def update(self, peer: int, sign: float, ctx, value_vec=None) -> None:
-        """M_peer <- gamma*M_peer + eta*sign*(w w^T)  (symmetric rank-1, event-level).
-        addr mode (A): w = phi(ctx)              -> trust addressed by content/task direction.
-        carry mode (B): w = value_of(value_vec)  -> trust written along the ERROR direction
-                        (peer_answer - gold), signed by correctness."""
+    def update(self, peer: int, sign: float, ctx) -> None:
+        """Apply the symmetric event update ``M <- gamma M + eta sign phi phi^T``."""
         if not (0 <= peer < self.num_peers):
             return
-        if self.write_mode == "carry":
-            assert value_vec is not None, "carry mode update needs value_vec"
-            w = self.value_of(value_vec).to(self._mdtype).detach()
-        else:
-            w = self.phi_of(ctx).to(self._mdtype).detach()
-        g = self.gamma_for(peer).to(self._mdtype).detach()
+        w = self.phi_of(ctx).to(self._mdtype).detach()
+        g = self.gamma().to(self._mdtype).detach()
         e = self.eta.to(self._mdtype).detach()
         outer = torch.outer(w, w)  # symmetric for any w -> M stays symmetric
-        if self.decay_mode == "scalar":
-            decayed = g * self.M[peer]
-        else:  # diag: two-sided diag(g)^{1/2} M diag(g)^{1/2} preserves symmetry
-            gh = g.sqrt()
-            decayed = gh.unsqueeze(1) * self.M[peer] * gh.unsqueeze(0)
+        decayed = g * self.M[peer]
         self.M[peer] = decayed + e * float(sign) * outer
-        if self.spectral_clip is not None:
-            self.M[peer] = _clip_spectrum(self.M[peer], self.spectral_clip)
-
-    @torch.no_grad()
-    def update_joint(self, outcome_vec: Sequence[float]) -> None:
-        """G <- gamma_G*G + eta*o o^T (symmetric joint state)."""
-        if not self.use_joint:
-            return
-        o = torch.zeros(self.num_peers, dtype=self._mdtype, device=self.G.device)
-        for p, v in enumerate(outcome_vec[: self.num_peers]):
-            o[p] = float(v)
-        g = self.gamma_joint().to(self._mdtype).detach()
-        e = self.eta.to(self._mdtype).detach()
-        self.G = g * self.G + e * torch.outer(o, o)
 
     @torch.no_grad()
     def decay_without_feedback(self) -> None:
@@ -326,19 +162,9 @@ class SymmetricTrustMemory(nn.Module):
 
         Selective-feedback experiments still advance the event clock on every
         example.  This applies exactly the decay term from ``update`` to every
-        peer matrix and, when enabled, to the joint state ``G``.
+        peer matrix.
         """
-        for peer in range(self.num_peers):
-            g = self.gamma_for(peer).to(self._mdtype).detach()
-            if self.decay_mode == "scalar":
-                self.M[peer].mul_(g)
-            else:
-                gh = g.sqrt()
-                self.M[peer].copy_(
-                    gh.unsqueeze(1) * self.M[peer] * gh.unsqueeze(0)
-                )
-        if self.use_joint:
-            self.G.mul_(self.gamma_joint().to(self._mdtype).detach())
+        self.M.mul_(self.gamma().to(self._mdtype).detach())
 
     def steer_vector(self, peer: int, ctx) -> torch.Tensor:
         """Rank-dim trust direction for steering: M_peer @ phi*  (differentiable thru phi*).
@@ -353,7 +179,7 @@ class SymmetricTrustMemory(nn.Module):
         M = self.M[peer].to(phi.dtype)
         return M @ phi
 
-    def steer_vector_diff(self, peer: int, ctx, sign: float, value_vec=None) -> torch.Tensor:
+    def training_steer_vector(self, peer: int, ctx, sign: float) -> torch.Tensor:
         """Like steer_vector, but reads through ONE differentiable write applied to a detached
         copy of M_peer: M' = gamma*M_detached + eta*sign*(w w^T), then return M' @ phi.
 
@@ -367,32 +193,12 @@ class SymmetricTrustMemory(nn.Module):
         if not (0 <= peer < self.num_peers):
             return torch.zeros(self.rank, device=dev)
         phi = self.phi_of(ctx)
-        if self.write_mode == "carry":
-            assert value_vec is not None, "carry mode diff-write needs value_vec"
-            w = self.value_of(value_vec).to(phi.dtype)
-        else:
-            w = phi
-        g = self.gamma_for(peer).to(phi.dtype)             # differentiable (no detach)
+        g = self.gamma().to(phi.dtype)                     # differentiable (no detach)
         e = self.eta.to(phi.dtype)                          # differentiable
         M_hist = self.M[peer].to(phi.dtype).detach()        # history: detached buffer
-        outer = torch.outer(w, w)
-        if self.decay_mode == "scalar":
-            M_new = g * M_hist + e * float(sign) * outer
-        else:  # diag two-sided form, preserves symmetry
-            gh = g.sqrt()
-            M_new = gh.unsqueeze(1) * M_hist * gh.unsqueeze(0) + e * float(sign) * outer
+        outer = torch.outer(phi, phi)
+        M_new = g * M_hist + e * float(sign) * outer
         return M_new @ phi
-
-    @torch.no_grad()
-    def redundancy_penalty(self, peer: int, chosen: Sequence[int]) -> float:
-        """Sum of G[peer, q] over already-chosen peers q (>0 = redundant with the team).
-
-        For team assembly / anti-redundant tie-break: subtract this from a candidate's score
-        so the CM does not stack near-duplicate agents. Read-only (no grad needed at decision).
-        """
-        if not self.use_joint or not chosen:
-            return 0.0
-        return float(sum(self.G[peer, q].item() for q in chosen if 0 <= q < self.num_peers))
 
     # ---- diagnostics ----
     @torch.no_grad()
@@ -414,13 +220,6 @@ def _inv_softplus(y: float) -> float:
     """Inverse of softplus so softplus(raw)=y exactly at init (y>0)."""
     import math
     return math.log(math.expm1(y)) if y > 0 else -10.0
-
-
-def _clip_spectrum(M: torch.Tensor, rho: float) -> torch.Tensor:
-    """Project a symmetric matrix's eigenvalues into [-rho, rho] (explicit stability cap)."""
-    w, V = torch.linalg.eigh(M.float())
-    w = w.clamp(-rho, rho)
-    return (V @ torch.diag(w) @ V.transpose(-1, -2)).to(M.dtype)
 
 
 @torch.no_grad()
@@ -447,8 +246,8 @@ class ActivationSteerer(nn.Module):
     """Coupling (b): inject a trust-derived steering vector into the frozen CM's residual
     stream via forward hooks on the upper-half decoder layers.
 
-    Self-contained (does NOT touch deltamem or joint_models). The trust read for the
-    candidate being scored produces a rank-dim vector; a trainable projection maps it to
+    The trust read for the candidate being scored produces a rank-dim vector; a
+    trainable projection maps it to
     hidden size and a learnable gain scales the residual add. Hooks are installed once and
     read ``self.steer_vec`` (set per candidate by the caller; None => no steering, so the
     backbone runs untouched). This is the higher-risk arm: injecting a slowly-varying
@@ -494,7 +293,7 @@ class ActivationSteerer(nn.Module):
 
 
 def _decoder_layers(model):
-    """Return the underlying decoder layer list, unwrapping PEFT/LoRA wrappers."""
+    """Return the underlying decoder layer list through common model containers."""
     seen = set()
     stack = [model]
     while stack:

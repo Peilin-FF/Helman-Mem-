@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sigma-Mem 仓库算法清单</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+<script id="seed" type="application/json">
+[
+  {"type":"html","html":"<div class=\"eyebrow\">Repository inventory</div><h1>Sigma-Mem 仓库算法清单</h1><p class=\"lede\">仓库当前集中维护论文使用的 response-aware selection、direct M readout 与 Majority control。</p><div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">6</div><div class=\"stat-label\">论文标签</div></div><div class=\"stat-card\"><div class=\"stat-num\">3</div><div class=\"stat-label\">方法族</div></div><div class=\"stat-card\"><div class=\"stat-num\">5</div><div class=\"stat-label\">Center models</div></div><div class=\"stat-card\"><div class=\"stat-num\">5</div><div class=\"stat-label\">发布 Sigma checkpoints</div></div></div>"},
+  {"type":"table","head":["方法族","论文标签","核心决策","M","G","当前 response","状态"],"rows":[["响应级判断","Base","冻结 CM 对候选计算 Yes-vs-No utility，取最大值","否","否","CM 读取并判断","保留"],["响应级判断","Σ w/o G","M readout 经 residual steering 影响 Yes-vs-No utility","是","否","CM 读取并判断","保留"],["响应级判断","Σ w/ joint G","steered utility 与 peer relationship G 形成 posterior","是","是","CM 读取并判断","保留"],["直接读出","M-Route","按 s_p=φᵀM_pφ 选择 peer","是","否","路由时不读取","保留"],["直接读出","M-Vote","以 s_p 聚合 canonical answer groups","是","否","只用于答案归组","保留"],["无记忆对照","Majority","以 1/P 聚合 canonical answer groups","否","否","只用于答案归组","保留"]]},
+  {"type":"html","html":"<h2>固定的 Σ-Mem 实现</h2><div class=\"grid col-2\"><div class=\"card\"><h3>Memory dynamics</h3><p><code>M_p ← γM_p + ηc_pφφᵀ</code></p><p>共享 scalar decay、address write、shared stream state；这些不再是运行时可选分支。</p></div><div class=\"card\"><h3>Candidate scoring</h3><p>训练与评测入口固定为 Candidate Yes/No utility。Center model 始终冻结，历史证据通过 upper-block residual steering 注入。</p></div></div>"},
+  {"type":"table","head":["入口/模块","职责"],"rows":[["train_symmetric_memory.py","训练 Sigma projection、gain、γ/η 与 competence address"],["eval_symmetric_memory.py","Base、Σ w/o G、Σ w/ joint G；在评测流维护论文 centered topology G"],["feedback_state/symmetric_memory.py","仅维护 first-order M state 与 residual steering"],["eval_cf_memory_routing.py","CF stream M-Route"],["eval_ood_memory_routing.py","OOD Majority、M-Route、M-Vote"],["eval_ood_feedback_sparsity.py / run_ood_sigma_feedback_sparsity.py","含 PIQA 的稀疏 feedback 评测"]]},
+  {"type":"html","html":"<h2>最终代码与产物映射</h2><div class=\"grid col-2\"><div class=\"card\"><h3>主方法</h3><p><code>outputs/sigma_candidate_yesno_*</code><br><code>outputs/eval_center_candidate_yesno_*</code><br><code>outputs/eval_sigma_candidate_yesno_*</code></p></div><div class=\"card\"><h3>扩展实验</h3><p><code>outputs/eval_cf_unified_peer_counts_llama_bitcpm_shifted_by_center</code><br><code>outputs/eval_generalization_3peer_peer012_qwen3</code><br><code>outputs/cf_memory_routing</code><br><code>outputs/ood_memory_routing</code><br><code>outputs/ood_feedback_sparsity_with_piqa</code><br><code>outputs/ood_sigma_feedback_sparsity_with_piqa</code></p></div></div>"},
+  {"type":"html","html":"<h2>审计边界</h2><div class=\"callout olive\"><div class=\"callout-h\">可执行算法已收敛</div><p>训练与评测固定使用 Candidate Yes/No scorer；direct readout 只包含 Majority、M-Route 和 M-Vote；多-peer 只保留最终 shifted Llama/BitCPM 数据与五个 center model 的完整结果；稀疏反馈只保留 with-PIQA 条件。</p></div>"},
+  {"type":"table","head":["仍保留但不属于当前论文实现的对象","原因","约束"],"rows":[["artifacts/g_topology_performance_review.html","历史 G/JudgeHead 分析","内部参考；引用的旧配置已不存在，不可作为当前实现说明"],["artifacts/generalization_task_recommendations.html","内部选题建议","内部参考；不对应发布入口"],["artifacts/symmetric_memory_viz.html","早期方法可视化","内部参考；仍含旧 use_joint/Delta-Mem 叙述，不可作为当前实现说明"],["发布 checkpoint 内的 G、_theta_joint 及关闭态配置字段","保持原始 checkpoint state/config 哈希与论文结果 provenance","运行时显式忽略；当前 SymmetricTrustMemory 不再实现该旧内部 G"]]},
+  {"type":"html","html":"<div class=\"callout clay\"><div class=\"callout-h\">论文文字仍需同步</div><p><code>/mnt/data/peilin/experiment.txt</code> 的 direct-readout 表仍列出 <code>Overall best peer</code>，但固定 peer 的执行代码和专用产物已按清理要求删除。发布论文前应决定删除该行，或重新保留其最小可验证统计。</p></div>"}
+]
+</script>
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>
