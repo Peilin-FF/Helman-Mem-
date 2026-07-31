@@ -319,3 +319,17 @@ bash tests/experiments/peer_generalization/run_sigma.sh
 
 Use `PEER_COUNTS="4"` or `SPLITS="cf_0 cf_90"` to run a subset. The scheduler skips
 completed outputs containing `eval_metrics.json`.
+
+## ❤️ Citation
+If you find our work is useful, please kindly cite:
+```bash
+@misc{feng2026sigmamemonlinereliabilitymemory,
+      title={$\Sigma$-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems}, 
+      author={Peilin Feng and Suorong Yang and Soujanya Poria},
+      year={2026},
+      eprint={2607.27958},
+      archivePrefix={arXiv},
+      primaryClass={cs.MA},
+      url={https://arxiv.org/abs/2607.27958}, 
+}
+```
