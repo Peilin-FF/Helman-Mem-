@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+set -Euo pipefail
+
+cd "$(dirname "$0")/../../.."
+
+source tests/experiments/common/gpu_lock.sh
+
+export PYTHONPATH=".:${PYTHONPATH:-}"
+export HF_DATA_DIR="${HF_DATA_DIR:-$PWD/.cache/huggingface/datasets}"
+export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+export FEEDBACK_CODE_EXEC_ALLOW="${FEEDBACK_CODE_EXEC_ALLOW:-1}"
+
+PY_SIGMA="${PY_SIGMA:-python3}"
+PY_SIGMA35="${PY_SIGMA35:-python3}"
+DATA_ROOT="${DATA_ROOT:-data}"
+CONFIG="${CONFIG:-configs/symmetric_memory_candidate_yesno.yaml}"
+OUT_ROOT="${OUT_ROOT:-outputs/peer_generalization}"
+LOGD="${LOGD:-logs/peer_generalization}"
+MAX_LENGTH="${MAX_LENGTH:-8192}"
+POLL_SECONDS="${POLL_SECONDS:-60}"
+GPU_MAX_USED_MB="${GPU_MAX_USED_MB:-1000}"
+GPU_MAX_UTIL="${GPU_MAX_UTIL:-10}"
+
+mkdir -p "$OUT_ROOT" "$LOGD"
+
+if [[ -n "${GPUS:-}" ]]; then
+  read -r -a ALLOWED_GPUS <<< "$GPUS"
+else
+  mapfile -t ALLOWED_GPUS < <(nvidia-smi --query-gpu=index --format=csv,noheader,nounits)
+fi
+read -r -a SPLITS <<< "${SPLITS:-cf_0 cf_50 cf_70 cf_90}"
+read -r -a PEER_COUNTS <<< "${PEER_COUNTS:-4 5}"
+
+MODELS=(
+  "q3_0.6b|models/Qwen3-0.6B|models/Sigma-Mem/Qwen3-0.6B|$PY_SIGMA"
+  "q3_4b|models/Qwen3-4B|models/Sigma-Mem/Qwen3-4B|$PY_SIGMA"
+  "q3_8b|models/Qwen3-8B|models/Sigma-Mem/Qwen3-8B|$PY_SIGMA"
+  "q35_4b|models/Qwen3.5-4B|models/Sigma-Mem/Qwen3.5-4B|$PY_SIGMA35"
+  "q35_9b|models/Qwen3.5-9B|models/Sigma-Mem/Qwen3.5-9B|$PY_SIGMA35"
+)
+
+declare -A MODEL_PATH CKPT PYTHON_BIN
+for entry in "${MODELS[@]}"; do
+  IFS='|' read -r tag model ckpt pybin <<< "$entry"
+  MODEL_PATH["$tag"]="$model"
+  CKPT["$tag"]="$ckpt"
+  PYTHON_BIN["$tag"]="$pybin"
+done
+
+out_dir() {
+  local tag="$1" peers="$2" arm="$3" split="$4"
+  echo "$OUT_ROOT/$tag/peers${peers}/${arm}_${split}"
+}
+
+task_done() {
+  local tag="$1" peers="$2" arm="$3" split="$4"
+  [[ -f "$(out_dir "$tag" "$peers" "$arm" "$split")/eval_metrics.json" ]]
+}
+
+in_allowed_gpus() {
+  local gpu="$1" x
+  for x in "${ALLOWED_GPUS[@]}"; do
+    [[ "$x" == "$gpu" ]] && return 0
+  done
+  return 1
+}
+
+declare -A GPU_TASK PID_TASK PID_LOG TASK_PID
+
+find_free_gpu() {
+  local task_key="$1"
+  local idx used util
+  while IFS=',' read -r idx used util; do
+    idx="${idx//[[:space:]]/}"
+    used="${used//[[:space:]]/}"
+    util="${util//[[:space:]]/}"
+    in_allowed_gpus "$idx" || continue
+    [[ -n "${GPU_TASK[$idx]:-}" ]] && continue
+    if [[ "$used" -le "$GPU_MAX_USED_MB" && "$util" -le "$GPU_MAX_UTIL" ]] && gpu_try_claim "$idx" "$task_key"; then
+      echo "$idx"
+      return 0
+    fi
+  done < <(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits)
+  return 1
+}
+
+launch_eval() {
+  local tag="$1" peers="$2" arm="$3" split="$4" gpu="$5"
+  local key="$tag|peers${peers}|$arm|$split"
+  local out log data ablate=()
+  data="$DATA_ROOT/counterfactual_${peers}peer/${split}.jsonl"
+  out="$(out_dir "$tag" "$peers" "$arm" "$split")"
+  log="$LOGD/eval_${tag}_peers${peers}_${arm}_${split}_gpu${gpu}.log"
+  mkdir -p "$out"
+  if [[ "$arm" == "center" ]]; then
+    ablate=(--ablate_memory)
+  fi
+  echo "[$(date '+%F %T')] launch gpu=$gpu $key -> $out"
+  CUDA_VISIBLE_DEVICES="$gpu" "${PYTHON_BIN[$tag]}" -u -m tests.experiments.common.evaluate_sigma \
+    --config "$CONFIG" \
+    --checkpoint "${CKPT[$tag]}" \
+    --central_model "${MODEL_PATH[$tag]}" \
+    --num_peers "$peers" \
+    --max_length "$MAX_LENGTH" \
+    --offline_data "$data" \
+    --output "$out" \
+    "${ablate[@]}" \
+    > "$log" 2>&1 &
+  local pid=$!
+  PID_TASK["$pid"]="$key"
+  PID_LOG["$pid"]="$log"
+  TASK_PID["$key"]="$pid"
+  GPU_TASK["$gpu"]="$key"
+  gpu_update_claim_pid "$gpu" "$pid" "$key"
+}
+
+reap_finished() {
+  local pid key gpu rc
+  set +u
+  local pids=("${!PID_TASK[@]}")
+  set -u
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      continue
+    fi
+    key="${PID_TASK[$pid]}"
+    rc=0
+    wait "$pid" || rc=$?
+    gpu=""
+    for g in "${!GPU_TASK[@]}"; do
+      if [[ "${GPU_TASK[$g]}" == "$key" ]]; then
+        gpu="$g"
+        unset 'GPU_TASK[$g]'
+        gpu_release_claim "$g" "$key"
+        break
+      fi
+    done
+    echo "[$(date '+%F %T')] finish rc=$rc gpu=${gpu:-?} $key log=${PID_LOG[$pid]}"
+    if [[ "$rc" -ne 0 ]]; then
+      echo "[fail] $key failed; see ${PID_LOG[$pid]}" >&2
+      exit "$rc"
+    fi
+    unset 'PID_TASK[$pid]' 'PID_LOG[$pid]'
+  done
+}
+
+active_count() {
+  set +u
+  echo "${#PID_TASK[@]}"
+  set -u
+}
+
+validate_inputs() {
+  local peers split tag
+  for peers in "${PEER_COUNTS[@]}"; do
+    for split in "${SPLITS[@]}"; do
+      [[ -f "$DATA_ROOT/peers${peers}/${split}.jsonl" ]] || {
+        echo "[fail] missing $DATA_ROOT/peers${peers}/${split}.jsonl" >&2
+        exit 1
+      }
+    done
+  done
+  for tag in "${!MODEL_PATH[@]}"; do
+    [[ -f "${CKPT[$tag]}/sym_memory.pt" ]] || { echo "[fail] missing checkpoint ${CKPT[$tag]}/sym_memory.pt" >&2; exit 1; }
+    command -v "${PYTHON_BIN[$tag]}" >/dev/null || { echo "[fail] missing python ${PYTHON_BIN[$tag]}" >&2; exit 1; }
+  done
+}
+
+remaining_count() {
+  local remaining=0 tag peers split arm entry
+  for entry in "${MODELS[@]}"; do
+    IFS='|' read -r tag _model _ckpt _pybin <<< "$entry"
+    for peers in "${PEER_COUNTS[@]}"; do
+      for split in "${SPLITS[@]}"; do
+        for arm in center sigma; do
+          task_done "$tag" "$peers" "$arm" "$split" || remaining=$((remaining + 1))
+        done
+      done
+    done
+  done
+  echo "$remaining"
+}
+
+validate_inputs
+
+echo "[$(date '+%F %T')] start shifted 4/5-peer by-center scheduler"
+echo "data=$DATA_ROOT"
+echo "out=$OUT_ROOT"
+echo "peer_counts=${PEER_COUNTS[*]} models=${#MODELS[@]}"
+echo "allowed_gpus=${ALLOWED_GPUS[*]} idle=(mem<=${GPU_MAX_USED_MB}MiB util<=${GPU_MAX_UTIL}%) poll=${POLL_SECONDS}s"
+
+while true; do
+  reap_finished
+  launched=0
+  for entry in "${MODELS[@]}"; do
+    IFS='|' read -r tag _model _ckpt _pybin <<< "$entry"
+    for peers in "${PEER_COUNTS[@]}"; do
+      for split in "${SPLITS[@]}"; do
+        for arm in center sigma; do
+          task_done "$tag" "$peers" "$arm" "$split" && continue
+          key="$tag|peers${peers}|$arm|$split"
+          [[ -n "${TASK_PID[$key]:-}" ]] && continue
+          if gpu="$(find_free_gpu "$key")"; then
+            launch_eval "$tag" "$peers" "$arm" "$split" "$gpu"
+            launched=1
+          else
+            break 4
+          fi
+        done
+      done
+    done
+  done
+
+  remaining="$(remaining_count)"
+  echo "[$(date '+%F %T')] status remaining=$remaining active=$(active_count)"
+  [[ "$remaining" -eq 0 && "$(active_count)" -eq 0 ]] && break
+  if [[ "$launched" -eq 0 ]]; then
+    sleep "$POLL_SECONDS"
+  fi
+done
+
+echo "[$(date '+%F %T')] all shifted 4/5-peer by-center evals complete"

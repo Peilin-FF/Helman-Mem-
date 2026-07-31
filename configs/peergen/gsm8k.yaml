@@ -1,13 +1,11 @@
 dataset: gsm8k
-hf_path_override: /workspace/cloud_android/fengpeilin/HF_DATA/gsm8k/main
 split: train
 start_index: 0
 max_samples: 1500
-central_model: Qwen/Qwen3-4B-Instruct-2507
 peer_models:
-  - google/gemma-3-4b-it
-  - microsoft/Phi-4-mini-instruct
-  - Qwen/Qwen2.5-Coder-7B-Instruct
+  - models/gemma-3-4b-it
+  - models/Phi-4-mini-instruct
+  - models/Qwen2.5-Coder-7B-Instruct
 deprive_context_models: []
 generation_batch_size: 4
 max_new_tokens: 512
@@ -16,3 +14,4 @@ top_p: 0.95
 use_vllm: true
 dtype: bfloat16
 device: cuda:0
+local_files_only: true

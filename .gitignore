@@ -4,9 +4,14 @@
 configs/local/
 # logs/*
 outputs/*
-data/
+models/
+data/*
+!data/__init__.py
+!data/builders/
+!data/builders/**
 logs/
 # Python caches
 __pycache__/
 *.pyc
 .pytest_cache/
+artifacts/

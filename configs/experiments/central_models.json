@@ -1,0 +1,27 @@
+{
+  "q3_0_6b": {
+    "central_model": "models/Qwen3-0.6B",
+    "checkpoint": "models/Sigma-Mem/Qwen3-0.6B",
+    "routing_output": "outputs/ood_memory_routing/q3_0_6b"
+  },
+  "q3_4b": {
+    "central_model": "models/Qwen3-4B",
+    "checkpoint": "models/Sigma-Mem/Qwen3-4B",
+    "routing_output": "outputs/ood_memory_routing/q3_4b"
+  },
+  "q3_8b": {
+    "central_model": "models/Qwen3-8B",
+    "checkpoint": "models/Sigma-Mem/Qwen3-8B",
+    "routing_output": "outputs/ood_memory_routing/q3_8b"
+  },
+  "q35_4b": {
+    "central_model": "models/Qwen3.5-4B",
+    "checkpoint": "models/Sigma-Mem/Qwen3.5-4B",
+    "routing_output": "outputs/ood_memory_routing/q35_4b"
+  },
+  "q35_9b": {
+    "central_model": "models/Qwen3.5-9B",
+    "checkpoint": "models/Sigma-Mem/Qwen3.5-9B",
+    "routing_output": "outputs/ood_memory_routing/q35_9b"
+  }
+}

@@ -1,9 +1,10 @@
 """Training-free OOD routing and reliability-weighted voting.
 
 This module is intentionally independent from the residual-steering evaluator. It
-implements decide-then-update M-Route, M-Vote, and majority voting without loading
-or modifying the runtime memory buffers stored in a Sigma checkpoint. The caller
-supplies the normalized competence direction ``phi`` produced by the frozen encoder.
+implements decide-then-update M-Route, M-Vote, majority voting, and the
+response-blind discounted Beta B1 baseline without modifying runtime memory
+buffers stored in a Sigma checkpoint. The caller supplies the normalized
+competence direction ``phi`` produced by the frozen encoder for M-based methods.
 """
 from __future__ import annotations
 
@@ -70,6 +71,19 @@ def _as_correctness(correctness: Sequence[float], num_peers: int) -> np.ndarray:
         )
     if not np.isin(out, (-1.0, 1.0)).all():
         raise ValueError("correctness must contain only -1 or +1")
+    return out
+
+
+def _as_binary_correctness(
+    correctness: Sequence[float], num_peers: int
+) -> np.ndarray:
+    out = np.asarray(correctness, dtype=np.float64).reshape(-1)
+    if out.shape != (int(num_peers),):
+        raise ValueError(
+            f"correctness must have shape ({num_peers},), got {out.shape}"
+        )
+    if not np.isin(out, (0.0, 1.0)).all():
+        raise ValueError("correctness must contain only 0 or 1")
     return out
 
 
@@ -298,3 +312,50 @@ class OODRoutingState:
         """Advance one event while masking the unavailable label innovation."""
 
         self.M = self.gamma * self.M
+
+
+class DiscountedBetaRoute:
+    """Response-blind B1 routing with a discounted Beta posterior per peer."""
+
+    def __init__(
+        self,
+        *,
+        num_peers: int,
+        gamma: float,
+        prior_alpha: float = 1.0,
+        prior_beta: float = 1.0,
+    ) -> None:
+        self.num_peers = int(num_peers)
+        self.gamma = float(gamma)
+        if self.num_peers < 1:
+            raise ValueError("num_peers must be positive")
+        if not 0.0 <= self.gamma <= 1.0:
+            raise ValueError("gamma must lie in [0, 1]")
+        if prior_alpha <= 0.0 or prior_beta <= 0.0:
+            raise ValueError("Beta prior parameters must be positive")
+        self.alpha = np.full(
+            self.num_peers, float(prior_alpha), dtype=np.float64
+        )
+        self.beta = np.full(
+            self.num_peers, float(prior_beta), dtype=np.float64
+        )
+
+    def snapshot(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.alpha.copy(), self.beta.copy()
+
+    def reliability(self) -> np.ndarray:
+        return self.alpha / (self.alpha + self.beta)
+
+    def route(self) -> RouteDecision:
+        scores = self.reliability()
+        tied = float(scores.max() - scores.min()) < ROUTE_TIE_EPS
+        return RouteDecision(
+            peer=int(np.argmax(scores)),
+            scores=scores.copy(),
+            tied=tied,
+        )
+
+    def update(self, correctness: Sequence[float]) -> None:
+        rewards = _as_binary_correctness(correctness, self.num_peers)
+        self.alpha = self.gamma * self.alpha + rewards
+        self.beta = self.gamma * self.beta + (1.0 - rewards)

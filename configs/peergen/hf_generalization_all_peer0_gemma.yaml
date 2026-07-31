@@ -1,18 +1,10 @@
 dataset: hf_generalization_all
 datasets:
-  - name: boolq
-    split: validation
-  - name: arc_challenge
-    split: validation
   - name: piqa
-    split: validation
-  - name: winogrande
     split: validation
   - name: mmlu
     split: validation
   - name: openbookqa
-    split: validation
-  - name: commonsense_qa
     split: validation
   - name: sciq
     split: validation
@@ -30,12 +22,11 @@ datasets:
     split: validation
   - name: superglue_multirc
     split: validation
-central_model: /mnt/data/peilin/HF_MODEL/Qwen3-0.6B
 peer_models:
-  - /mnt/data/peilin/HF_MODEL/gemma-3-4b-it
+  - models/gemma-3-4b-it
 peer_keys:
   - peer_0
-output: data/peer_generalization/hf_generalization_all_canonical_peers/peer0_gemma.raw.jsonl
+output: data/ood/raw/peer0_gemma.jsonl
 deprive_context_models: []
 generation_batch_size: 16
 write_chunk_size: 30000

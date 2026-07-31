@@ -10,6 +10,7 @@ from typing import Any
 
 MANIFEST_FILENAME = "checkpoint_manifest.json"
 MANIFEST_SCHEMA = "sigma_mem_checkpoint_v1"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_FIELDS = frozenset({
     "schema",
     "origin",
@@ -68,6 +69,21 @@ def jsonl_rows(path: Path) -> int:
     return count
 
 
+def _manifest_data_path(path: Path) -> str:
+    """Use repository-relative paths when possible so checkpoints stay portable."""
+
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _resolve_manifest_data_path(value: str) -> Path:
+    path = Path(value)
+    return path.resolve() if path.is_absolute() else (REPO_ROOT / path).resolve()
+
+
 def build_checkpoint_manifest(
     checkpoint: Path,
     train_data: Path,
@@ -86,7 +102,7 @@ def build_checkpoint_manifest(
         "origin": origin,
         "sym_memory_sha256": sha256_file(state_path),
         "train_config_sha256": sha256_file(config_path),
-        "train_data_path": str(train_data),
+        "train_data_path": _manifest_data_path(train_data),
         "train_data_sha256": sha256_file(train_data),
         "train_data_rows": jsonl_rows(train_data),
     }
@@ -120,7 +136,7 @@ def validate_checkpoint_manifest(
     if not manifest_path.is_file():
         raise FileNotFoundError(
             f"checkpoint manifest is missing: {manifest_path}; "
-            "run scripts/backfill_checkpoint_manifest.py explicitly for a legacy checkpoint"
+            "legacy checkpoints may omit the manifest"
         )
     manifest = json.loads(manifest_path.read_text())
     if not isinstance(manifest, dict) or set(manifest) != MANIFEST_FIELDS:
@@ -136,10 +152,10 @@ def validate_checkpoint_manifest(
             f"required {required_origin!r}"
         )
 
-    train_data = Path(str(manifest["train_data_path"])).resolve()
-    if expected_train_data is not None and train_data != expected_train_data.resolve():
+    train_data = _resolve_manifest_data_path(str(manifest["train_data_path"]))
+    if expected_train_data is not None and train_data != Path(expected_train_data).resolve():
         raise AssertionError(
-            f"manifest train_data_path={train_data}, expected {expected_train_data.resolve()}"
+            f"manifest train_data_path={train_data}, expected {Path(expected_train_data).resolve()}"
         )
     expected = build_checkpoint_manifest(
         checkpoint,

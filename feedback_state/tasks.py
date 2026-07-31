@@ -448,7 +448,7 @@ def _code_precomputed(record: dict[str, Any], peer_key: str | None) -> float | N
 
 
 def _code_target(text: str, record: dict[str, Any]) -> float:
-    # Code correctness is precomputed offline (see scripts/score_code_peers.py)
+    # Code correctness is precomputed by data.builders.common.score_code_peers.
     # and looked up by peer_key in peer_target_value; this text-only fallback
     # cannot execute, so it returns 0.0 (unknown == untrusted).
     return 0.0

@@ -1,12 +1,12 @@
 # Peer-count-invariant Sigma-Mem candidate scorer.
 # This config keeps learned dynamics peer-shared: train with 3 peers, then evaluate
 # with a different num_peers by allocating new runtime M_p states.
-central_model: /mnt/data/peilin/HF_MODEL/Qwen3-0.6B
+central_model: models/Qwen3-0.6B
 num_peers: 3
 peer_models:
-  - google/gemma-3-4b-it
-  - microsoft/Phi-4-mini-instruct
-  - Qwen/Qwen2.5-Coder-7B-Instruct
+  - models/gemma-3-4b-it
+  - models/Phi-4-mini-instruct
+  - models/Qwen2.5-Coder-7B-Instruct
 
 rank: 16
 task_types: [math, code, rag]
@@ -21,7 +21,7 @@ peer_mode: joint
 score_mode: candidate_yesno
 include_context: true
 max_length: 8192
-offline_data: data/mixed_train_labeled.jsonl
+offline_data: data/mixed_train/train.jsonl
 
 learning_rate: 0.001
 weight_decay: 0.0

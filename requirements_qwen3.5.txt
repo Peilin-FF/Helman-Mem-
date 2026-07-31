@@ -5,10 +5,8 @@
 # vLLM block from the Qwen3 requirements is intentionally omitted (vLLM 0.8.5 pins an
 # older transformers and would conflict).
 #
-# In this repo the overlay is provided via a PYTHONPATH prefix
-# (PYTHONPATH=/workspace/cloud_android/fengpeilin/tf5_overlay:.) on top of the Qwen3 env,
-# so only transformers + huggingface-hub differ; everything else matches requirements_qwen3.txt.
-# This file is the standalone equivalent for a clean install.
+# This file defines a standalone Qwen3.5 environment. Everything other than the
+# transformers stack follows the Qwen3 environment where possible.
 #
 #   pip install -r requirements_qwen3.5.txt
 #

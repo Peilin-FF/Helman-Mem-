@@ -13,6 +13,18 @@ from __future__ import annotations
 import torch
 
 
+def dtype_from_name(name: str) -> torch.dtype:
+    """Resolve the configured model dtype with bfloat16 as the safe default."""
+    return {
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+        "float32": torch.float32,
+        "fp32": torch.float32,
+    }.get(str(name).lower(), torch.bfloat16)
+
+
 def apply_torch_fp8_shim() -> None:
     """transformers>=5.x references torch.float8_e8m0fnu (added in torch 2.7) at import
     time. On torch 2.6 this raises AttributeError even though we never use FP8. Alias it
