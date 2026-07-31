@@ -21,9 +21,7 @@
 </div>
 
 </div>
-This repository contains the official implementation, training and evaluation code,
-and released data for **Σ-Mem: An Online Reliability Memory for LLM-based
-Multi-Agent Systems**.
+This repository contains the official implementation, training and evaluation code, and released data for Σ-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems.
 
 
 ## 📰 News
@@ -72,9 +70,13 @@ families.
 
 ```bash
 # Qwen3
+conda create -n sigma3 python == 3.12
+conda activate sigma3
 pip install -r requirements_qwen3.txt
 
 # Qwen3.5
+conda create -n sigma3_5 python == 3.12
+conda activate sigma3_5
 pip install -r requirements_qwen3.5.txt
 ```
 
