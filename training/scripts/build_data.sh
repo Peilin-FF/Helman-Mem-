@@ -10,6 +10,7 @@
 #   labels before the answer (classical baselines):
 #     train_hint_label.parquet    the most reliable *verified-correct* peer's solution
 #     train_hint_random.parquet   a random verified-correct peer's solution
+#     train_peers_labeled.parquet every peer solution marked verified correct / incorrect (labels, no memory)
 #   train_none.parquet            question only (plain RLVR)
 #   val_indist.parquet            512 in-distribution prompts, evenly spaced along the stream, question-only
 set -euo pipefail
@@ -21,7 +22,7 @@ OUT="outputs/rl/data/$TAG"
 TRAIN_PROMPTS="${TRAIN_PROMPTS:-outputs/gen/$TAG/prompts_train_fixed.jsonl}"
 VAL_PROMPTS="${VAL_PROMPTS:-outputs/gen/$TAG/prompts_indist_shuffled0.jsonl}"
 mkdir -p "$OUT"
-for guided in memory hint_memory peers hint_label hint_random none; do
+for guided in memory hint_memory peers hint_label hint_random peers_labeled none; do
   python -m training.sigma_rl.build_rl_data --prompts "$TRAIN_PROMPTS" --records data/mixed_train_big/train.jsonl \
       --out "$OUT/train_$guided.parquet" --guided "$guided" "$@"
 done

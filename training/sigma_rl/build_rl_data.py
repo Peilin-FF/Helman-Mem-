@@ -37,12 +37,12 @@ from pathlib import Path
 import pandas as pd
 
 from feedback_state.data import JsonlDataset
-from feedback_state.memory_rl import choose_hint_slot, hint_messages, peer_texts_in_prompt_order
+from feedback_state.memory_rl import choose_hint_slot, hint_messages, labeled_peer_messages, peer_texts_in_prompt_order
 from training.sigma_rl.outcome_protocol import PROTOCOL   # "peer_outcome_v1": the answer is graded only after it is given
 
 LABELS_BEFORE_PROTOCOL = "labels_before_v1"
-GUIDED = ("memory", "peers", "hint_memory", "hint_label", "hint_random", "none")
-LABELS_BEFORE = {"hint_label", "hint_random"}
+GUIDED = ("memory", "peers", "hint_memory", "hint_label", "hint_random", "peers_labeled", "none")
+LABELS_BEFORE = {"hint_label", "hint_random", "peers_labeled"}
 HINT_CHOICE = {"hint_memory": "memory", "hint_label": "label_memory", "hint_random": "label_random"}
 
 
@@ -70,6 +70,8 @@ def guided_messages(r: dict, rec: dict, peer_texts: list[str], mode: str, rng: r
         return r["messages_memory"], -1, any_correct
     if mode == "peers":
         return r["messages_peers"], -1, any_correct
+    if mode == "peers_labeled":
+        return labeled_peer_messages(rec, peer_texts, r["peer_correct"]), -1, any_correct
     valid = [bool(str(t).strip()) for t in peer_texts]
     slot = choose_hint_slot(r["peer_correct"], r["memory_prob"], choice=HINT_CHOICE[mode], rng=rng, valid=valid)
     if slot is None:

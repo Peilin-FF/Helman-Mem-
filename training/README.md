@@ -49,6 +49,7 @@ The regime is chosen when the data is built (`build_rl_data.py --guided`) plus o
 | labels-after, no memory | `peers` | all peer solutions, no notes | no | `none` |
 | classical baseline | `hint_label` | the most reliable *verified-correct* solution | yes | `verified` |
 | classical, no memory | `hint_random` | a random verified-correct solution | yes | `verified` |
+| classical, all peers labelled, no memory | `peers_labeled` | all peer solutions, each marked verified correct / incorrect | yes | `verified` |
 | plain RLVR | `none` | the question only | no | – |
 | imitation baseline | `train_sft.sh` on `build_sft_data.py --use_targets on` | the annotated solution as target | yes | – |
 

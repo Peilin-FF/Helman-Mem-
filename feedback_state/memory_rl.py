@@ -23,8 +23,8 @@ from typing import Any, Sequence
 import numpy as np
 
 from feedback_state.answer_groups import answer_groups
-from feedback_state.memory_generator import INSTRUCTIONS
-from feedback_state.tasks import _rag_context_text, task_type_of
+from feedback_state.memory_generator import INSTRUCTIONS, SYSTEM_PEERS, _clip
+from feedback_state.tasks import _choice_labels, _rag_context_text, task_type_of
 
 HINT_SYSTEM = "You are a careful problem solver."
 HINT_CHOICES = ("memory", "label_memory", "label_random", "none")
@@ -95,3 +95,30 @@ def memory_pseudo_reward(record: dict[str, Any], peer_texts: Sequence[str], memo
     if totals[best] <= 0.0:
         return None
     return 1.0 if groups[-1] == best else 0.0
+
+
+LABELED_SYSTEM = (
+    "You are the central model of a multi-agent system. Several peer models answered the same question, and each "
+    "answer has been verified: it is marked correct or incorrect. Use the verified answers as you see fit and produce "
+    "your own final answer."
+)
+
+
+def labeled_peer_messages(record: dict[str, Any], texts: Sequence[str], correct: Sequence[int], *, include_context: bool = True, char_limit: int = 3000) -> list[dict]:
+    """The peers' solutions with their verified correctness (the classical regime: labels before the answer, no memory).
+    Same layout as feedback_state.memory_generator.build_messages(mode="peers"), with a verdict in each peer's header."""
+    task = task_type_of(record)
+    parts = [f"Question:\n{str(record.get('problem', record.get('question', ''))).strip()}"]
+    if task == "mcqa":
+        labels = _choice_labels(record)
+        choices = record.get("choices") or []
+        if choices:
+            parts.append("Options:\n" + "\n".join(f"({labels[i] if i < len(labels) else chr(65 + i)}) {c}" for i, c in enumerate(choices)))
+    if include_context and task == "rag":
+        ctx = _rag_context_text(record)
+        if ctx:
+            parts.append(f"Context / Evidence:\n{ctx}")
+    blocks = [f"Peer {i + 1} (verified: {'correct' if int(c) == 1 else 'incorrect'}):\n{_clip(str(t), char_limit)}" for i, (t, c) in enumerate(zip(texts, correct))]
+    parts.append("Peer answers:\n\n" + "\n\n".join(blocks))
+    parts.append("Instruction: " + INSTRUCTIONS.get(task, INSTRUCTIONS["shortqa"]))
+    return [{"role": "system", "content": LABELED_SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
