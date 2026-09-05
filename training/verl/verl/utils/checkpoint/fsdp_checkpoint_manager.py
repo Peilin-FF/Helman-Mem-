@@ -63,7 +63,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             assert "tokenizer" in kwargs, "tokenizer or processor must be provided"
             warnings.warn("`tokenizer` is deprecated. use `processing_class` instead.", DeprecationWarning, stacklevel=2)
             processing_class = kwargs.pop("tokenizer")
-        assert "model" in checkpoint_contents and "optimizer" in checkpoint_contents and "extra" in checkpoint_contents, f"FSDPCheckpointManager must include ['model', 'optimizer', 'extra'], got {checkpoint_contents}"
+        # sigma: contents may be a subset (e.g. ['hf_model'] only); shards are written only when requested
+        assert checkpoint_contents is not None and len(checkpoint_contents) > 0, f"checkpoint_contents must be a non-empty list, got {checkpoint_contents}"
 
         super().__init__(
             model,

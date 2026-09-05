@@ -148,6 +148,41 @@ def main() -> None:
             continue
         for key, name in (("reward/acc_guided", "guided answer (stream-time)"), ("reward/acc_solo", "question-only samples")):
             stream_rows.append(row([r["label"], name] + [fmt(x) for x in windows(r["train"], key)]))
+    # ---------------- training dynamics (the same per-step series wandb shows)
+    def series(train, key, w=6):
+        pts = []
+        for a in range(0, len(train), w):
+            seg = [x.get(key) for x in train[a:a + w] if x.get(key) is not None and x.get(key) == x.get(key)]
+            if seg:
+                pts.append((int(train[min(a + w - 1, len(train) - 1)]["training/global_step"]), sum(seg) / len(seg)))
+        return pts
+    dyn_specs = [("response_length/mean", "Response length (tokens, mean per step)", 60, 520, 1),
+                 ("response_length/clip_ratio", "Share of samples hitting the 768-token cap", 0, 0.6, 100),
+                 ("actor/entropy_loss", "Policy entropy", 0, 0.35, 1),
+                 ("actor/grad_norm", "Gradient norm (before clipping)", 0, 8, 1),
+                 ("actor/ppo_kl", "Policy movement per update (ppo_kl)", -0.15, 0.25, 1),
+                 ("memory/zero_groups", "All-wrong groups per step (of 64)", 0, 45, 1)]
+    dyn_charts = "".join(svg_curves({r["label"]: [(st, v * mult) for st, v in series(r["train"], key)] for r in runs if r["train"]}, lo * mult if mult == 1 else lo, hi * mult if mult == 1 else hi * mult, title + (" (%)" if mult == 100 else ""), width=720, height=230) for key, title, lo, hi, mult in dyn_specs)
+    task_charts = "".join(svg_curves({r["label"]: series(r["train"], f"reward/acc_solo/{t}", 12) for r in runs if r["train"]}, {"rag": 0.3, "math": 0.8, "code": 0.0}[t], {"rag": 0.9, "math": 1.0, "code": 0.7}[t], f"Question-only samples on the stream, {t} (accuracy, 12-step means)", width=720, height=220) for t in ("rag", "math", "code"))
+    def phase_table(train):
+        phases = [(0, 46), (46, 92), (92, 138), (138, 184), (184, 230), (230, 276)]
+        keys = [("reward/acc_solo", "question-only acc"), ("reward/acc_guided", "guided acc"), ("reward/acc_solo/rag", "question-only, reading"), ("response_length/mean", "response length"),
+                ("response_length/clip_ratio", "cap hits"), ("actor/entropy_loss", "entropy"), ("actor/grad_norm", "grad norm"), ("actor/ppo_kl", "ppo_kl"), ("memory/zero_groups", "all-wrong groups"), ("memory/guided_success", "guided correct (of 64)")]
+        rows_ = [row(["steps"] + [f"{a + 1}–{b}" for a, b in phases], True)]
+        for k, name in keys:
+            cells = []
+            for a, b in phases:
+                seg = [x.get(k) for x in train[a:b] if x.get(k) is not None and x.get(k) == x.get(k)]
+                cells.append(f"{sum(seg) / len(seg):.3f}" if seg else "—")
+            rows_.append(row([name] + cells))
+        return "".join(rows_)
+    dyn_tables = "".join(f"<h3>{html.escape(r['label'])}</h3><div class='tbl'><table>{phase_table(r['train'])}</table></div>" for r in runs if r["train"])
+    dyn_text = """<ul>
+<li><b>Both runs learn the same thing in the same order.</b> Question-only accuracy on the stream rises from 0.68 to about 0.75 within the first 50 steps, all of it on reading (0.62 → 0.68 with memory, 0.64 → 0.67 without), while math stays at 0.92–0.95 and code at 0.28–0.38. The guided answer starts 4 points above the question-only samples and the gap closes to about 0.01 by the middle of the stream: what the model does with the peers in front of it, it then does alone. Policy movement per update (ppo_kl) is tiny in both (≤ 0.012 with memory), the PPO clip is almost never active (clip fraction ≤ 0.006), so the updates are effectively on-policy REINFORCE with the group baseline.</li>
+<li><b>The memory run drifts slowly; the no-memory run breaks once.</b> With memory: entropy falls steadily from 0.05 to 0.02, the gradient norm rises from 1.9 to 3.6, response length is flat at 105–110 tokens for two thirds of the epoch and then grows to 145 without ever hitting the cap (cap hits ≤ 1%), and validation oscillates between 66 and 70 after its peak. Without memory: from step 93 the response length creeps up (139 vs 104 tokens at the same phase), cap hits rise to 2–3%, and ppo_kl per update is three to four times larger (0.034–0.044 in steps 139–230); at step 229 the length jumps to 450–510 tokens with 40–56% of the samples cut at the cap, entropy collapses to 0.007, reading accuracy goes to zero for 20 steps, and the gradient norm is non-finite at step 231 (verl skips that update). Recovery at steps 250–260 comes with an entropy burst to 0.3, which is still the state of the final checkpoint: it is a more random policy than the pre-collapse one, so its sampled stream accuracy is lower (0.59 in the last phase) while its greedy validation is fine (71.9).</li>
+<li><b>Where the memory notes act.</b> The guided answer with notes is correct on 47–48 of 64 prompts in every phase; without notes it is the same until the collapse (44 in the last phase). The reliability notes did not change what was learned in-domain; if they had an effect it is on stability, and one seed per regime cannot show that.</li>
+<li><b>What to change for the next runs.</b> The runs use constant lr 1e-6, no KL term and no length control, the plainest GRPO. The collapse is the textbook failure of that setting on a task with long outputs. The basic remedies, in order of preference: a KL penalty to the frozen model (<code>actor.use_kl_loss=True actor.kl_loss_coef=0.001</code>, one more reference forward per step), a cosine-decayed learning rate, and keeping the best validation checkpoint rather than the last.</li>
+</ul>"""
     # charts
     chart_total = svg_curves({r["label"]: [(s, tot) for s, tot, _ in r["val"]] for r in runs if r["val"]}, 55, 75, "Validation: 512 fixed in-distribution prompts, question only, greedy (weighted total)")
     chart_tasks = "".join(svg_curves({r["label"]: [(s, v.get(t, 0)) for s, _, v in r["val"]] for r in runs if r["val"]}, {"rag": 55, "math": 80, "code": 10}[t], {"rag": 90, "math": 100, "code": 35}[t], f"Validation, {t}", width=720, height=220) for t in ("rag", "math", "code"))
@@ -162,10 +197,15 @@ def main() -> None:
         m_end, p_end = mem["val"][-1][1], peers["val"][-1][1]
         m_peak, p_peak = max(t for _, t, _ in mem["val"]), max(t for _, t, _ in peers["val"])
         findings.append(f"<li><b>The memory notes are not what produced the gain in-domain.</b> On the same 512 validation prompts the no-memory run ends at {p_end:.1f} (peak {p_peak:.1f}) versus {m_end:.1f} (peak {m_peak:.1f}) with memory; both start from {mem['val'][0][1]:.1f}. Their stream-time metrics are indistinguishable: guided answer 0.73–0.77 and question-only samples 0.70 → 0.75 in both. In-domain the model can judge the three solutions from their content, so the reliability notes carry no extra information, the same finding as with the trained judge.</li>")
-    if peers["ev_in"] and peers["ev_ood"] and mem["ev_in"] and mem["ev_ood"]:
-        findings.append(f"<li><b>Full test streams, memory vs no memory.</b> In-distribution {mem['ev_in']['acc']:.2f} vs {peers['ev_in']['acc']:.2f}; OOD {mem['ev_ood']['acc']:.2f} vs {peers['ev_ood']['acc']:.2f} (OOD per task: memory {by_line(mem['ev_ood'], TASKS_OOD)}, no memory {by_line(peers['ev_ood'], TASKS_OOD)}).</li>")
+    if peers["ev_in"] and mem["ev_in"]:
+        ood_txt = (f" OOD: {mem['ev_ood']['acc']:.2f} vs {peers['ev_ood']['acc']:.2f} (per task, memory {by_line(mem['ev_ood'], TASKS_OOD)}; no memory {by_line(peers['ev_ood'], TASKS_OOD)})." if (peers["ev_ood"] and mem["ev_ood"]) else " OOD: the no-memory checkpoint's whole-stream evaluation is pending.")
+        findings.append(f"<li><b>Full test streams, memory vs no memory: a tie in-distribution.</b> Final checkpoints alone: {mem['ev_in']['acc']:.2f} with memory vs {peers['ev_in']['acc']:.2f} without (per task, memory {by_line(mem['ev_in'], TASKS_IN)}; no memory {by_line(peers['ev_in'], TASKS_IN)}): the no-memory run is 3 points better on reading and 4 worse on code, the same total.{ood_txt}</li>")
     else:
-        findings.append("<li><b>Full test streams, memory vs no memory:</b> the no-memory checkpoint's evaluations on the whole in-distribution and OOD streams are pending (queued right after the current training).</li>")
+        findings.append("<li><b>Full test streams, memory vs no memory:</b> the no-memory checkpoint's evaluations on the whole in-distribution and OOD streams are pending.</li>")
+    p70 = peers["inter"].get(70); m70 = mem["inter"].get(70)
+    if p70 and peers["ev_in"]:
+        findings.append(f"<li><b>The best checkpoint is not the last one.</b> The no-memory run's step-70 checkpoint scores {p70['acc']:.2f} alone on the whole in-distribution stream ({by_line(p70, TASKS_IN)}), above its final {peers['ev_in']['acc']:.2f}: the final policy is the post-collapse one (entropy 0.3 instead of 0.02, code {peers['ev_in']['by']['code']:.1f} vs {p70['by']['code']:.1f}). With memory the two are level ({m70['acc']:.2f} at step 70, {mem['ev_in']['acc']:.2f} at the end). One epoch is already more than the reading gain needs; the remaining steps drift.</li>" if m70 else f"<li><b>The best checkpoint is not the last one.</b> The no-memory run's step-70 checkpoint scores {p70['acc']:.2f} on the whole in-distribution stream, above its final {peers['ev_in']['acc']:.2f}.</li>")
+    findings.append("<li><b>Why math and code do not move: the reward has no gradient there, and thinking mode is off.</b> GRPO learns only from groups whose four samples disagree. On GSM8K the question-only samples are right 92–95% of the time, so three groups in four are all-correct and carry no signal; on APPS they are right about 30% of the time and most groups are all-wrong (the 13–15 all-wrong groups per step are mostly code). Reading, at 60–70%, is where the mixed groups are, and it is the only task that moves. All prompts are rendered with Qwen3's thinking mode switched off (an empty think block, in training and in evaluation), so the model never spends long reasoning on a problem; enabling it would raise the math and code ceilings but multiplies response lengths (thousands of tokens) and the cost of every rollout and evaluation.</li>")
     if frozen_ood_mem and frozen_ood:
         findings.append(f"<li><b>Why OOD is the memory's real test.</b> With the peers' solutions and memory notes in the prompt, the <em>frozen</em> model drops from {frozen_ood['acc']:.2f} alone to {frozen_ood_mem['acc']:.2f} on the OOD stream: on BIG-Bench Hard every peer is far weaker than the model (29 / 11 / 13% vs {frozen_ood['by']['shortqa']:.1f}%) and the untrained model follows them ({frozen_ood['by']['shortqa']:.1f} → {frozen_ood_mem['by']['shortqa']:.1f}). A trained model must learn when not to follow; the memory's notes are the only signal of that before the label arrives.</li>")
     if peers["train"]:
@@ -221,6 +261,15 @@ ul{{max-width:82ch}} li{{margin:.35rem 0}} code{{font-family:"JetBrains Mono",mo
 <div class="charts three">{chart_tasks}</div>
 <div class="tbl"><table>{''.join(val_rows)}</table></div>
 <p class="sub">Weighted total and (reading / math / code). Every 20 training steps; step 0 is the frozen model on the same prompts.</p>
+</section>
+
+<section>
+<h2>Training dynamics (per-step series, as on wandb)</h2>
+{dyn_text}
+<div class="charts">{dyn_charts}</div>
+<div class="charts">{task_charts}</div>
+{dyn_tables}
+<p class="sub">Six-step means (12 for the per-task curves) of the per-step training metrics. ppo_kl = mean log-ratio between the updated and the sampling policy on the rollout tokens; all-wrong groups = prompts whose four question-only samples all scored 0 (no gradient from that group).</p>
 </section>
 
 <section>
