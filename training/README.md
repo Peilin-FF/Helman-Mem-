@@ -153,6 +153,7 @@ own Ray workers (`trap` in `train_grpo.sh`).
 | smoke2_label (classical baseline) | 1 | Qwen3-0.6B | 10-16 s | `--guided hint_label` + `guided_filter=verified`: only verified guided answers enter (5/5, 3/8, 5/7) |
 | smoke_q3_4b | 2 (shared), param + optimizer offload | Qwen3-4B | 48 s (gen 14 s, guided 12 s, update 18 s) | peak torch memory 59 GB allocated / 68 GB reserved; sharded checkpoint 123 s |
 | smoke8_q3_4b | 8 (all idle), no offload, default config (8192-token prompts) | Qwen3-4B | 40-58 s for 32 prompts x 4 samples + 32 guided answers (gen 18 s, guided 12-18 s, update 4-6 s) | peak 52.6 GB allocated / 61 GB reserved per GPU; validation before and after; all GPUs released at exit |
+| q3_4b_grpo_memory (first real run, ours) | 4 GPUs, one epoch = 276 steps, 55 s per step | Qwen3-4B | validation alone 61.7 -> 71.3 (step 100) -> 67.8; final checkpoint alone on the whole test streams: in-distribution 67.42 (frozen 60.06), OOD 68.48 (frozen 67.57 on all 17,403 events) | math kept (90.8 vs 89.5), reading +15.8, code -1.7; OOD: shortqa +8.8, boolqa -6.5 |
 
 Fixed costs dominate at this size; at the default 64 x 8 batch on 4 GPUs expect roughly 3-5 min
 per step, i.e. one epoch of the training stream (~230 steps) in about half a day.  A sharded

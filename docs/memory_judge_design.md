@@ -678,3 +678,21 @@ of the question-only re-labelling and of mixed GRPO groups are design choices, n
 (the label still follows the answer in all three), and the running pipeline keeps them; the strict manager can be
 selected with `reward_model.reward_manager=outcome`. Adopted from it: the 8192-token budget (audit: question + all
 unclipped peers ≤ 3963 tokens on the training stream) and explicit reporting of any guided prompt over budget.
+
+### 18.1 First result of the labels-after regime (Qwen3-4B, `q3_4b_grpo_memory`, 2026-09-05)
+
+One epoch of the training stream (17,709 events, 276 steps of 64 prompts × 4 solo samples + 1 guided answer, 3.7 h on
+four A100s). Validation on 512 fixed in-distribution prompts, question only, greedy: 61.7 → 67.0 (step 20) → 71.3 (step 100,
+peak) → 66–70 for the rest of the epoch → 67.8 (step 276); reading 62.8 → 76–82, math 86–90 (start 89.5), code 21.8 → 16–21
+late. On the stream the question-only samples rise from 0.68 to ≈0.75 and close the gap to the guided answer (0.012 → 0.002).
+
+Final checkpoint, question only, on the **whole** test streams:
+
+| stream | frozen Qwen3-4B | memory-trained (step 276) |
+|---|---|---|
+| in-distribution (4,319) | 60.06 (math 89.5, reading 59.6, code 22.3) | **67.42** (math 90.8, reading 75.4, code 20.6) |
+| OOD (17,403) | 67.57 (boolqa 83.5, mcqa 82.1, shortqa 42.0) | **68.48** (boolqa 77.0, mcqa 81.3, shortqa 50.8) |
+
+The trained model beats the frozen one on both streams with math preserved; the in-distribution gain is reading comprehension
+(the task where the peers are stronger than the model), the OOD gain is BIG-Bench Hard (+8.8) against a loss on the yes/no task
+(−6.5). Attribution to the memory awaits the no-memory (`peers`), classical (`hint_label`) and plain-RLVR runs, chained next.
