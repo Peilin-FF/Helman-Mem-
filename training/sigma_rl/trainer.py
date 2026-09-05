@@ -219,6 +219,17 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
                 if "pseudo" in nt:
                     metrics["reward/pseudo_available_frac"] = float(np.asarray(nt["pseudo"], dtype=float)[unv].mean())
 
+    @staticmethod
+    def _finish_tracking(logger) -> None:
+        """Close the wandb run before the actor exits (otherwise wandb's teardown at interpreter exit
+        raises a BrokenPipeError and the job ends with exit code 1 although training completed)."""
+        try:
+            wb = getattr(logger, "logger", {}).get("wandb")
+            if wb is not None:
+                wb.finish()
+        except Exception as exc:
+            print(f"[sigma] wandb finish failed: {exc}")
+
     def _append_metrics_file(self, metrics: dict) -> None:
         name = self.config.trainer.get("metrics_file", "metrics.jsonl")
         if not name:
@@ -371,4 +382,5 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
                     self._shutdown_dataloader(dl_iter)
+                    self._finish_tracking(logger)
                     return
