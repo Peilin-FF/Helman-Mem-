@@ -33,9 +33,7 @@ model:
   external_lib: null
   enable_gradient_checkpointing: True
   trust_remote_code: False
-  lora_rank: 0
-  lora_alpha: 16
-  target_modules: all-linear
+  lora_rank: 0                # full parameters only
   use_liger: False
   strategy: fsdp
   attn_implementation: flash_attention_2

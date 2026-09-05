@@ -163,14 +163,10 @@ not inherit its stdin — it runs in Ray task workers with stdin on /dev/null
 
 ## LoRA
 
-The GRPO stack trains the full parameters (`actor_rollout_ref.model.lora_rank: 0`).  verl 0.3.1's LoRA
-path fails on this server inside vLLM's adapter serving (`TypeError: argument of type 'torch.device' is
-not iterable` in `generate_sequences`), and the internalisation objective wants the weights anyway.
-LoRA training is the single-GPU path: `feedback_state/train_memory_judge.py` (rank-16 judge adapters
-plus the memory's steering vector) and `feedback_state/train_memory_generator.py --lora_rank 16
-[--gated on]` (generator adapters, gated ones leave the question-only behaviour identical to the base
-model).  `training/sigma_rl/merge_lora.py` merges a peft adapter into a plain HF directory; it is only
-needed for a LoRA run of the verl SFT trainer (`model.lora_rank`), which has not been exercised.
+Not on this stack: the GRPO and SFT trainers here train the full parameters (`lora_rank: 0`), which is
+what the internalisation objective asks for.  LoRA training is the single-GPU path
+(`feedback_state/train_memory_judge.py`, `feedback_state/train_memory_generator.py --lora_rank 16
+[--gated on]`), used for the 2026-09-04 results.
 
 ## Models
 

@@ -39,9 +39,7 @@ actor_rollout_ref:
     enable_activation_offload: False
     use_remove_padding: True             # flash-attn varlen: no padding compute
     attn_implementation: flash_attention_2   # sdpa if flash-attn is unavailable (then set use_remove_padding False)
-    lora_rank: 0                         # full-parameter training (the internalisation objective)
-    lora_alpha: 16
-    target_modules: all-linear
+    lora_rank: 0                         # full-parameter training only (the internalisation objective); no LoRA on this stack
     use_liger: False
     use_fused_kernels: False
     trust_remote_code: False
@@ -172,9 +170,6 @@ critic:
       wrap_policy:
         min_num_params: 0
       fsdp_size: -1
-    lora_rank: 0
-    lora_alpha: 16
-    target_modules: all-linear
   ppo_mini_batch_size: ${actor_rollout_ref.actor.ppo_mini_batch_size}
   ppo_micro_batch_size: null
   ppo_micro_batch_size_per_gpu: null
