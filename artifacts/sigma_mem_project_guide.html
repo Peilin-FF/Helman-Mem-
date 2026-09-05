@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "\u003cdiv class=\"eyebrow\"\u003eSIGMA-MEM · 项目解读 · 2026-09-05\u003c/div\u003e\u003ch1\u003e让模型学会：这道题，该信谁？\u003c/h1\u003e\u003cp class=\"lede\"\u003eΣ-Mem 把同伴模型在过去任务中的对错，压缩成可随时读取、持续更新的可靠性记忆。中央模型据此选择答案、组合证据，并进一步尝试把协作中获得的知识学进自身参数。\u003c/p\u003e\u003cdiv class=\"summary-band\"\u003e\u003cdiv\u003e\u003cspan class=\"k\"\u003e项目形态\u003c/span\u003e多模型协作的研究代码库\u003c/div\u003e\u003cdiv\u003e\u003cspan class=\"k\"\u003e阅读范围\u003c/span\u003e当前工作区代码、文档与本地结果\u003c/div\u003e\u003cdiv\u003e\u003cspan class=\"k\"\u003e本轮验证\u003c/span\u003e35 项单元测试通过\u003c/div\u003e\u003c/div\u003e\u003cdiv class=\"toc\"\u003e\u003ca href=\"#idea\"\u003e问题与主线\u003c/a\u003e\u003ca href=\"#loop\"\u003e运行闭环\u003c/a\u003e\u003ca href=\"#sigma\"\u003e原版 Σ-Mem\u003c/a\u003e\u003ca href=\"#kalman\"\u003eKalman 版本\u003c/a\u003e\u003ca href=\"#learning\"\u003e生成与训练\u003c/a\u003e\u003ca href=\"#results\"\u003e实验告诉我们什么\u003c/a\u003e\u003ca href=\"#boundaries\"\u003e关键口径\u003c/a\u003e\u003ca href=\"#reading\"\u003e代码阅读地图\u003c/a\u003e\u003c/div\u003e"
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"idea\"\u003e\u003ch2\u003e1. 它解决什么问题？\u003c/h2\u003e\u003cp\u003e设想三位同伴都回答同一道题：一位擅长数学，一位擅长阅读，一位擅长代码。中央模型需要做出最终判断。项目想利用的不只是这一次回答的内容，还包括\u003cstrong\u003e“这些同伴过去在相似问题上表现如何”\u003c/strong\u003e，以及原版方法中的\u003cstrong\u003e“哪些同伴常常一起答对或答错”\u003c/strong\u003e。\u003c/p\u003e\u003cp\u003e一个直观例子：历史上同伴 A 在算术题上更可靠，遇到相似的新题时，记忆就给 A 更多权重；如果随后连续收到 A 答错的反馈，状态会随之调整。这让协作策略能沿着任务流变化。\u003c/p\u003e\u003cp\u003e这里保存的核心内容是数值化的能力证据。\u003ccode\u003ememory\u003c/code\u003e 具体表现为矩阵、后验参数与读出信号；\u003ccode\u003epeer\u003c/code\u003e 是给出候选答案的模型，\u003ccode\u003ecenter / judge\u003c/code\u003e 是评判或生成最终答案的中央模型。\u003c/p\u003e\u003cdiv class=\"callout olive\"\u003e\u003cdiv class=\"callout-h\"\u003e当前仓库有三条相互衔接的研究主线\u003c/div\u003e\u003cp\u003e首页主要介绍原版 Σ-Mem。新增的 Kalman 记忆、MemoryJudge、生成实验和多卡训练代码，已经把问题推进到“如何借助可靠的同伴，让中央模型独立作答时也变得更好”。\u003c/p\u003e\u003c/div\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "主线",
+      "核心问题",
+      "主要实现",
+      "哪些东西会学习"
+    ],
+    "rows": [
+      [
+        "原版 Σ-Mem",
+        "利用历史能力与同伴关系，改进选择、路由和投票",
+        "symmetric_memory.py；evaluate_sigma.py；ood_routing.py",
+        "离线学习记忆动力学和注入投影；评测时更新 M / G，中央模型权重冻结"
+      ],
+      [
+        "Kalman / MemoryJudge",
+        "更细致地估计当前候选答案的可靠性与证据量",
+        "kalman_memory.py；addresses.py；memory_runtime.py；memory_judge.py",
+        "Kalman 状态在线更新；地址可选训练；Judge 可训练 LoRA、注入层与融合系数"
+      ],
+      [
+        "生成与知识内化",
+        "协作时答得更好，训练后只看题目也答得更好",
+        "memory_generator.py；train_rlvr.py；training/sigma_rl/",
+        "生成模型采用 LoRA 或全参数训练；多卡默认 GRPO + 全参数更新"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"loop\"\u003e\u003ch2\u003e2. 一道题怎样流过系统？\u003c/h2\u003e\u003csvg viewBox=\"0 0 1080 220\" role=\"img\" aria-labelledby=\"event-title event-desc\"\u003e\u003ctitle id=\"event-title\"\u003e任务流中的先决策、后反馈闭环\u003c/title\u003e\u003cdesc id=\"event-desc\"\u003e当前任务读取仅由过去反馈形成的记忆，完成选择或生成后获得外部判分，最后更新记忆供下一题使用。\u003c/desc\u003e\u003cdefs\u003e\u003cmarker id=\"event-arrow\" viewBox=\"0 0 10 10\" refX=\"8\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"\u003e\u003cpath d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#788C5D\"/\u003e\u003c/marker\u003e\u003c/defs\u003e\u003cg font-family=\"system-ui, sans-serif\" text-anchor=\"middle\"\u003e\u003cg fill=\"#FFFFFF\" stroke=\"#D1CFC5\" stroke-width=\"1.5\"\u003e\u003crect x=\"10\" y=\"28\" width=\"180\" height=\"94\" rx=\"12\"/\u003e\u003crect x=\"228\" y=\"28\" width=\"180\" height=\"94\" rx=\"12\"/\u003e\u003crect x=\"446\" y=\"28\" width=\"180\" height=\"94\" rx=\"12\"/\u003e\u003crect x=\"664\" y=\"28\" width=\"180\" height=\"94\" rx=\"12\"/\u003e\u003crect x=\"882\" y=\"28\" width=\"180\" height=\"94\" rx=\"12\"/\u003e\u003c/g\u003e\u003cg fill=\"#141413\" font-size=\"19\"\u003e\u003ctext x=\"100\" y=\"63\"\u003e当前任务\u003c/text\u003e\u003ctext x=\"318\" y=\"63\"\u003e读取旧记忆\u003c/text\u003e\u003ctext x=\"536\" y=\"63\"\u003e作出决策\u003c/text\u003e\u003ctext x=\"754\" y=\"63\"\u003e获得外部反馈\u003c/text\u003e\u003ctext x=\"972\" y=\"63\"\u003e写入新记忆\u003c/text\u003e\u003c/g\u003e\u003cg fill=\"#87867F\" font-size=\"14\"\u003e\u003ctext x=\"100\" y=\"95\"\u003e题目／可用候选答案\u003c/text\u003e\u003ctext x=\"318\" y=\"95\"\u003e只包含过去的反馈\u003c/text\u003e\u003ctext x=\"536\" y=\"95\"\u003e路由／选择／生成\u003c/text\u003e\u003ctext x=\"754\" y=\"95\"\u003e判定各个答案对错\u003c/text\u003e\u003ctext x=\"972\" y=\"95\"\u003e更新可靠性状态\u003c/text\u003e\u003c/g\u003e\u003cg fill=\"none\" stroke=\"#788C5D\" stroke-width=\"2\" marker-end=\"url(#event-arrow)\"\u003e\u003cpath d=\"M 194 75 H 218\"/\u003e\u003cpath d=\"M 412 75 H 436\"/\u003e\u003cpath d=\"M 630 75 H 654\"/\u003e\u003cpath d=\"M 848 75 H 872\"/\u003e\u003cpath d=\"M 972 124 V 181 H 318 V 130\"/\u003e\u003c/g\u003e\u003ctext x=\"635\" y=\"169\" fill=\"#788C5D\" font-size=\"16\"\u003e下一题使用更新后的状态\u003c/text\u003e\u003c/g\u003e\u003c/svg\u003e\u003cp\u003e原版评测在选出答案后才调用记忆更新。新版的 \u003ccode\u003eMemoryRuntime.read(t)\u003c/code\u003e 和 \u003ccode\u003ewrite(t, X, labels)\u003c/code\u003e 把这两步明确分开。即使 JSONL 文件预先保存了标签，标签也应只在决策之后进入记忆。\u003c/p\u003e\u003cp\u003e很多实验使用\u003cstrong\u003e预生成的同伴回答\u003c/strong\u003e，再离线回放任务流。因此，可以在同一批候选答案上公平比较记忆策略，也能缓存特征后快速测试更新规则。\u003c/p\u003e\u003cp class=\"note\"\u003e代码依据：\u003ca href=\"../tests/experiments/common/evaluate_sigma.py\"\u003eevaluate_sigma.py:375、393、421\u003c/a\u003e；\u003ca href=\"../feedback_state/memory_runtime.py\"\u003ememory_runtime.py:43、59\u003c/a\u003e；\u003ca href=\"../scripts/build_generation_prompts.py\"\u003ebuild_generation_prompts.py:93、126\u003c/a\u003e。\u003c/p\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"sigma\"\u003e\u003ch2\u003e3. 原版 Σ-Mem：能力矩阵 + 关系矩阵\u003c/h2\u003e\u003cdiv class=\"grid col-2\"\u003e\u003cdiv class=\"card\"\u003e\u003ch3\u003e每位同伴一张能力矩阵 $M_p$\u003c/h3\u003e\u003cp\u003e把题目编码为方向 $\\phi_t$，用正确反馈 $s_{p,t}\\in\\{-1,+1\\}$ 更新：\u003c/p\u003e\u003cp\u003e$$M_{p,t}=\\gamma M_{p,t-1}+\\eta\\,s_{p,t}\\phi_t\\phi_t^\\top$$\u003c/p\u003e\u003cp\u003e$\\gamma$ 控制旧经验保留多少，$\\eta$ 控制新反馈写入多强。外积写入保持矩阵对称；单位长度的地址使单次写入幅度受控。默认地址先比较题目与训练任务原型的相似度，再投影到 16 维。\u003c/p\u003e\u003c/div\u003e\u003cdiv class=\"card\"\u003e\u003ch3\u003e同伴之间一张关系矩阵 $G$\u003c/h3\u003e\u003cp\u003e从各同伴的对错向量积累成对关系，表达共同成功或共同失败的模式。它由评测器单独维护，没有塞进 \u003ccode\u003eSymmetricTrustMemory\u003c/code\u003e 类。\u003c/p\u003e\u003cp\u003e启用 \u003ccode\u003e--graph_posterior ising\u003c/code\u003e 时，评测器把中央模型评分与 $G$ 组合，枚举对错状态求边缘分数。实现枚举 $2^P$ 个状态，适合仓库主要研究的少量同伴。\u003c/p\u003e\u003c/div\u003e\u003c/div\u003e\u003cp\u003e中央模型给每个候选答案做同一种 Yes/No 判断，分数是 $\\log P(\\mathrm{Yes})-\\log P(\\mathrm{No})$。记忆读出的 $M_p\\phi_t$ 经投影后，通过 \u003ccode\u003eActivationSteerer\u003c/code\u003e 注入上半部分解码层的隐藏状态，影响中央模型对该候选的判断。\u003c/p\u003e\u003cp\u003e原版默认冻结中央模型参数。离线优化的是地址投影、写入强度、遗忘参数和注入层等小模块；在线变化的是记忆状态。\u003c/p\u003e\u003cp class=\"note\"\u003e代码依据：\u003ca href=\"../feedback_state/symmetric_memory.py\"\u003esymmetric_memory.py:23、116、148、245\u003c/a\u003e；\u003ca href=\"../feedback_state/joint_models.py\"\u003ejoint_models.py:56\u003c/a\u003e；\u003ca href=\"../tests/experiments/common/evaluate_sigma.py\"\u003eevaluate_sigma.py:145、163、445\u003c/a\u003e；\u003ca href=\"../configs/symmetric_memory_candidate_yesno.yaml\"\u003e默认配置\u003c/a\u003e。\u003c/p\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "记忆怎么使用",
+      "当前决策读什么",
+      "产出"
+    ],
+    "rows": [
+      [
+        "Sigma 候选评判",
+        "题目 + 所有候选答案 + M 的隐藏状态注入；可选 G",
+        "中央模型评分最高的候选答案"
+      ],
+      [
+        "原版 M-Route",
+        "题目的地址 φ + 每位同伴的 M；读出 φᵀMₚφ",
+        "应当选择哪位同伴；路由分数不读取当前候选答案"
+      ],
+      [
+        "原版 M-Vote",
+        "各同伴答案的等价分组 + M 读出的权重",
+        "累计权重最大的答案组"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"kalman\"\u003e\u003ch2\u003e4. Kalman 版本：记住经验，也量化不确定性\u003c/h2\u003e\u003cp\u003e新版本把可靠性建模成线性回归：给定地址 $\\psi$，预测同伴回答的符号正确性 $s$。在代码假设的线性高斯模型下，可以直接维护精确后验：\u003c/p\u003e\u003cp\u003e$$\\Lambda=\\lambda I+\\sum_i\\psi_i\\psi_i^\\top,\\qquad b=\\sum_i s_i\\psi_i,\\qquad \\mu(\\psi)=\\psi^\\top\\Lambda^{-1}b$$\u003c/p\u003e\u003cp\u003e同时读出预测方向上的不确定性，并转成可靠性分数：\u003c/p\u003e\u003cp\u003e$$v(\\psi)=\\psi^\\top\\Lambda^{-1}\\psi,\\qquad p(\\psi)=\\Phi\\!\\left(\\frac{\\mu(\\psi)}{\\sqrt{1+v(\\psi)}}\\right)$$\u003c/p\u003e\u003cp\u003e没有历史证据时，预测回到 0.5。观察到更多相似例子后，预测均值和不确定性共同变化。实现用 Sherman–Morrison 更新逆矩阵，避免在每次无遗忘写入时重新求逆；\u003ccode\u003erho &lt; 1\u003c/code\u003e 分支则保留精度矩阵，并在读取时做 Cholesky 求解。\u003c/p\u003e\u003cdiv class=\"callout\"\u003e\u003cdiv class=\"callout-h\"\u003e地址决定了它能学到什么\u003c/div\u003e\u003cp\u003e默认 \u003ccode\u003eqc\u003c/code\u003e 地址把“按同伴身份分块的问题表示”和“共享的候选答案表示”拼接起来。因此它同时学习同伴的能力差异，以及答案本身的正确性线索。\u003ccode\u003esem\u003c/code\u003e 来自包含候选答案的 judge prompt，不能因为名称里有 question 就把它理解为纯问题特征。\u003c/p\u003e\u003c/div\u003e\u003cp\u003e读出的证据还可以交给 \u003ccode\u003eMemoryJudge\u003c/code\u003e：四维证据向量包含该候选的可靠性、证据量，以及其他候选的最大和平均可靠性。Judge 通过 LoRA、隐藏状态注入和一个可学习系数，将自己的判断与记忆的 log-odds 融合。\u003c/p\u003e\u003cp class=\"note\"\u003e“精确”指对所设定线性高斯回归模型的后验计算；二元正确性的概率校准仍需实验验证。代码依据：\u003ca href=\"../feedback_state/kalman_memory.py\"\u003ekalman_memory.py\u003c/a\u003e；\u003ca href=\"../feedback_state/addresses.py\"\u003eaddresses.py:25、66、95\u003c/a\u003e；\u003ca href=\"../feedback_state/feature_streams.py\"\u003efeature_streams.py:1\u003c/a\u003e；\u003ca href=\"../feedback_state/memory_judge.py\"\u003ememory_judge.py:28、63\u003c/a\u003e。\u003c/p\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "比较项",
+      "原版能力记忆",
+      "Kalman 记忆"
+    ],
+    "rows": [
+      [
+        "状态含义",
+        "带衰减的正负方向证据 Mₚ",
+        "线性能力函数的后验参数与不确定性"
+      ],
+      [
+        "地址",
+        "题目表示与训练任务原型匹配，再做小维投影",
+        "标准化 + PCA；支持问题、候选、分块组合及可训练地址"
+      ],
+      [
+        "写入规则",
+        "γM + ηsφφᵀ",
+        "递归最小二乘 / 贝叶斯线性更新"
+      ],
+      [
+        "顺序性质",
+        "遗忘使近期反馈影响更大",
+        "rho = 1 时最终状态与事件顺序无关；逐题预测轨迹仍受顺序影响"
+      ],
+      [
+        "主要读法",
+        "隐藏状态注入；直接路由/加权投票；可结合 G",
+        "可靠性和证据量；MemoryJudge；文本提示；self-vote"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"learning\"\u003e\u003ch2\u003e5. 新的研究目标：从“会挑答案”到“自己会解题”\u003c/h2\u003e\u003cp\u003e只从同伴答案中选择，成绩受到“至少有一位同伴答对”的上限约束。仓库新增了生成路径：让中央模型看同伴答案和可靠性注释，生成自己的完整答案；也可以把中央模型自己的答案作为额外来源，加入记忆驱动的选择或投票。\u003c/p\u003e\u003cp\u003e更进一步，\u003ccode\u003etraining/sigma_rl/\u003c/code\u003e 尝试将这种协作收益学进参数。它在 vendored verl 上使用 GRPO，借助 Ray、FSDP 与 vLLM 完成多卡训练。默认同时采样只看题目的 solo 答案，以及看同伴和记忆的 guided 答案；判分后，guided 答案可分别在带提示和只看题目的输入下参与训练。\u003c/p\u003e\u003cp\u003e这里最值得关注的两项指标分别是：\u003cstrong\u003e协作当时生成的答案是否更好\u003c/strong\u003e，以及\u003cstrong\u003e训练后的模型只看题目时是否更强\u003c/strong\u003e。第二项才检验同伴知识是否真正进入中央模型自身。\u003c/p\u003e\u003cp class=\"note\"\u003e代码依据：\u003ca href=\"../feedback_state/memory_generator.py\"\u003ememory_generator.py\u003c/a\u003e；\u003ca href=\"../scripts/self_vote_sim.py\"\u003eself_vote_sim.py\u003c/a\u003e；\u003ca href=\"../training/sigma_rl/trainer.py\"\u003etrainer.py:85\u003c/a\u003e；\u003ca href=\"../training/configs/grpo_sigma.yaml\"\u003egrpo_sigma.yaml:247\u003c/a\u003e；\u003ca href=\"../training/README.md\"\u003etraining/README.md\u003c/a\u003e。\u003c/p\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "多卡数据模式",
+      "作答前看到的信息",
+      "对照目的"
+    ],
+    "rows": [
+      [
+        "memory / hint_memory",
+        "全部同伴答案和记忆注释，或记忆最信任的一位同伴",
+        "利用历史反馈来决定信任谁"
+      ],
+      [
+        "peers",
+        "全部同伴答案，不含记忆注释",
+        "隔离可靠性记忆带来的贡献"
+      ],
+      [
+        "hint_label / hint_random",
+        "提前用当题标签筛选出的正确同伴答案",
+        "有当题正确性信息的训练基线"
+      ],
+      [
+        "none",
+        "只有题目",
+        "普通 RLVR / GRPO 基线"
+      ],
+      [
+        "未验证样本的 pseudo-reward",
+        "以记忆加权的同伴答案一致性作为奖励依据",
+        "研究验证资源减少时的训练；当前代码对代码题不提供这种伪奖励"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"results\"\u003e\u003ch2\u003e6. 本地结果支持哪些判断？\u003c/h2\u003e\u003cp\u003e以下数字直接核对了工作区已有的 JSON 结果。本轮重新运行的是单元测试；这些大模型训练与评测结果来自已有运行记录。\u003c/p\u003e\u003ch3\u003e选择答案：记忆明显改善冻结 judge；训练后的增益取决于分布\u003c/h3\u003e\u003cp\u003e中央模型为 Qwen3-4B。同分布测试为 \u003ccode\u003eindist\u003c/code\u003e 的 4,319 题，OOD 为 17,403 题；下表选择 \u003ccode\u003eshuffled0\u003c/code\u003e 的结果。Kalman 行固定为本地 \u003ccode\u003edim256_lam100_rho1.json\u003c/code\u003e 中的 \u003ccode\u003eqc.route\u003c/code\u003e，不混用其他地址或超参数运行的最好分数。\u003c/p\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "方法 / 结果口径",
+      "同分布准确率",
+      "OOD 准确率"
+    ],
+    "rows": [
+      [
+        "冻结中央模型直接评判",
+        "57.33%",
+        "55.98%"
+      ],
+      [
+        "仅 Kalman qc 记忆选择",
+        "68.63%",
+        "61.97%"
+      ],
+      [
+        "训练后的 judge，无记忆",
+        "70.99%",
+        "59.60%"
+      ],
+      [
+        "训练后的 judge，使用记忆",
+        "70.94%",
+        "61.75%"
+      ],
+      [
+        "同伴选择 oracle（至少一位答对；仅作上限）",
+        "75.23%",
+        "69.56%"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003cp\u003e在这组运行中，Kalman 选择相对冻结 judge 提高了 \u003cstrong\u003e11.30 个百分点\u003c/strong\u003e和 \u003cstrong\u003e5.98 个百分点\u003c/strong\u003e。训练过的 judge 在同分布上已经很强，加入记忆后的差异只有 −0.05 个百分点；OOD 上带记忆版本更高，但还不能据此判断所有配置都能得到相同收益。带/不带记忆 judge 行来自分别训练的 checkpoint，属于训练方案对照。\u003c/p\u003e\u003cp class=\"note\"\u003e来源：\u003ca href=\"../outputs/memsim/q3_4b/dim256_lam100_rho1.json\"\u003eKalman 与冻结基线\u003c/a\u003e；\u003ca href=\"../outputs/memjudge/q3_4b/qc_mem/eval_indist_shuffled0_memon/eval_metrics.json\"\u003e带记忆 / 同分布\u003c/a\u003e、\u003ca href=\"../outputs/memjudge/q3_4b/qc_mem/eval_ood_shuffled0_memon/eval_metrics.json\"\u003e带记忆 / OOD\u003c/a\u003e；\u003ca href=\"../outputs/memjudge/q3_4b/qc_nomem/eval_indist_shuffled0_memoff/eval_metrics.json\"\u003e无记忆 / 同分布\u003c/a\u003e、\u003ca href=\"../outputs/memjudge/q3_4b/qc_nomem/eval_ood_shuffled0_memoff/eval_metrics.json\"\u003e无记忆 / OOD\u003c/a\u003e。项目笔记中还有其他配置的数值，不能把不同文件的峰值当成同一次实验。\u003c/p\u003e\u003ch3\u003e独立生成：训练目标的选择，比“有无同伴”更关键\u003c/h3\u003e\u003cp\u003e以下均为 Qwen3-4B 在同一 4,319 题测试集上只看题目作答。这里的分数衡量中央模型自己的生成能力，与上表的“从同伴中选一个”含义不同。\u003c/p\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "训练方式",
+      "总体准确率",
+      "数学",
+      "阅读",
+      "代码"
+    ],
+    "rows": [
+      [
+        "冻结模型",
+        "60.06%",
+        "89.46%",
+        "59.55%",
+        "22.30%"
+      ],
+      [
+        "LoRA 模仿同伴答案，训练时带记忆提示",
+        "46.82%",
+        "21.76%",
+        "78.75%",
+        "16.00%"
+      ],
+      [
+        "LoRA 使用自身正确答案等自蒸馏目标",
+        "64.34%",
+        "87.79%",
+        "69.85%",
+        "22.40%"
+      ],
+      [
+        "普通 RLVR，小规模训练",
+        "61.24%",
+        "89.54%",
+        "61.85%",
+        "22.70%"
+      ],
+      [
+        "RLVR + 记忆指导提示，小规模训练",
+        "61.03%",
+        "89.76%",
+        "61.25%",
+        "22.70%"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003cp\u003e最清楚的信号是：同伴模仿版本的数学能力大幅下降，而自蒸馏版本保留了大部分数学能力，并改善阅读，总体比冻结模型高 \u003cstrong\u003e4.28 个百分点\u003c/strong\u003e。这支持继续研究训练目标的来源与独立作答能力的保持。当前小规模 RLVR 对照则尚未显示记忆指导带来的总体优势。\u003c/p\u003e\u003cp\u003e自蒸馏/SFT 的成功不自动证明最新“当题标签在作答后才揭示”的多卡 GRPO 方法已经成功：它们使用的训练协议和目标构造不同。已核对的多卡日志是短程 smoke runs，能够证明若干训练链路跑通，完整对照实验仍需单独衡量。\u003c/p\u003e\u003cp class=\"note\"\u003e来源：\u003ca href=\"../outputs/gen/q3_4b/frozen/eval_indist_shuffled0_solo/eval_metrics.json\"\u003e冻结生成\u003c/a\u003e；\u003ca href=\"../outputs/gen/q3_4b/sft_memory/eval_indist_shuffled0_solo/eval_metrics.json\"\u003e同伴模仿\u003c/a\u003e；\u003ca href=\"../outputs/gen/q3_4b/sft_memory_self/eval_indist_shuffled0_solo/eval_metrics.json\"\u003e自蒸馏\u003c/a\u003e；\u003ca href=\"../outputs/gen/q3_4b/rlvr_plain/eval_indist_solo/eval_metrics.json\"\u003eRLVR\u003c/a\u003e；\u003ca href=\"../outputs/gen/q3_4b/rlvr_hint/eval_indist_solo/eval_metrics.json\"\u003eRLVR + hint\u003c/a\u003e；\u003ca href=\"../outputs/rl/smoke_q3_4b/metrics.jsonl\"\u003e多卡 smoke 日志\u003c/a\u003e。小规模训练范围见 \u003ca href=\"../docs/kalman_mem_notion.md\"\u003e方法笔记 §7d\u003c/a\u003e。\u003c/p\u003e\u003cdiv class=\"callout rec\"\u003e\u003cdiv class=\"callout-h\"\u003e我的判断\u003c/div\u003e\u003cp\u003e这个项目已经展示出一个有价值的能力：用历史反馈改进模型协作。接下来最关键的证据，是在相同数据、反馈条件和训练预算下，证明这份记忆除了能帮助挑答案，也能持续提升中央模型自己的独立能力。仓库当前的生成和 RL 代码正围绕这个问题展开。\u003c/p\u003e\u003c/div\u003e"
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"boundaries\"\u003e\u003ch2\u003e7. 理解结果时，需要分清的几件事\u003c/h2\u003e\u003cdetails open\u003e\u003csummary\u003e“纯问题路由”与“看过答案后的可靠性估计”是两种设置\u003c/summary\u003e\u003cp\u003e原版 M-Route 的地址来自题目。新版默认 \u003ccode\u003eq_source=sem\u003c/code\u003e 来自候选 judge prompt，\u003ccode\u003eqc\u003c/code\u003e 还显式包含 \u003ccode\u003epeer_hidden\u003c/code\u003e。因此，新版结果不能直接解读成在同伴尚未回答时就完成的调度效果。要研究纯问题路由，应明确选用问题特征，并检查整条特征链路。\u003c/p\u003e\u003cp class=\"note\"\u003e依据：\u003ca href=\"../scripts/encode_context_features.py\"\u003eencode_context_features.py:123、156\u003c/a\u003e；\u003ca href=\"../feedback_state/memory_runtime.py\"\u003ememory_runtime.py:27\u003c/a\u003e。\u003c/p\u003e\u003c/details\u003e\u003cdetails\u003e\u003csummary\u003e“顺序无关”限定的是最终状态\u003c/summary\u003e\u003cp\u003e只有无遗忘、使用相同地址和观测集合时，Kalman 的最终充分统计量与处理顺序无关。逐题决策使用的历史不同，累计准确率仍会不同；开启遗忘后，最终状态本身也依赖顺序。\u003ccode\u003eqc\u003c/code\u003e 当前每个候选调用一次写入，\u003ccode\u003erho &lt; 1\u003c/code\u003e 的遗忘也按每次候选写入发生，需与按事件遗忘的设置分开理解。\u003c/p\u003e\u003cp class=\"note\"\u003e依据：\u003ca href=\"../feedback_state/kalman_memory.py\"\u003ekalman_memory.py:120\u003c/a\u003e；\u003ca href=\"../feedback_state/memory_runtime.py\"\u003ememory_runtime.py:59\u003c/a\u003e。\u003c/p\u003e\u003c/details\u003e\u003cdetails\u003e\u003csummary\u003e“30% 验证奖励”不自动等于“记忆只看见 30% 反馈”\u003c/summary\u003e\u003cp\u003e\u003ccode\u003ebuild_generation_prompts.py\u003c/code\u003e 先逐题读取记忆并写入同伴标签，生成提示缓存；\u003ccode\u003ebuild_rl_data.py\u003c/code\u003e 之后抽样 \u003ccode\u003everified_fraction\u003c/code\u003e，原样复用缓存中的记忆概率和提示。所以当前这条数据构造路径改变的是奖励是否使用验证器，未同步减少上游记忆写入的标签。若要论证只有 30% 反馈可用，需要将反馈掩码施加到记忆构造阶段。\u003c/p\u003e\u003cp class=\"note\"\u003e依据：\u003ca href=\"../scripts/build_generation_prompts.py\"\u003ebuild_generation_prompts.py:93、126\u003c/a\u003e；\u003ca href=\"../training/sigma_rl/build_rl_data.py\"\u003ebuild_rl_data.py:100、116\u003c/a\u003e。此外，默认 \u003ccode\u003eguided_verified_only=True\u003c/code\u003e 会让未验证样本跳过 guided 采样，见 \u003ca href=\"../training/configs/grpo_sigma.yaml\"\u003egrpo_sigma.yaml:254\u003c/a\u003e。\u003c/p\u003e\u003c/details\u003e\u003cdetails\u003e\u003csummary\u003e离线训练标签与在线决策标签的使用顺序不同\u003c/summary\u003e\u003cp\u003e原版 \u003ccode\u003etraining_steer_vector\u003c/code\u003e 在离线训练时使用当题正确性构造一次可微写入，使写入强度和遗忘参数获得梯度；原版评测使用 \u003ccode\u003esteer_vector\u003c/code\u003e，在决策之后更新状态。新版 \u003ccode\u003ehint_label\u003c/code\u003e 则明确属于作答前借助当题标签筛选提示的基线。比较方法时需要说明这些信息条件。\u003c/p\u003e\u003cp class=\"note\"\u003e依据：\u003ca href=\"../feedback_state/symmetric_memory.py\"\u003esymmetric_memory.py:182\u003c/a\u003e；\u003ca href=\"../tests/experiments/common/evaluate_sigma.py\"\u003eevaluate_sigma.py:375、421\u003c/a\u003e；\u003ca href=\"../training/sigma_rl/build_rl_data.py\"\u003ebuild_rl_data.py:43、61\u003c/a\u003e。\u003c/p\u003e\u003c/details\u003e\u003cdetails\u003e\u003csummary\u003e代码与报告中的“投票”也要按任务核对\u003c/summary\u003e\u003cp\u003e\u003ccode\u003eanswer_groups.py\u003c/code\u003e 提供多种任务的答案归一化，但代码题仍将每个程序作为独立答案组。当前 \u003ccode\u003eself_vote_sim.py\u003c/code\u003e 只对数学和阅读答案做等价分组，其他任务使用独立组，因此这些任务上的加权 self-vote 实质上按来源可靠性选答案。应以具体脚本行为解释相应日志。\u003c/p\u003e\u003cp class=\"note\"\u003e依据：\u003ca href=\"../feedback_state/answer_groups.py\"\u003eanswer_groups.py:25\u003c/a\u003e；\u003ca href=\"../scripts/self_vote_sim.py\"\u003eself_vote_sim.py:94\u003c/a\u003e。\u003c/p\u003e\u003c/details\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "html",
+    "html": "\u003csection id=\"reading\"\u003e\u003ch2\u003e8. 从哪里开始读代码？\u003c/h2\u003e\u003cp\u003e建议先抓住“特征 → 记忆 → 决策 → 反馈”的小闭环，再进入训练系统。\u003ccode\u003etraining/verl/\u003c/code\u003e 主要提供分布式训练基础设施；理解研究方法时，先读项目自己的 \u003ccode\u003etraining/sigma_rl/\u003c/code\u003e 更直接。\u003c/p\u003e\u003c/section\u003e"
+  },
+  {
+    "type": "table",
+    "head": [
+      "位置",
+      "负责什么",
+      "阅读时抓住的问题"
+    ],
+    "rows": [
+      [
+        "README.md；configs/",
+        "原版方法、实验入口、模型与数据配置",
+        "哪些方法是冻结中央模型的原版实验？"
+      ],
+      [
+        "feedback_state/symmetric_memory.py；joint_models.py",
+        "原版 M 状态、特征地址、隐藏状态注入与 Yes/No 评分",
+        "反馈怎样改变下一题的候选分数？"
+      ],
+      [
+        "feedback_state/kalman_memory.py；addresses.py；memory_runtime.py",
+        "新版地址构造、后验更新、统一读写",
+        "状态里究竟保存了什么？当题标签何时写入？"
+      ],
+      [
+        "feedback_state/memory_judge.py；train_memory_judge.py",
+        "LoRA judge 与记忆证据融合",
+        "训练的是记忆本身，还是读取记忆的模型？"
+      ],
+      [
+        "scripts/encode_context_features.py；feature_streams.py；scripts/memsim.py",
+        "特征缓存、数据对齐、离线回放与消融",
+        "特征是否含答案？结果用哪个投影和任务顺序？"
+      ],
+      [
+        "feedback_state/memory_generator.py；scripts/build_generation_prompts.py",
+        "带可靠性注释的生成提示与训练目标",
+        "提示里有什么信息？正确目标从哪里来？"
+      ],
+      [
+        "training/sigma_rl/build_rl_data.py；trainer.py；reward.py",
+        "训练数据模式、solo/guided 采样、验证与伪奖励",
+        "协作作答与独立作答分别怎样得到学习信号？"
+      ],
+      [
+        "tests/unit/；tests/experiments/",
+        "轻量逻辑测试；需要模型/数据的实验评测",
+        "单元正确性和最终模型能力分别怎样验证？"
+      ],
+      [
+        "docs/；outputs/",
+        "研究笔记、实际指标和运行日志",
+        "某个结论能否对应到具体配置和结果文件？"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "\u003cdiv class=\"grid col-2\"\u003e\u003cdiv class=\"card\"\u003e\u003ch3\u003e想理解原版论文实现\u003c/h3\u003e\u003col\u003e\u003cli\u003e从 \u003ca href=\"../README.md\"\u003eREADME\u003c/a\u003e 了解任务和实验。\u003c/li\u003e\u003cli\u003e读 \u003ca href=\"../feedback_state/symmetric_memory.py\"\u003eSymmetricTrustMemory\u003c/a\u003e 的读写和 \u003ccode\u003eActivationSteerer\u003c/code\u003e。\u003c/li\u003e\u003cli\u003e读 \u003ca href=\"../tests/experiments/common/evaluate_sigma.py\"\u003eevaluate_sigma\u003c/a\u003e 的评分、关系图和更新循环。\u003c/li\u003e\u003c/ol\u003e\u003c/div\u003e\u003cdiv class=\"card\"\u003e\u003ch3\u003e想接上当前研究进展\u003c/h3\u003e\u003col\u003e\u003cli\u003e读 \u003ca href=\"../docs/kalman_mem_notion.md\"\u003eKalman 方法笔记\u003c/a\u003e，把结果视为实验记录。\u003c/li\u003e\u003cli\u003e读 \u003ca href=\"../feedback_state/memory_runtime.py\"\u003eMemoryRuntime\u003c/a\u003e 和 \u003ca href=\"../feedback_state/kalman_memory.py\"\u003eKalmanMemory\u003c/a\u003e。\u003c/li\u003e\u003cli\u003e再进入 \u003ca href=\"../training/README.md\"\u003e训练说明\u003c/a\u003e 与 \u003ca href=\"../training/sigma_rl/trainer.py\"\u003eGRPO 扩展\u003c/a\u003e。\u003c/li\u003e\u003c/ol\u003e\u003c/div\u003e\u003c/div\u003e\u003cp\u003e工程上，仓库已经具备数据构建、缓存、消融、评测、训练和结果分析链路，适合研究迭代。迁移到新机器时要核对模型路径、数据路径和环境：原版配置使用 \u003ccode\u003emodels/\u003c/code\u003e，一些新增脚本使用本机绝对路径；Qwen3 与 Qwen3.5 在仓库中采用不同依赖环境。\u003c/p\u003e\u003cp class=\"note\"\u003e当前工作区包含未提交和未跟踪的研究代码，本解读覆盖这些可见实现；不能将其全部视为 README 所指的已发布版本。环境依据：\u003ca href=\"../requirements_qwen3.txt\"\u003eQwen3 依赖\u003c/a\u003e、\u003ca href=\"../requirements_qwen3.5.txt\"\u003eQwen3.5 依赖\u003c/a\u003e、\u003ca href=\"../training/README.md\"\u003e多卡兼容性说明\u003c/a\u003e。\u003c/p\u003e"
+  },
+  {
+    "type": "html",
+    "html": "\u003cdiv class=\"callout olive\"\u003e\u003cdiv class=\"callout-h\"\u003e本轮核验记录\u003c/div\u003e\u003cp\u003e在本机 \u003ccode\u003esigma\u003c/code\u003e Python 环境下禁用 GPU，运行 \u003ccode\u003etests/unit/\u003c/code\u003e：\u003cstrong\u003e35 passed in 3.01s\u003c/strong\u003e。覆盖 Kalman 后验与直接求解的一致性、无遗忘状态的顺序性质、遗忘递推、冷启动、原版读出、关系图置换性质、答案提取、checkpoint 元信息及训练辅助逻辑。\u003c/p\u003e\u003cpre\u003e\u003ccode\u003ePYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \\\nCUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 \\\n/home/peilin/miniconda3/envs/sigma/bin/python \\\n-m pytest -q -p no:cacheprovider tests/unit\u003c/code\u003e\u003c/pre\u003e\u003cp\u003e测试结果支持上述局部实现的正确性，尚未覆盖多卡训练全过程。本次交付依据 html-kit 的 notebook 模板组织为可编辑 HTML / 表格单元，并在写入前建立了 shadow-diff 基线。\u003c/p\u003e\u003c/div\u003e"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

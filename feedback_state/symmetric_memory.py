@@ -255,13 +255,16 @@ class ActivationSteerer(nn.Module):
     flagged — which is exactly what the experiment measures.
     """
 
-    def __init__(self, base_model, *, rank: int, layer_frac: float = 0.5, dtype=torch.float32):
+    def __init__(self, base_model, *, rank: int, layer_frac: float = 0.5, dtype=torch.float32,
+                 gain_init: float = 0.0, proj_std: float = 1e-3):
         super().__init__()
         self.hidden = int(base_model.config.hidden_size)
         self.rank = int(rank)
         self.proj = nn.Linear(self.rank, self.hidden, bias=False)
-        nn.init.normal_(self.proj.weight, std=1e-3)  # near-zero start: step-0 ~= frozen base
-        self.gain = nn.Parameter(torch.tensor(0.0))   # sigmoid-free scalar gain, learned
+        nn.init.normal_(self.proj.weight, std=proj_std)  # near-zero start: step-0 ~= frozen base
+        # gain_init=0 (paper default) makes proj's gradient vanish until gain moves; a memory-judge
+        # passes gain_init=1 so the injection is learnable from the first step (proj stays tiny).
+        self.gain = nn.Parameter(torch.tensor(float(gain_init)))   # scalar gain, learned
         self.steer_vec = None  # rank-dim tensor, set by caller per candidate; None = off
         self._handles = []
         layers = _decoder_layers(base_model)

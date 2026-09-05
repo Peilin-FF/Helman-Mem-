@@ -14,4 +14,7 @@ logs/
 __pycache__/
 *.pyc
 .pytest_cache/
-artifacts/
+artifacts/*
+!artifacts/*.html
+.ray/
+*.egg-info/

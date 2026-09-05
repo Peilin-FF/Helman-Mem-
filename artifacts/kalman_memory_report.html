@@ -1,0 +1,288 @@
+<title>Σ-Mem v2 Ledger</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #f4f6f8;
+    --paper-2: #e9edf1;
+    --ink: #142031;
+    --ink-2: #4a5768;
+    --ink-3: #7b8796;
+    --rule: #cfd6de;
+    --memory: #146f6a;
+    --memory-soft: #d5ebe8;
+    --judge: #b2532a;
+    --judge-soft: #f1ddd2;
+    --fused: #1f3a63;
+    --oracle: #8a94a3;
+    --accent: #146f6a;
+    --code-bg: #e9edf1;
+    --max: 74ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #101720; --paper-2: #182231; --ink: #e6ecf3; --ink-2: #aeb9c6; --ink-3: #7d8998; --rule: #2b3847;
+      --memory: #4fc1b8; --memory-soft: #17332f; --judge: #e08a5e; --judge-soft: #3a2418; --fused: #9fb9e6; --oracle: #7d8998; --accent: #4fc1b8; --code-bg: #182231;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #101720; --paper-2: #182231; --ink: #e6ecf3; --ink-2: #aeb9c6; --ink-3: #7d8998; --rule: #2b3847;
+    --memory: #4fc1b8; --memory-soft: #17332f; --judge: #e08a5e; --judge-soft: #3a2418; --fused: #9fb9e6; --oracle: #7d8998; --accent: #4fc1b8; --code-bg: #182231;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: "Source Serif 4", Georgia, "Times New Roman", serif; font-size: 17px; line-height: 1.55; }
+  main { max-width: 1040px; margin: 0 auto; padding: 40px 24px 96px; }
+  h1, h2, h3 { font-family: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif; text-wrap: balance; line-height: 1.1; margin: 0; }
+  h1 { font-size: clamp(34px, 5vw, 56px); font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 26px; font-weight: 700; margin-top: 64px; padding-top: 18px; border-top: 2px solid var(--ink); }
+  h3 { font-size: 19px; font-weight: 500; margin-top: 30px; color: var(--ink); }
+  p { max-width: var(--max); margin: 14px 0; }
+  .eyebrow { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+  .lede { font-size: 20px; color: var(--ink-2); max-width: 64ch; }
+  header { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0; margin: 28px 0 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+  .strip > div { padding: 14px 16px 12px 0; border-right: 1px solid var(--rule); margin-right: 16px; }
+  .strip > div:last-child { border-right: 0; }
+  .strip .num { font-family: "Bricolage Grotesque", sans-serif; font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .strip .num small { font-size: 15px; font-weight: 500; color: var(--ink-3); margin-left: 3px; }
+  .strip .lab { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); margin-top: 8px; letter-spacing: 0.04em; }
+  .m { color: var(--memory); } .j { color: var(--judge); } .f { color: var(--fused); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; font-variant-numeric: tabular-nums; margin: 18px 0; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
+  td.n, th.n { text-align: right; padding-right: 18px; font-family: "IBM Plex Mono", monospace; font-size: 14px; }
+  td.best { font-weight: 600; }
+  .math { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 14px; background: var(--code-bg); padding: 14px 18px; margin: 16px 0; overflow-x: auto; white-space: pre; line-height: 1.6; border-left: 3px solid var(--accent); }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; }
+  .panel { margin: 22px 0; padding: 18px 18px 8px; background: var(--paper-2); }
+  .panel h3 { margin-top: 0; font-size: 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); margin: 6px 0 4px; }
+  .legend span::before { content: ""; display: inline-block; width: 22px; height: 3px; margin-right: 8px; vertical-align: middle; background: currentColor; }
+  .legend .dashed::before { background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 9px); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  svg { width: 100%; height: auto; display: block; }
+  .svgtext { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: var(--ink-3); }
+  .svgtitle { font-family: "Bricolage Grotesque", sans-serif; font-size: 13px; font-weight: 500; fill: var(--ink); }
+  .note { font-size: 14px; color: var(--ink-2); max-width: var(--max); }
+  ul { max-width: var(--max); padding-left: 20px; }
+  li { margin: 6px 0; }
+  .verdict { border-left: 3px solid var(--judge); padding: 4px 0 4px 16px; margin: 20px 0; max-width: var(--max); }
+  .verdict p { margin: 6px 0; }
+  .status { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 8px; border: 1px solid var(--rule); color: var(--ink-2); vertical-align: middle; margin-left: 8px; }
+  @media (prefers-reduced-motion: no-preference) { .strip .num { transition: color .2s; } }
+</style>
+<main>
+  <header>
+    <div class="eyebrow">Σ-Mem · sigma-mem · Qwen3-4B and Qwen3.5-4B · 2026-09-04</div>
+    <h1>A competence memory that learns online, and what the judge can add to it</h1>
+    <p class="lede">The Hebbian Σ-Mem was replaced by the exact Bayesian posterior of peer competence (a Kalman filter on frozen judge features), the judge was trained with that memory in the loop, in-domain and under hidden reliability shifts, and the central model was made to answer instead of choose. This ledger records every number measured, with the mathematics that predicts each one, including the negative results.</p>
+    <div class="strip">
+      <div><div class="num m">62.3<small>%</small></div><div class="lab">memory alone · OOD · shuffled</div></div>
+      <div><div class="num j">56.0<small>%</small></div><div class="lab">frozen judge · OOD</div></div>
+      <div><div class="num m">68.7<small>%</small></div><div class="lab">memory alone · in-distribution</div></div>
+      <div><div class="num f">71.0<small>%</small></div><div class="lab">trained judge · in-distribution</div></div>
+      <div><div class="num f">63.0<small>%</small></div><div class="lab">judge + memory, adapting online · OOD</div></div>
+      <div><div class="num m">70.5<small>%</small></div><div class="lab">model answers + memory-weighted vote · in-distribution (model alone 60.1)</div></div>
+      <div><div class="num">69.6<small>%</small></div><div class="lab">per-event oracle · OOD (selection bound)</div></div>
+    </div>
+  </header>
+
+  <h2>1. What was asked, what was cleared</h2>
+  <p>Target: a central model that natively stores, updates and uses a memory of peer reliability, whose accuracy rises with the number of stream steps on the training, in-distribution and OOD streams and rises during training, with improvements explained mathematically and without memorising the traits of the training peers.</p>
+  <p>Cleared first: the posterior-memory and whitened-memory modules with their quadratic read-out, the steerer and aggregator trainers that steered a frozen judge with a scalar, six <code>m_route_*</code> diagnostics, and every <code>launch_*.sh</code> scheduler (they were respawning jobs on the shared machine). Kept as baselines: the published <code>symmetric_memory.py</code>, <code>train_symmetric_memory.py</code> and <code>evaluate_sigma.py</code>. All of it is recoverable from <code>~/.rproj-local-trash/sigma-mem-abandoned-20260904</code> and the server's git history.</p>
+
+  <h2>2. The memory</h2>
+  <p>Every event gives a question, three peer answers and, after the decision, the verified correctness of every peer. The frozen center model turns the question and each candidate answer into hidden states; an unsupervised PCA of those states (fitted once on training features, no labels) is the address ψ. Peer competence is modelled as a linear function of the address with Gaussian noise, and the memory is its exact posterior:</p>
+  <div class="math">Λ_t = λI + Σ_{τ≤t} ψ_τ ψ_τᵀ        b_t = Σ_{τ≤t} s_τ ψ_τ            (s = ±1 correctness; both sums, hence order-invariant)
+μ(ψ) = ψᵀ Λ⁻¹ b     v(ψ) = ψᵀ Λ⁻¹ ψ     P(correct | history) = Φ( μ / √(1 + v) )
+write: k = Pψ / (1 + ψᵀPψ),  P ← P − k ψᵀP,  m ← m + k (s − mᵀψ)        (Sherman–Morrison = delta rule with the Kalman gain)</div>
+  <p>The last line is the point of contact with DeltaNet, Gated DeltaNet and Kimi's KDA: they apply <code>S ← S(αI − βkkᵀ) + βvkᵀ</code>, one gradient step of the same least-squares objective with a fixed or gated rate. The Kalman memory is the closed-form optimum with a direction-dependent step, large where evidence is scarce and small where it is abundant; a forgetting factor ρ reproduces the gated decay when a stream is non-stationary. The address design used everywhere below (<code>qc</code>) stacks a peer-blocked question part with a shared candidate part, so one linear model holds both “who is reliable on questions like this” and “does this answer look right”.</p>
+  <p>Three properties predict the curves: the state is order-invariant, so fixed and shuffled orders end in the same posterior; the online-ridge regret is O(d log T), so the average excess loss decays like d log T / T and the curve rises fast and then flattens; and the probit predictive shrinks uncertain reads to 1/2, so a cold region cannot dominate a decision.</p>
+
+  <div class="panel">
+    <h3>Learning curves on the three streams · Qwen3-4B · shuffled order, cold start, decide-then-update (accuracy per tenth of the stream)</h3>
+    <div class="legend"><span class="m">Kalman memory (qc, d=256)</span><span class="j">frozen judge</span><span class="f">judge trained with memory (fused)</span><span class="dashed f">judge + memory, adapting online</span><span class="dashed" style="color:var(--oracle)">per-event oracle</span></div>
+    <div class="charts">
+      <svg id="c-train" viewBox="0 0 340 220" role="img" aria-label="training stream learning curve"></svg>
+      <svg id="c-indist" viewBox="0 0 340 220" role="img" aria-label="in-distribution learning curve"></svg>
+      <svg id="c-ood" viewBox="0 0 340 220" role="img" aria-label="OOD learning curve"></svg>
+    </div>
+    <p class="note">Cumulative accuracy of the memory on shuffled OOD: 51% after 250 events, 62% after 1,000, 62.3% over all 17,403. On the training stream: 65% → 73% → 75% → 76.7%. The rise is the regret term shrinking; the plateau is the class of linear functions of frozen features being exhausted, which the hindsight probes below confirm. The dashed line on the OOD panel is the judge that keeps adapting from feedback (section 5): it is the one curve still rising at the end of the stream.</p>
+  </div>
+
+  <h2>3. Where the memory's ceiling is, and why richer memories do not move it</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Qwen3-4B, Kalman <code>qc</code></th><th class="n">OOD fixed</th><th class="n">OOD shuffled</th><th class="n">in-dist fixed</th><th class="n">in-dist shuffled</th><th class="n">train fixed</th></tr>
+    <tr><td>frozen judge (argmax Yes/No margin)</td><td class="n">55.98</td><td class="n">55.98</td><td class="n">57.33</td><td class="n">57.33</td><td class="n">61.70</td></tr>
+    <tr><td>Kalman memory, d = 256</td><td class="n best">62.04</td><td class="n best">61.97</td><td class="n best">68.86</td><td class="n best">68.63</td><td class="n best">76.84</td></tr>
+    <tr><td>Kalman memory, d = 512</td><td class="n">62.29</td><td class="n">62.32</td><td class="n">68.72</td><td class="n">68.19</td><td class="n">—</td></tr>
+    <tr><td>delta rule, fixed step (DeltaNet ablation)</td><td class="n">62.02</td><td class="n">61.71</td><td class="n">66.47</td><td class="n">66.40</td><td class="n">74.92</td></tr>
+    <tr><td>episodic nearest-neighbour (attention over feedback)</td><td class="n">62.31</td><td class="n">61.94</td><td class="n">67.12</td><td class="n">67.47</td><td class="n">75.45</td></tr>
+    <tr><td>hybrid Kalman + episodic residual</td><td class="n">62.43</td><td class="n">—</td><td class="n">68.49</td><td class="n">68.60</td><td class="n">76.87</td></tr>
+    <tr><td>random-feature kernel memory (RBF, 2048)</td><td class="n">61.36</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>hindsight ridge on the same features, 5-fold CV</td><td class="n" colspan="2">62.4</td><td class="n" colspan="2">69.2</td><td class="n">77.2</td></tr>
+    <tr><td>ridge fitted offline on the training stream, applied here</td><td class="n" colspan="2">57.8</td><td class="n" colspan="2">69.0</td><td class="n">—</td></tr>
+    <tr><td>per-source oracle route (needs dataset names)</td><td class="n">61.21</td><td class="n">61.32</td><td class="n">63.65</td><td class="n">63.67</td><td class="n">69.56</td></tr>
+    <tr><td>per-event oracle (some peer is right)</td><td class="n">69.56</td><td class="n">69.56</td><td class="n">75.23</td><td class="n">75.23</td><td class="n">82.60</td></tr>
+  </table></div>
+  <p>The online memory reaches the cross-validated ceiling of its own feature class on every stream, so nothing linear in the frozen representation is left on the table. Growing-capacity memories exist because a d-dimensional state must saturate once T ≫ d; they add at most 0.15 points, which says the frozen features simply do not carry instance-level information a richer memory could use. The exact posterior beats the fixed-step delta rule by 2.5 points where data is scarce (4,319 events) and by 0.3 where it is plentiful, which is the Kalman gain doing its job early in the stream.</p>
+  <p>The line that measures trait overfitting: a ridge fitted <em>offline</em> on the training stream and applied to OOD scores 57.8, barely above the frozen judge, while the <em>online</em> memory on the same feature class reaches 62.3 on the OOD stream itself. What is learned offline about these peers does not carry over; learning them again from the stream does.</p>
+
+  <div class="panel">
+    <h3>Capacity and forgetting · Kalman qc · shuffled order</h3>
+    <div class="tablewrap"><table>
+      <tr><th>address dimension d</th><th class="n">16</th><th class="n">32</th><th class="n">64</th><th class="n">128</th><th class="n">256</th><th class="n">512</th><th class="n">1024</th></tr>
+      <tr><td>OOD</td><td class="n">61.10</td><td class="n">61.55</td><td class="n">61.90</td><td class="n">61.98</td><td class="n best">62.32</td><td class="n">62.25</td><td class="n">62.29</td></tr>
+      <tr><td>in-distribution</td><td class="n">65.73</td><td class="n">67.15</td><td class="n">67.77</td><td class="n">68.14</td><td class="n">68.19</td><td class="n best">68.21</td><td class="n">68.19</td></tr>
+    </table></div>
+    <p class="note">Forgetting (ρ = 0.999, the gated-decay analogue): OOD fixed 62.36 vs 62.29, OOD shuffled 61.45 vs 62.32, in-distribution 67.6 vs 68.6. Peer competence per question type is stationary on these streams, so forgetting only discards evidence; ρ &lt; 1 stays reserved for counterfactual reliability shifts.</p>
+  </div>
+
+  <h2>4. Learning the address for online learnability</h2>
+  <p>The Kalman recursion is differentiable, so the projection from frozen features to the address can be trained on cold-start episodes of the training stream with the same online selection loss, gradients flowing through the whole recursion. This shapes the address for how fast the memory learns, not for offline classification; it is the slow-weights / fast-weights split of DeltaNet, TTT and Mesa layers with the fast weights solved in closed form.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Qwen3-4B, memory route</th><th class="n">PCA-64</th><th class="n">meta-learned 64</th><th class="n">PCA-128</th><th class="n">meta-learned 128</th><th class="n">PCA-256</th></tr>
+    <tr><td>OOD (fixed / shuffled)</td><td class="n">61.86 / 61.88</td><td class="n">61.64 / 61.78</td><td class="n">61.79 / 62.01</td><td class="n">61.79 / 62.01</td><td class="n">62.04 / 61.97</td></tr>
+    <tr><td>in-distribution (fixed / shuffled)</td><td class="n">68.05 / 67.86</td><td class="n best">70.22 / 70.04</td><td class="n">—</td><td class="n best">70.18 / 70.27</td><td class="n">68.86 / 68.63</td></tr>
+    <tr><td>in-distribution, cumulative after 250 events</td><td class="n">61.6</td><td class="n best">69.2</td><td class="n">—</td><td class="n">68.8</td><td class="n">61.7</td></tr>
+    <tr><td>training stream (fixed / shuffled)</td><td class="n">—</td><td class="n best">79.05 / 79.07</td><td class="n">—</td><td class="n">79.24 / —</td><td class="n">76.84 / 76.71</td></tr>
+  </table></div>
+  <p>In-domain the learned address learns faster (69% after 250 events instead of 62%) and higher (+2.2 points) with a quarter of the dimensions; OOD it is neutral. What it encodes about math, code and reading-comprehension questions does not describe the OOD tasks, but it does not hurt either.</p>
+  <h3>Reversible addresses</h3>
+  <p>The Kalman state is already a lossless summary (a sufficient statistic with a closed-form downdate), and its read-out through Λ⁻¹ is the invertible change of basis that separates overlapping questions (raw squared cosine 0.5, whitened 0.002). The only lossy step is the PCA address, so two reversible learned maps were trained with the same online-learnability objective: an orthonormal map (norm-preserving, exactly decodable back into hidden-state space) and an invertible affine-coupling flow on the PCA coordinates (a bijection with a closed-form inverse, so nonlinearly encoded structure can become linear for the memory without losing anything).</p>
+  <div class="tablewrap"><table>
+    <tr><th>address, d = 64, memory route</th><th class="n">OOD fixed / shuffled</th><th class="n">in-distribution fixed / shuffled</th><th class="n">training stream fixed / shuffled</th></tr>
+    <tr><td>PCA</td><td class="n">61.86 / 61.88</td><td class="n">68.05 / 67.86</td><td class="n">75.04 / 75.24</td></tr>
+    <tr><td>learned linear</td><td class="n">61.64 / 61.78</td><td class="n best">70.22 / 70.04</td><td class="n">79.05 / 79.07</td></tr>
+    <tr><td>learned orthonormal, decodable</td><td class="n">61.68 / 61.87</td><td class="n">69.25 / 68.84</td><td class="n">77.36 / 77.53</td></tr>
+    <tr><td>learned invertible flow</td><td class="n">61.56 / 61.97</td><td class="n best">70.22 / 70.25</td><td class="n best">80.51 / 80.50</td></tr>
+  </table></div>
+  <p>The flow is the best address measured, reversible by construction, and identical to the others OOD: the transform is not what limits the memory there, the information in the frozen features is.</p>
+
+  <h2>5. Training the judge to read the memory</h2>
+  <p>The judge (Qwen3-4B with rank-16 LoRA adapters) scores each candidate as <code>z_p(θ; memory evidence in the residual stream) + κ·ℓ_p</code>: the memory's log-odds enter additively as the Bayes prior and, through the paper's steering interface, into the upper decoder layers so the judge can weigh the reliabilities of all candidates while reading them. The loss is the negative log-probability that the selected candidate is correct, summed along cold-start episodes with the candidate slots randomly permuted per event. Because the memory's term is present during training, the gradient carries only what the memory cannot explain: the judge is trained as the residual verifier.</p>
+  <div class="panel">
+    <h3>Accuracy across one pass over the 17,709-event training stream (memory reset every 4,096 events) · Qwen3-4B</h3>
+    <div class="legend"><span class="f">judge trained with memory (fused)</span><span class="j">judge trained without memory (control)</span><span class="m">memory alone on the same events</span></div>
+    <svg id="c-pass" viewBox="0 0 700 220" role="img" aria-label="training pass accuracy"></svg>
+    <p class="note">Both judges rise across the pass (69 → 80 without memory, 73 → 80 with it): the verification skill improves with optimiser steps, and the memory lifts the cold start. Qwen3.5-4B behaves the same way (73.7 → 80.4, final 77.6).</p>
+  </div>
+
+  <h3>Held-out streams, Qwen3-4B, shuffled order</h3>
+  <div class="tablewrap"><table>
+    <tr><th>arm</th><th class="n">in-distribution</th><th class="n">OOD</th><th>what it tells</th></tr>
+    <tr><td>frozen judge</td><td class="n">57.33</td><td class="n">55.98</td><td>the starting point</td></tr>
+    <tr><td>frozen judge + memory prior, κ = 1 (untrained fusion)</td><td class="n">65.83</td><td class="n">—</td><td>a scale-mismatched sum sits below the memory alone</td></tr>
+    <tr><td>memory alone</td><td class="n">68.5</td><td class="n best">62.2</td><td>the transferable component</td></tr>
+    <tr><td>judge trained without memory</td><td class="n best">70.99</td><td class="n">59.60</td><td>in-domain verification, partial transfer</td></tr>
+    <tr><td>judge trained with memory (fused)</td><td class="n">70.94</td><td class="n">61.75</td><td>max(judge, memory) in each regime, no synergy</td></tr>
+    <tr><td>… plus test-time adaptation (one AdamW step per two events)</td><td class="n">71.57</td><td class="n best">63.03</td><td>OOD rises 62.5 → 63.6 across the stream; last tenths 64.3, 64.0, 63.8; second seed 63.35 (62.5 → 64.2)</td></tr>
+    <tr><td>judge trained without memory, adapting online, memory off (control)</td><td class="n">—</td><td class="n best">63.08</td><td>same rise (62.5 → 63.6): the adapters are the memory that keeps learning</td></tr>
+    <tr><td>memory with the trained judge's score as an online regressor</td><td class="n">—</td><td class="n">62.08</td><td>the judge's OOD verdict carries no new information</td></tr>
+    <tr><td>per-event oracle</td><td class="n">75.23</td><td class="n">69.56</td><td>the bound of any selector</td></tr>
+  </table></div>
+  <div class="verdict">
+    <p><strong>Verdict on the interaction.</strong> With frozen adapters, in-domain the trained judge subsumes the memory (what the memory knows there is also learnable from the answers' content and style) and OOD the memory subsumes the judge (its verification skill is domain-specific, and letting the memory learn online how much to trust it changes nothing). Both read the same frozen representation, and the memory extracts its linear, transferable part online.</p>
+    <p><strong>What moves the OOD curve past the memory's plateau</strong> is letting the judge keep learning from the same feedback: one optimiser step every two events on its own selection loss. The OOD accuracy then rises across the stream (62.5% in the first half, 63.6% in the second, 64% in the last tenths) instead of flattening at 62%; a second shuffle seed gives 63.35% (62.5 → 64.2), and Qwen3.5-4B 63.8% (63.3 → 64.4; memory alone 62.3%, frozen judge 59.5%).</p>
+    <p><strong>The control settles what the memory is.</strong> The judge trained without any memory, adapting online with the memory off, reaches 63.08% with the same rise. On top of an adapting judge the explicit Kalman state adds nothing: the LoRA weights updated from feedback are themselves a memory, the slow gradient-updated one, and over thousands of events they absorb what the closed-form state knows. The Kalman memory stays the cheap component, exact after a handful of events with no backward pass and calibrated evidence counts; the adapting weights are the component that keeps rising. Both are the same objective at two timescales.</p>
+  </div>
+
+  <h2>6. Making the judge need the memory: reliability-shift training</h2>
+  <p>Section 5 showed the memory being ignored by a trained judge. The reason is the training distribution: with three fixed peers on a stationary stream, reliability is a function of answer style and question type, the adapters learn that function directly, and nothing is left for the memory to supply. The remedy is the usual meta-learning condition: what is predictable from the weights is never read from the state, so make it unpredictable. Every training episode (1,024 events, cold-start memory) draws a hidden corruption rate per peer from {0, 0, 0.3, 0.6, 0.9} and corrupts that peer's correct answers at that rate while keeping its style (math: its own solution with the final number changed; reading and code: its own response to another question). Within an episode, reliability can then only be read from the feedback the memory accumulates.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Qwen3-4B judge · in-distribution, shuffled</th><th class="n">natural stream</th><th class="n">shifted stream (peer 1 corrupted 90%)</th></tr>
+    <tr><td>frozen</td><td class="n">57.33</td><td class="n">53.16</td></tr>
+    <tr><td>frozen + memory prior, κ = 1</td><td class="n">65.83</td><td class="n">59.46</td></tr>
+    <tr><td>memory alone</td><td class="n">68.5</td><td class="n">61.4</td></tr>
+    <tr><td>natural-trained, no memory</td><td class="n">70.99</td><td class="n">63.07</td></tr>
+    <tr><td>natural-trained, with memory</td><td class="n">70.94</td><td class="n">63.42</td></tr>
+    <tr><td>shift-trained, no memory</td><td class="n best">71.38</td><td class="n">63.09</td></tr>
+    <tr><td>shift-trained, with memory</td><td class="n">70.97</td><td class="n">63.23</td></tr>
+    <tr><td>shift-trained, with memory, meta-learned address</td><td class="n">71.13</td><td class="n best">63.37</td></tr>
+  </table></div>
+  <div class="tablewrap"><table>
+    <tr><th>last read channel: memory written into the prompt as text</th><th class="n">natural stream</th><th class="n">shifted stream</th></tr>
+    <tr><td>frozen judge reading the notes</td><td class="n">66.64</td><td class="n">60.25</td></tr>
+    <tr><td>trained on natural episodes, notes in the prompt</td><td class="n">71.17</td><td class="n">63.05</td></tr>
+    <tr><td>trained on shift episodes, notes in the prompt</td><td class="n">71.43</td><td class="n best">63.63</td></tr>
+  </table></div>
+  <div class="verdict">
+    <p><strong>The judge still does not need the memory, and the numbers say why.</strong> Even under a 90% corruption of the reading-comprehension expert, the trained judges score 63 with or without the memory, above the memory's own 61: they verify the corruptions from content, exactly as they verify most natural errors on these benchmarks. Reliability information is decisive only where verification fails — the frozen judge gains 11 points in-domain and 6 OOD from the memory, the trained judge with frozen adapters gains 2.6 OOD — and it is redundant for a trained verifier on in-domain data. That is a property of this task family (three checkable peers), not a defect of the memory: "who is usually right" adds little once "is this right" can be answered. Writing the memory into the prompt as text, the channel the model reads most natively, is read (the frozen judge's own score rises from 57.3 to 64.7) and gives the best shifted-stream judge (63.6), yet the gain over the no-memory judge stays within half a point.</p>
+  </div>
+
+  <h2>7. Where the memory does beat both baselines: the central model answers, and votes with the peers</h2>
+  <p>Selection is capped by the per-event oracle (69.6 OOD, 75.2 in-distribution, 82.6 train). If the central model writes its own answer, that answer becomes a fourth candidate, and the memory can track its reliability exactly as it tracks the peers'. The decision is then the reliability-weighted vote over the four answers (the Nitzan–Paroush rule with online-learned weights): the model's own reasoning is untouched, and a peer overrides it only when the memory says that peer is more reliable on questions like this one and the peers agree.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Qwen3-4B answers</th><th class="n">in-distribution</th><th class="n">math</th><th class="n">reading</th><th class="n">code</th><th class="n">training stream</th></tr>
+    <tr><td>frozen model alone</td><td class="n">60.06</td><td class="n">89.5</td><td class="n">59.6</td><td class="n">22.3</td><td class="n">67.86</td></tr>
+    <tr><td>frozen model, peers with memory annotations (2k events)</td><td class="n">63.30</td><td class="n">90.6</td><td class="n">66.5</td><td class="n">21.7</td><td class="n">—</td></tr>
+    <tr><td>LoRA fine-tuned on peers-only prompts (no memory)</td><td class="n">62.56</td><td class="n">74.9</td><td class="n">75.7</td><td class="n">20.0</td><td class="n">—</td></tr>
+    <tr><td>LoRA fine-tuned on memory-annotated prompts</td><td class="n">63.02</td><td class="n">78.4</td><td class="n">74.0</td><td class="n">20.9</td><td class="n">—</td></tr>
+    <tr><td>LoRA fine-tuned, targets = own solution when correct, else a reliable peer's</td><td class="n">63.09</td><td class="n">84.8</td><td class="n">70.7</td><td class="n">19.3</td><td class="n">—</td></tr>
+    <tr><td>memory selection among peers</td><td class="n">67.59</td><td class="n">78.1</td><td class="n">84.2</td><td class="n">20.5</td><td class="n">76.11</td></tr>
+    <tr><td>plain majority over own + peers</td><td class="n">62.91</td><td class="n">89.9</td><td class="n">65.4</td><td class="n">22.3</td><td class="n">70.70</td></tr>
+    <tr><td>memory-weighted vote over own + peers</td><td class="n best">70.48</td><td class="n">87.5</td><td class="n">83.2</td><td class="n">22.5</td><td class="n best">80.28</td></tr>
+    <tr><td>oracle over own + peers / peers only</td><td class="n">79.28 / 75.23</td><td class="n"></td><td class="n"></td><td class="n"></td><td class="n">87.15 / 82.60</td></tr>
+  </table></div>
+  <p>Fine-tuning on peer solutions teaches copying and halves the model's reasoning (math 89.5 → 74.9; output length 364 → 173 characters; a wrong peer is copied five times as often; on code, when every peer fails the fine-tuned models score 0% against 8% frozen). Self-distilled targets recover math (84.8) but not the total. The vote does what the fine-tunes were meant to learn: on the training stream it rises from 77% to 81% across the stream, takes reading from the reliable peer (78.5 vs 55.4 alone), keeps the model's own math (92.1), and lifts code to 38.2, above the best peer selection (30.7) and above the peers-only oracle (41.2 is the bound). It is the one configuration that beats both the frozen model and every model trained without the memory, and its trainable part is the central model's own solving, whose improvements propagate through the vote.</p>
+  <h2>8. Reproduce</h2>
+  <ul>
+    <li><code>scripts/memsim.py</code> — every memory arm on cached frozen features with learning curves, probes, dimension and forgetting sweeps, learned addresses (<code>--proj-ckpt</code>) and trained-judge scores (<code>--judge-scores</code>).</li>
+    <li><code>feedback_state/kalman_memory.py</code>, <code>kernel_memory.py</code>, <code>addresses.py</code>, <code>memory_runtime.py</code> — the memory, its growing-capacity variants, the address designs and the shared decide-then-update runtime; <code>tests/unit/test_kalman_memory.py</code> checks Sherman–Morrison against the direct posterior, order invariance and the forgetting recursion.</li>
+    <li><code>feedback_state/train_memory_judge.py</code> and <code>tests/experiments/common/evaluate_memory_judge.py</code> — the judge with the memory in the loop (LoRA, steering, logit prior, slot permutation, optional test-time adaptation).</li>
+    <li><code>feedback_state/train_address.py</code> — the meta-learned address.</li>
+    <li><code>scripts/build_generation_prompts.py</code>, <code>feedback_state/train_memory_generator.py</code>, <code>tests/experiments/common/evaluate_memory_generator.py</code> — the generation stage; <code>scripts/self_vote_sim.py</code> — the memory-weighted vote with the model as a voter; <code>scripts/analyze_generations.py</code> — copy rates and output lengths.</li>
+    <li><code>feedback_state/reliability_shift.py</code> — style-preserving per-episode corruption (<code>train_memory_judge.py --cf_episodes on</code>, <code>evaluate_memory_judge.py --cf_profile</code>); <code>--memory_text on</code> writes the memory's evidence into the judge prompt.</li>
+    <li><code>docs/memory_judge_design.md</code> — the full derivation and every table above.</li>
+  </ul>
+</main>
+<script>
+(function () {
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  function chart(id, title, series, opts) {
+    const svg = document.getElementById(id); if (!svg) return;
+    const W = opts.width || 340, H = 220, L = 38, R = 10, T = 28, B = 30;
+    const ymin = opts.ymin, ymax = opts.ymax;
+    const n = series[0].data.length;
+    const x = (i) => L + (i / (n - 1)) * (W - L - R);
+    const y = (v) => T + (1 - (v - ymin) / (ymax - ymin)) * (H - T - B);
+    let s = `<text x="${L}" y="16" class="svgtitle">${title}</text>`;
+    for (let g = ymin; g <= ymax + 1e-9; g += opts.step) {
+      s += `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}" stroke="${css('--rule')}" stroke-width="1"/>`;
+      s += `<text x="${L - 6}" y="${y(g) + 4}" text-anchor="end" class="svgtext">${g}</text>`;
+    }
+    s += `<text x="${L}" y="${H - 8}" class="svgtext">first tenth</text><text x="${W - R}" y="${H - 8}" text-anchor="end" class="svgtext">last tenth</text>`;
+    for (const sr of series) {
+      const pts = sr.data.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+      s += `<polyline points="${pts}" fill="none" stroke="${sr.color}" stroke-width="${sr.width || 2.2}" ${sr.dash ? 'stroke-dasharray="5 4"' : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
+      const last = sr.data[n - 1];
+      s += `<circle cx="${x(n - 1)}" cy="${y(last)}" r="3" fill="${sr.color}"/>`;
+    }
+    svg.innerHTML = s;
+  }
+  const M = css('--memory'), J = css('--judge'), F = css('--fused'), O = css('--oracle');
+  chart('c-train', 'training stream · 17,709 events', [
+    { data: [82.2, 82.9, 81.4, 82.6, 82.6, 82.8, 83.3, 83.3, 81.6, 83.2], color: O, dash: true, width: 1.5 },
+    { data: [74.2, 77.8, 75.5, 76.5, 77.6, 76.6, 77.8, 77.4, 75.9, 77.9], color: M },
+    { data: [61.8, 61.7, 60.9, 61.8, 61.6, 62.6, 62.1, 62.5, 60.8, 61.3], color: J },
+  ], { ymin: 50, ymax: 90, step: 10 });
+  chart('c-indist', 'in-distribution · 4,319 events', [
+    { data: [76.6, 75.5, 78.5, 76.6, 72.2, 73.8, 73.1, 74.3, 76.4, 75.2], color: O, dash: true, width: 1.5 },
+    { data: [66.6, 66.7, 68.8, 71.5, 67.6, 67.6, 67.8, 68.3, 70.8, 69.4], color: M },
+    { data: [71.2, 71.1, 72.7, 74.3, 68.1, 69.7, 68.8, 70.6, 72.5, 70.6], color: F },
+    { data: [59.4, 56.2, 60.4, 56.7, 54.6, 55.3, 55.1, 56.9, 60.9, 57.6], color: J },
+  ], { ymin: 50, ymax: 90, step: 10 });
+  chart('c-ood', 'OOD · 17,403 events', [
+    { data: [71.4, 68.7, 69.4, 69.8, 69.9, 70.1, 68.5, 69.5, 69.1, 69.3], color: O, dash: true, width: 1.5 },
+    { data: [63.0, 61.2, 61.6, 62.6, 62.6, 63.1, 61.2, 62.2, 61.5, 62.6], color: M },
+    { data: [62.8, 60.6, 61.3, 62.6, 62.0, 62.5, 60.7, 61.7, 61.2, 62.3], color: F },
+    { data: [62.9, 61.6, 61.9, 63.1, 63.0, 63.7, 62.0, 64.3, 64.0, 63.8], color: F, dash: true },
+    { data: [57.1, 54.5, 55.7, 56.5, 54.9, 56.4, 54.5, 55.9, 56.6, 57.7], color: J },
+  ], { ymin: 50, ymax: 90, step: 10 });
+  chart('c-pass', 'accuracy per tenth of the training pass', [
+    { data: [73.1, 77.6, 74.8, 76.6, 78.7, 78.9, 79.9, 80.0, 78.7, 79.8], color: F },
+    { data: [69.0, 76.2, 76.7, 78.4, 79.8, 79.1, 80.4, 80.3, 78.8, 80.4], color: J },
+    { data: [74.2, 77.8, 73.9, 75.5, 75.8, 76.1, 76.3, 75.8, 74.9, 75.6], color: M },
+  ], { ymin: 65, ymax: 85, step: 5, width: 700 });
+})();
+</script>

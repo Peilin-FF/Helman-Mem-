@@ -1,0 +1,288 @@
+# Basic GRPO for the central model + the memory hooks (training/sigma_rl).
+# Derived from the vendored verl 0.3.1 ppo_trainer.yaml; the agentic / entropy (ARPO, AEPO) knobs are removed.
+# Every key can be overridden on the command line (hydra), e.g.  memory.hint_rollouts=0  actor_rollout_ref.rollout.n=4
+
+data:
+  tokenizer: null
+  use_shm: False
+  train_files: outputs/rl/data/q3_4b/train_memory.parquet
+  val_files: outputs/rl/data/q3_4b/val_indist.parquet
+  prompt_key: prompt            # question-only chat messages
+  guided_key: guided_prompt     # question + peers' solutions (annotated by the memory, or not, or one hint); null = none
+  reward_fn_key: data_source    # task type -> per-task validation metrics
+  max_prompt_length: 8192       # input budget (question + all peer solutions + context); rows whose guided prompt exceeds it lose the guidance (counted at load)
+  max_response_length: 768
+  train_batch_size: 64          # prompts per step (x rollout.n samples)
+  val_batch_size: null
+  return_raw_input_ids: False
+  return_raw_chat: False
+  return_full_prompt: False
+  shuffle: False                # stream order: the memory state of event t only knows the feedback of events < t
+  filter_overlong_prompts: True
+  filter_overlong_prompts_workers: 8
+  truncation: error
+  image_key: images
+  video_key: videos
+  trust_remote_code: False
+  custom_cls:
+      path: null
+      name: null
+
+actor_rollout_ref:
+  hybrid_engine: True
+  model:
+    path: /mnt/data/peilin/HF_MODEL/Qwen3-4B
+    use_shm: False
+    external_lib: null
+    override_config: { }
+    enable_gradient_checkpointing: True
+    enable_activation_offload: False
+    use_remove_padding: True             # flash-attn varlen: no padding compute
+    attn_implementation: flash_attention_2   # sdpa if flash-attn is unavailable (then set use_remove_padding False)
+    lora_rank: 0                         # full-parameter training (the internalisation objective)
+    lora_alpha: 16
+    target_modules: all-linear
+    use_liger: False
+    use_fused_kernels: False
+    trust_remote_code: False
+  actor:
+    strategy: fsdp
+    ppo_mini_batch_size: 16              # prompts per optimizer step (x rollout.n samples)
+    ppo_micro_batch_size: null
+    ppo_micro_batch_size_per_gpu: null
+    use_dynamic_bsz: True
+    ppo_max_token_len_per_gpu: 16384
+    grad_clip: 1.0
+    clip_ratio: 0.2
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.2
+    clip_ratio_c: 3.0
+    loss_agg_mode: "token-mean"
+    entropy_coeff: 0
+    use_kl_loss: False                   # plain GRPO: no reference model, no KL
+    use_torch_compile: True
+    kl_loss_coef: 0.0
+    kl_loss_type: low_var_kl
+    ppo_epochs: 1
+    shuffle: False
+    ulysses_sequence_parallel_size: 1
+    checkpoint:
+      contents: ['model', 'optimizer', 'extra', 'hf_model']   # hf_model = a loadable HF directory next to the shards
+    optim:
+      lr: 1e-6
+      lr_warmup_steps: -1
+      lr_warmup_steps_ratio: 0.
+      min_lr_ratio: 0.0
+      num_cycles: 0.5
+      warmup_style: constant
+      total_training_steps: -1
+      weight_decay: 0.0
+    fsdp_config:
+      wrap_policy:
+        min_num_params: 0
+      param_offload: False
+      optimizer_offload: False
+      offload_policy: False
+      reshard_after_forward: True
+      fsdp_size: -1
+  ref:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: True
+      reshard_after_forward: True
+      wrap_policy:
+        min_num_params: 0
+    use_torch_compile: ${actor_rollout_ref.actor.use_torch_compile}
+    log_prob_micro_batch_size: null
+    log_prob_micro_batch_size_per_gpu: null
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    ulysses_sequence_parallel_size: ${actor_rollout_ref.actor.ulysses_sequence_parallel_size}
+  rollout:
+    name: vllm
+    mode: sync
+    chat_scheduler: null
+    temperature: 1.0
+    top_k: -1
+    top_p: 1
+    use_fire_sampling: False
+    prompt_length: ${data.max_prompt_length}
+    response_length: ${data.max_response_length}
+    dtype: bfloat16
+    gpu_memory_utilization: 0.6   # shared GPUs: vLLM counts memory used by other processes against this budget -> must exceed (others + ~12 GB)/80 GB
+    ignore_eos: False
+    enforce_eager: True
+    free_cache_engine: True
+    load_format: dummy_dtensor
+    layered_summon: False
+    tensor_model_parallel_size: 1
+    max_num_batched_tokens: 8192
+    max_model_len: null
+    max_num_seqs: 512
+    log_prob_micro_batch_size: null
+    log_prob_micro_batch_size_per_gpu: null
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    disable_log_stats: True
+    enable_chunked_prefill: True
+    do_sample: True
+    n: 8                                  # samples per prompt (the GRPO group)
+    engine_kwargs:
+      vllm:
+        swap_space: null
+      sglang:
+        attention_backend: null
+    val_kwargs:
+      top_k: -1
+      top_p: 1.0
+      temperature: 0
+      n: 1
+      do_sample: False
+    multi_turn:
+      enable: False
+      max_turns: null
+      tool_config_path: null
+      format: chatml
+
+critic:
+  rollout_n: ${actor_rollout_ref.rollout.n}
+  strategy: fsdp
+  optim:
+    lr: 1e-5
+    lr_warmup_steps_ratio: 0.
+    min_lr_ratio: null
+    warmup_style: constant
+    total_training_steps: -1
+    weight_decay: 0.01
+  model:
+    path: ${actor_rollout_ref.model.path}
+    use_shm: False
+    tokenizer_path: ${actor_rollout_ref.model.path}
+    override_config: { }
+    external_lib: ${actor_rollout_ref.model.external_lib}
+    enable_gradient_checkpointing: True
+    enable_activation_offload: False
+    use_remove_padding: False
+    trust_remote_code: ${actor_rollout_ref.model.trust_remote_code}
+    fsdp_config:
+      param_offload: False
+      optimizer_offload: False
+      offload_policy: False
+      reshard_after_forward: True
+      wrap_policy:
+        min_num_params: 0
+      fsdp_size: -1
+    lora_rank: 0
+    lora_alpha: 16
+    target_modules: all-linear
+  ppo_mini_batch_size: ${actor_rollout_ref.actor.ppo_mini_batch_size}
+  ppo_micro_batch_size: null
+  ppo_micro_batch_size_per_gpu: null
+  forward_micro_batch_size: ${critic.ppo_micro_batch_size}
+  forward_micro_batch_size_per_gpu: ${critic.ppo_micro_batch_size_per_gpu}
+  use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+  ppo_max_token_len_per_gpu: 32768
+  forward_max_token_len_per_gpu: ${critic.ppo_max_token_len_per_gpu}
+  ulysses_sequence_parallel_size: 1
+  ppo_epochs: ${actor_rollout_ref.actor.ppo_epochs}
+  shuffle: ${actor_rollout_ref.actor.shuffle}
+  grad_clip: 1.0
+  cliprange_value: 0.5
+  loss_agg_mode: ${actor_rollout_ref.actor.loss_agg_mode}
+  checkpoint:
+    contents: ['model', 'optimizer', 'extra']
+
+reward_model:
+  enable: False
+  strategy: fsdp
+  model:
+    input_tokenizer: ${actor_rollout_ref.model.path}
+    path: null
+    use_shm: False
+    external_lib: ${actor_rollout_ref.model.external_lib}
+    use_remove_padding: False
+    use_fused_kernels: ${actor_rollout_ref.model.use_fused_kernels}
+    trust_remote_code: False
+    fsdp_config:
+      wrap_policy:
+        min_num_params: 0
+      param_offload: False
+      reshard_after_forward: True
+      fsdp_size: -1
+  micro_batch_size: null
+  micro_batch_size_per_gpu: null
+  max_length: null
+  ulysses_sequence_parallel_size: 1
+  use_dynamic_bsz: ${critic.use_dynamic_bsz}
+  forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
+  reward_manager: sigma                 # sigma = training/sigma_rl/reward.py (verifier, or memory pseudo-reward when unverified) | outcome = strict post-answer verifier only
+  max_workers: 32                       # parallel graders (code tests run in sandboxed subprocesses)
+  launch_reward_fn_async: False
+  sandbox_fusion:
+    url: null
+    max_concurrent: 64
+custom_reward_function:
+  path: null
+  name: compute_score
+
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo                   # group-mean baseline; reinforce_plus_plus / rloo also available
+  norm_adv_by_std_in_grpo: True
+  use_kl_in_reward: False
+  kl_penalty: kl
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.001
+    horizon: 10000
+    target_kl: 0.1
+  use_pf_ppo: False
+  pf_ppo:
+    reweight_method: pow
+    weight_pow: 2.0
+
+# ---- the central model's stream-time answer and where the memory enters (training/sigma_rl/trainer.py)
+# Regime is set by the data (build_rl_data --guided): memory / peers / hint_memory = labels only after the answer (ours),
+# hint_label / hint_random = labels before the answer (classical baseline), none = plain RLVR.
+memory:
+  guided_rollouts: 1          # 0 = no guided samples (plain GRPO on the question only)
+  guided_groups: all          # all = every prompt gets its stream-time answer | zero = only groups whose solo samples all failed
+  guided_sampling: greedy     # greedy = one answer | sample = rollout.n answers at temperature 1
+  guided_loss_prompt: both    # guided = learn to use peers + memory | solo = re-label under the question-only prompt (internalisation) | both
+  guided_filter: none         # none = the post-hoc reward decides (ours) | verified = keep only verified-correct guided answers (labels-before baseline)
+  guided_verified_only: True  # only prompts with a verifier after the answer get a guided sample (the pseudo-reward has no ground truth)
+  max_guided_groups: 1000000
+
+trainer:
+  balance_batch: True
+  total_epochs: 1
+  total_training_steps: null
+  project_name: sigma-mem-rl
+  experiment_name: q3_4b_grpo_memory
+  logger: [ 'console' ]
+  metrics_file: metrics.jsonl           # one JSON line per step under default_local_dir
+  log_val_generations: 0
+  rollout_data_dir: null                # set to dump every rollout (prompt, response, score, kind) as jsonl
+  validation_data_dir: null
+  nnodes: 1
+  n_gpus_per_node: 4
+  save_freq: 20
+  resume_mode: auto
+  resume_from_path: null
+  val_before_train: True
+  test_freq: 20
+  critic_warmup: 0
+  default_hdfs_dir: null
+  del_local_ckpt_after_load: False
+  default_local_dir: outputs/rl/${trainer.experiment_name}
+  max_actor_ckpt_to_keep: 1             # sharded (resumable) checkpoints kept (~70 GB each for a 4B model); HF copies are kept under hf/
+  max_critic_ckpt_to_keep: null
+  keep_hf_checkpoints: True
+  hf_checkpoint_dtype: bfloat16         # HF copies are cast to bf16 (8 GB per 4B checkpoint); none = keep verl's fp32 files
+  ray_wait_register_center_timeout: 300
+  device: cuda
+
+ray_init:
+  num_cpus: 32                          # shared box: never take every core
+  temp_dir: /mnt/data/peilin/.ray       # our own Ray temp dir (no clash with other users' /tmp/ray)

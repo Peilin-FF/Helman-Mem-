@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">SIGMA-MEM · PEER OUTCOME LEARNING · 2026-09-05</div><h1>中心模型逐题学习：实验设计与接入进度</h1><p class=\"lede\">中心模型看到题目与所有同僚的未标注回答，读取原矩阵的历史张量，自己推理并给出答案。答案产生后，中心结果用于 RL，同僚结果只写回历史矩阵。</p><div class=\"callout rec\"><div class=\"callout-h\">当前尚未完成整套训练接入</div><p>已实现输入隔离、答后写入时序、中心独立奖励、并行训练数据约束，并完成 CPU / GPU 组件验证。联合生成的张量对齐与生成后端仍待用户确认；没有启动本方案的正式训练，没有 Qwen3-4B 完整训练吞吐量，也没有能力提升结论。</p><p>旧入口 <code>training.sigma_rl.main_grpo</code> 仍是旧实验，不能把它当作新方案启动。</p></div><div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">97</div><div class=\"stat-label\">全量 CPU 单元测试通过</div></div><div class=\"stat-card\"><div class=\"stat-num\">3</div><div class=\"stat-label\">另行 CUDA 组件测试通过</div></div><div class=\"stat-card\"><div class=\"stat-num\">17,709</div><div class=\"stat-label\">真实训练题目完整输入检查</div></div><div class=\"stat-card\"><div class=\"stat-num\">0</div><div class=\"stat-label\">当前训练集超过 8192 的题目</div></div></div><div class=\"toc\"><a href=\"#goal\">目标</a><a href=\"#visibility\">信息边界</a><a href=\"#loop\">逐题闭环</a><a href=\"#memory\">矩阵接口</a><a href=\"#pending\">待确认接入</a><a href=\"#data\">数据与长度</a><a href=\"#implementation\">代码状态</a><a href=\"#evidence\">测试证据</a><a href=\"#evaluation\">能力与速度评测</a><a href=\"#gates\">完成标准</a></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"goal\">1. 目标与不做什么</h2><p>目标是让中心模型通过最终答案的反馈，学会从同僚的不同推理中提取有用信息；同僚整体回答错误，并不意味着其中每一步都无用。历史可靠性帮助中心判断信息来源，模型参数更新则负责学习如何使用这些信息。</p><div class=\"grid col-2\"><div class=\"card\"><h3>必须保留</h3><ul><li>中心直接生成自己的解答，不投票、不选择某位同僚作为最终答案。</li><li>当前题目的正确性不能进入中心输入；历史可靠性只能通过原参数化张量通路进入。</li><li>最终结果反馈即可，不要求逐步标签或为每段推理评分。</li><li>中心本题错误而同僚正确时，不能把正确同僚变成本题的模仿目标。</li><li>保留原 Kalman 算法、地址设计、读写接口及旧实验文件。</li></ul></div><div class=\"card\"><h3>明确排除</h3><ul><li>SFT、挑选正确 teacher、按当前标签筛同僚。</li><li>可靠性文字说明、加权投票伪奖励、逐步奖励。</li><li>把带同僚提示生成的答案，改挂到纯题目上下文训练。</li><li>同僚全错就丢题，或用同僚是否正确替代中心答案评分。</li></ul></div></div><p class=\"note\">此方案减少的是精细化过程标注和 teacher 筛选，不是取消最终验证器。最终答案／测试用例的质量仍会影响 RL；不能宣称已经摆脱评估器误差。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"visibility\">2. 哪些信息能进入中心模型</h2><p>私有数据留在训练控制器和事后评估器中，不随完整 record 发送给生成 worker。以下边界既约束采样，也约束旧策略概率与训练概率的重算。</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "信息",
+      "中心作答时可见？",
+      "用途"
+    ],
+    "rows": [
+      [
+        "题目、选项、公开上下文",
+        "是，文本",
+        "定义任务；完整保留，不做隐式字符截断"
+      ],
+      [
+        "所有同僚的原始回答",
+        "是，文本",
+        "匿名槽位排列；内容不按本题标签筛选"
+      ],
+      [
+        "原矩阵读取的每位同僚 4 维历史证据",
+        "是，张量，不是文字",
+        "只反映之前题目的反馈；保留对应槽位关系"
+      ],
+      [
+        "当前题目的 gold／测试答案",
+        "否",
+        "答案生成完成后，仅供中心结果验证"
+      ],
+      [
+        "当前题目的同僚正确性标签",
+        "否",
+        "全部中心采样答案完成评分后，按原接口写矩阵"
+      ],
+      [
+        "中心自己的最终正确性",
+        "作答前不可见",
+        "事后作为该答案的 RL outcome reward"
+      ],
+      [
+        "同僚当前分数、正确 teacher 标记",
+        "否",
+        "不得进入输入、中心奖励或样本选择"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"loop\">3. 一道题的因果闭环</h2><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">① 读取</div><div class=\"tl-body\">取得题目与全部同僚文本，调用原 <code>MemoryRuntime.read(t)</code>，读取 $M_{t-1}$ 的证据。此时不读取本题同僚标签。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">② 采样</div><div class=\"tl-body\">同一个题目、同一组同僚、同一个历史快照下，中心采样 $K$ 个自己的答案。GRPO 的同组条件必须一致。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">③ 评分</div><div class=\"tl-body\">全部中心答案返回后，评估器逐个给出中心答案的最终正确性 $r_{t,k}\\in\\{0,1\\}$。评估器异常必须暴露，不能伪造为“答错”。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">④ 写矩阵</div><div class=\"tl-body\">现在才获取本题同僚正确性，调用原 <code>MemoryRuntime.write(t, X, labels)</code> 得到 $M_t$。每题只执行一次完整反馈，不因采样 $K$ 次而重复写入 $K$ 次。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">⑤ 参数学习</div><div class=\"tl-body\">使用中心 outcome reward 与仓库中的 GRPO / PPO 更新机制。训练使用保存的原始输入和 $M_{t-1}$ 证据，不能改用刚更新的 $M_t$。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">⑥ 下一题</div><div class=\"tl-body\">下一题才读 $M_t$。可以积累多个已完成题目做一次优化批次，但不能提前读入同一条流中尚未得到反馈的下一题。</div></div></div><div class=\"grid col-2\"><div class=\"card\"><h3>中心结果 → 模型参数</h3><p>中心自己的成功与失败决定 RL 更新方向；不会给当前 peer 文本加模仿 loss。</p></div><div class=\"card\"><h3>同僚结果 → 历史矩阵</h3><p>正确性沿用原接口变成正负反馈。原矩阵只有原有的 peer 结构，不新增中心 head，不把中心奖励塞进 peer head。</p></div></div><p>同一题内的 $K$ 次采样和策略优化可以利用并行 GPU。跨题的状态依赖仍必须遵循原闭环，不能为了批量生成而把本题或后续题的标签提前写入。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>4. 中心如何从最终标签学习</h2><p>记 $c_t$ 为题目、所有同僚文本与原历史证据的联合条件。模型生成 $y_{t,k}\\sim\\pi_{\\theta_{old}}(\\cdot\\mid c_t)$，由中心自己的答案得到 $r_{t,k}$。</p><p>$$A_{t,k}=\\frac{r_{t,k}-\\operatorname{mean}_{j}(r_{t,j})}{\\operatorname{std}_{j}(r_{t,j})+\\epsilon}$$</p><p>复用仓库 <code>compute_grpo_outcome_advantage</code> 的实际标准差与归一化实现，再由并行 PPO actor 在同一个 $c_t$ 下计算概率比和 clipped policy loss。当前新增的 transport helper 已复用这段 advantage 实现，但 actor 的联合张量通路还未接入。</p><ul><li>奖励只放在最后一个有效 response token；将同一个最终结果的 advantage 用于答案 token 的策略梯度，不等于逐步标注。</li><li>同僚全错但中心某次答对：这次成功仍能提供正向相对信号，不要求某位 teacher 是对的。</li><li>中心所有采样都错，或所有采样都对：该 GRPO 组通常没有相对奖励差异。保留题目并更新历史矩阵，记录零信号比例，不调用投票或 teacher fallback。</li><li>中心错、同僚对：同僚标签只改变下一题可读的历史；不会把该同僚的答案直接加入中心本题 loss。</li></ul><p class=\"note\">逐题反馈不意味着每题都必须完成一次 optimizer.step。批大小、梯度累积与优化时点需明确配置；每个答案始终绑定生成时的条件快照。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"memory\">5. 原矩阵和参数化接口保持什么</h2><p>原 <code>KalmanMemory</code>、<code>MemoryRuntime</code>、地址投影／证据构造和 <code>ActivationSteerer</code> 文件均未修改。新增的 <code>CausalPeerEpisode</code> 只在原 read / write 外围实施时序检查、保存快照和异常回滚，不另造记忆算法。</p><p>现有 <code>read(t)</code> 返回 <code>ell [P]</code>、<code>n_eff [P]</code>、<code>evidence [P,4]</code> 与原地址行 <code>X</code>。只有实际同僚数对应的行参与作答与写入。</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "原证据维度",
+      "含义",
+      "处理方式"
+    ],
+    "rows": [
+      [
+        "第 1 维",
+        "该同僚的历史预测 log-odds",
+        "原值保留"
+      ],
+      [
+        "第 2 维",
+        "原实现归一化并饱和的历史证据量",
+        "原值保留，不改成文字计数"
+      ],
+      [
+        "第 3 维",
+        "其他同僚中最高的历史 log-odds",
+        "原值保留"
+      ],
+      [
+        "第 4 维",
+        "其他同僚的平均历史 log-odds",
+        "原值保留"
+      ],
+      [
+        "槽位映射",
+        "文本槽位 → canonical peer identity",
+        "文本与证据一起重排，写入仍按 canonical 顺序"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>关键差异：原 <code>ActivationSteerer</code> 接受 <code>[4]</code> 或 <code>[batch,4]</code>，对每个候选序列广播注入；它不直接接受联合生成所需的 <code>[batch,peers,4]</code>。GPU 测试验证了原接口对后一种形状会拒绝处理。不能通过静默平均、选择某一行或转成文字来掩盖差异。</p><p>原 <code>MemoryJudge</code> 的 Yes/No 候选判分与候选选择损失不作为新生成训练目标。新目标是中心自由作答，原 judge 路线和文件仍保留供旧实验使用。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"pending\">6. 两项尚未实施的接入决定</h2><div class=\"callout\"><div class=\"callout-h\">需用户确认，不能当作已经批准</div><p>此前已承诺：接口、时序、奖励来源、后端和样本筛选的实质变化要先说明。以下是当前建议，不是已写入训练配置的事实。</p></div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "决定",
+      "建议接入方式",
+      "影响／当前状态"
+    ],
+    "rows": [
+      [
+        "多同僚张量如何联合使用",
+        "新增文本位置对齐层；每位同僚的原 4 维证据通过原可学习投影，注入其回答 token；题干和中心生成 token 不直接注入",
+        "扩展原来的全序列广播用法；矩阵与证据含义不变。尚未实施、待确认"
+      ],
+      [
+        "生成后端",
+        "新实验使用仓库已有 HF rollout，继续使用 Ray＋FSDP；旧 vLLM 配置不改",
+        "HF 路径便于执行实际 hidden-state hook，但性能与多 GPU 运行仍需测试。尚未切换、待确认"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>如果要求新实验也继续使用 vLLM，需要实现与训练模型等价的自定义推理模型、逐请求历史张量传输、权重同步及 KV/cache 正确性检查；现有 vLLM 路径并没有这些能力。不能把 HF 路径的功能测试当成 vLLM 的等价证明。</p><p class=\"note\">另一个已发现但未改动的旧配置问题：本仓库 vLLM 包装器检查 chunked-prefill 调度预算。目前输入 8192＋输出 768＝8960，而旧 <code>max_num_batched_tokens</code> 是 8192。若继续采用该路径，必须明确修正执行器预算；这不是再缩短输入的理由。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"data\">7. 输入形式、长度与真实训练数据</h2><p>文本由系统指令、题目／公开上下文、匿名 <code>Peer 1…Peer P</code> 回答块和输出要求组成。所有回答保留原文；历史证据单独作为张量传输。超出总输入预算时明确报错，不截断单个 peer、不选择“更可靠”的 peer，也不转成 solo 样本。</p><p>使用本地 Qwen3-4B tokenizer 与当前 chat template，保持原有 <code>enable_thinking=False</code> 渲染设置，对实际训练集完整扫描。此次只读检查没有生成答案、写矩阵、过滤数据或启动训练。</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "训练集分组",
+      "题目数",
+      "输入中位数（token）",
+      "P95",
+      "最大值",
+      "超过 8192"
+    ],
+    "rows": [
+      [
+        "全部",
+        "17,709",
+        "455",
+        "1404.2",
+        "3963",
+        "0"
+      ],
+      [
+        "数学",
+        "7,473",
+        "628",
+        "889",
+        "1694",
+        "0"
+      ],
+      [
+        "RAG",
+        "8,500",
+        "313",
+        "471",
+        "906",
+        "0"
+      ],
+      [
+        "代码（stdin/stdout）",
+        "1,736",
+        "1409",
+        "2355.75",
+        "3963",
+        "0"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>当前数据全为 3 个同僚；最终参考答案／测试用例的结构检查没有发现缺项。这只是数据可用性检查，不是验证器正确性评估。</p><p>5／10 个同僚的文本保留、张量行对齐和 mask 已有合成测试，但尚无对应真实数据运行。增加同僚时还需匹配原矩阵配置、peer 身份和冻结特征缓存，不能只追加文本后复用不兼容的旧状态。</p><p>审计证据：<a href=\"../outputs/rl/protocol_checks/train_input_audit_20260905_01.json\">输入长度审计 JSON</a>。源数据 SHA-256：<code>770f9596ed8807cf16b53566b3961e0227799223a97e797af07fb517e978ec8a</code>。当前结果不能代替 held-out 数据或未来更长同僚回答的长度检查。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"implementation\">8. 代码状态与变更边界</h2><p>本轮变更单独记录在 shadow-diff，基线 <code>aea55b9</code>。对照基线，原 memory / addresses / steerer、旧 trainer / main_grpo、旧训练配置及 vendored verl 均无修改。</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "文件／模块",
+      "已经实现",
+      "仍缺什么"
+    ],
+    "rows": [
+      [
+        "training/sigma_rl/outcome_protocol.py",
+        "公开输入构造；8192 完整预算检查；原张量快照；答后才取同僚标签；原矩阵 write 与失败回滚",
+        "接到真正生成 worker 和训练生命周期"
+      ],
+      [
+        "training/sigma_rl/outcome_reward.py",
+        "中心最终结果唯一奖励；参考数据校验；复用现有任务验证器；兼容并行 RL reward contract",
+        "真实分布式代码评估任务和完整训练集运行"
+      ],
+      [
+        "training/sigma_rl/outcome_batch.py",
+        "DataProto 输入白名单；逐 peer 张量与 mask；禁止换上下文、换历史和调度补齐污染；复用仓库 GRPO advantage",
+        "采样／log-prob／loss 全链路消费这些张量的 worker"
+      ],
+      [
+        "training/sigma_rl/audit_outcome_data.py",
+        "完整数据集的只读长度和参考结构检查；源文件及模板 hash",
+        "held-out / 未来 5、10 同僚真实数据检查"
+      ],
+      [
+        "tests/unit/test_outcome_*.py",
+        "标签隔离、先答后写、异常、全错保留、分组条件、长输入、CUDA 等测试",
+        "真实 Qwen3-4B、Ray＋FSDP、多步训练、checkpoint 恢复与推理一致性"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>新 transport 会在返回轨迹缺少历史张量时拒绝继续；这是一道检查，不代表旧 worker 已支持新方案。当前不提供可误启动的新训练命令，原入口也不会自动切换成新协议。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"evidence\">9. 已完成的测试及其证明范围</h2>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "检查",
+      "结果",
+      "能证明什么",
+      "不能证明什么"
+    ],
+    "rows": [
+      [
+        "全量 tests/unit（CPU）",
+        "97 passed；3 个 opt-in CUDA 测试 skipped",
+        "新增协议／奖励／数据约束和现有单元测试通过",
+        "真实多 GPU 训练可运行性"
+      ],
+      [
+        "GPU 1：A100-SXM4-80GB，CUDA 组件测试",
+        "3 passed",
+        "原矩阵 GPU 闭环；8192 输入原注入接口前向／反向；保留上下文时梯度重计算一致；GPU GRPO 与轨迹检查",
+        "Qwen3-4B 联合生成、Ray/FSDP 参数同步、真实训练速度"
+      ],
+      [
+        "真实训练集输入审计",
+        "17,709 条；0 超长；0 公共字段错误；0 参考结构错误",
+        "本次真实 3-peer 完整文本可放入 8192",
+        "推理成功率、held-out 泛化、所有未来 peer 数的容量"
+      ],
+      [
+        "原文件与 shadow 基线对照",
+        "无原 memory／steerer／旧 trainer／后端配置改动",
+        "本轮未覆盖原实现",
+        "新增模块已经接入旧入口"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>GPU 模型测试使用随机初始化的 2 层、hidden size 64 的微型 Qwen3，batch＝2、输入＝8192。测试目标是张量和梯度正确性；日志中的单次耗时含启动／预热影响，不能外推 4B 吞吐量，也不能据此比较 checkpointing 快慢。</p><p>证据文件：<a href=\"../outputs/rl/protocol_checks/cpu_suite_20260905_04.log\">CPU 日志</a>、<a href=\"../outputs/rl/protocol_checks/cpu_suite_20260905_04.xml\">CPU JUnit</a>、<a href=\"../outputs/rl/protocol_checks/gpu_components_20260905_03.log\">CUDA 日志</a>、<a href=\"../outputs/rl/protocol_checks/gpu_components_20260905_03.xml\">CUDA JUnit</a>。后台测试均已退出，未留有新训练进程。</p><p>环境：PyTorch 2.6.0、Transformers 4.56.2、Ray 2.55.1、vLLM 0.8.5、TensorDict 0.6.2、pytest 9.1.1。日志仍有第三方 protobuf 弃用提示及数学评估相关 fork 提示；当前单元测试通过不代表高并发评估已验证。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"evaluation\">10. 完整实验与能力评估方案</h2><p>主实验必须分开回答两个问题：中心在同僚＋历史矩阵条件下是否更会解题；训练后拿掉同僚和记忆，中心自己的推理能力是否也提升。第二个问题不能从第一个推断。</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "实验／对照",
+      "输入与反馈",
+      "要回答的问题",
+      "状态"
+    ],
+    "rows": [
+      [
+        "主训练：peer＋tensor memory＋outcome RL",
+        "所有同僚可见但无本题标签；原历史张量；中心最终结果奖励",
+        "中心能否学习整合不完美推理信息？",
+        "待联合生成接入"
+      ],
+      [
+        "同架构不训练的基线",
+        "相同题目、同僚、反馈时序与可比历史条件",
+        "收益是否来自参数学习而非仅外部信息？",
+        "后续评估计划"
+      ],
+      [
+        "peer-only 对照",
+        "仍给全部同僚，不给历史张量；只用中心最终反馈",
+        "历史可靠性提供多少额外帮助？",
+        "可选单独对照，不自动运行"
+      ],
+      [
+        "solo RLVR 对照",
+        "只给题目，模型在该条件下自行采样并训练",
+        "收益是否超出一般最终结果 RL？",
+        "可选单独对照；不复用 guided 答案"
+      ],
+      [
+        "训练前后 solo held-out 评估",
+        "无同僚、无历史注入；固定题集与解码设置",
+        "中心独立推理能力是否增加？",
+        "主目标的必需评估"
+      ],
+      [
+        "评估后按同僚全错／部分对分组统计",
+        "标签只用于事后统计，不能用于训练选题或提示",
+        "是否超越“挑一个正确同僚”的上限？",
+        "事后诊断计划"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>held-out 使用独立数据；投影拟合只使用训练侧冻结特征。评估状态与训练状态隔离，cold-start／warm-start、流顺序、重置规则和预算必须在配置中写清楚。不得把评估标签带回训练或跨对照共享已经被评估标签更新的状态。</p><p>汇报总体及各任务准确率、分段／逐题学习曲线、全同僚错误子集准确率、中心采样全等结果的比例、完整答案长度与截断率。多随机种子与置信区间用于正式结论；一次 smoke test 只能证明能运行，不能证明能力提高。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>11. GPU 可运行性与速度应该怎样测</h2><p><strong>完整训练速度：尚未测量。</strong> 接入确认后，使用真实本地 Qwen3-4B 和仓库 Ray＋FSDP 训练。保留输入 8192；现有配置的输出 768、采样数 8、学习率等是待核对的基础配置，不能用微型组件测试替代正式运行。</p><ol><li>先检查空闲 GPU、数据／特征对应关系、模型和内存接口配置；不终止其他用户任务。</li><li>跑真实模型的采样、中心评分、答后矩阵写入、old log-prob 与 actor update 的完整小规模闭环。</li><li>在可用多 GPU 上重复，验证实际分布式同步和参数更新。启动、加载和预热耗时单独统计。</li><li>固定模型、真实样本、输入上限和输出预算，预热后统计多个完整优化批次。</li><li>保存并恢复 checkpoint，核对模型／注入参数、优化器和原矩阵／流位置；重复训练与推理一致性检查。</li></ol>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "速度／资源指标",
+      "定义",
+      "当前结果"
+    ],
+    "rows": [
+      [
+        "完整训练题目／秒",
+        "真实题目数 ÷ 包含生成、评分、矩阵和优化的时间",
+        "未测"
+      ],
+      [
+        "有效生成 token／秒",
+        "attention mask 下实际 response token 数 ÷ 生成时间，不计 padding",
+        "未测"
+      ],
+      [
+        "阶段耗时",
+        "矩阵 read/write、prefill/decode、评分、log-prob、actor update 分开计时",
+        "未测真实模型完整链路"
+      ],
+      [
+        "GPU 显存",
+        "每个 rank 的峰值 allocated/reserved；共享 GPU 的外部占用另记",
+        "未测完整训练峰值"
+      ],
+      [
+        "学习是否实际发生",
+        "中心和可学习注入参数梯度／更新量；混合正确性组与零信号组比例",
+        "尚无真实模型训练证据"
+      ],
+      [
+        "吞吐可比条件",
+        "相同模型、GPU 数、peer 数、真实输入／输出长度、采样数和精度",
+        "待运行时锁定并记录"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>12. 已知风险和必须保留的记录</h2><ul><li>长序列的截断／过滤会改变任务分布；当前选择明确报错，未来改变策略须单独确认并记录。</li><li>GPU 调度补齐、多个 stream、动态 batch、packed tokens 和同僚重排不能破坏题目—历史—同僚的对应关系。</li><li>梯度重计算必须保持同一历史条件直到 backward 完成；提前清除 hook 上下文会破坏这一条件。</li><li>原代码评估器使用资源限制和子进程，但不是安全隔离沙箱。正式执行模型生成代码应在合适隔离环境中进行；本轮没有执行真实训练样本生成的程序。</li><li>真实多 GPU HF rollout、保存／恢复、代码评估和 cache 的一致性尚未验证，不能用现有组件测试作广泛背书。</li><li>精确保存配置、模型路径、输入数据／特征 hash、模板、seed、peer 身份映射、流位置、矩阵初始／恢复状态及日志。</li></ul>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"gates\">13. 什么时候才能说“改完且测试通过”</h2>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "验收条件",
+      "状态"
+    ],
+    "rows": [
+      [
+        "当前标签不进入中心输入，全部同僚保留，无 teacher / vote / SFT 分支",
+        "模块与反事实测试通过；还需验证集成入口"
+      ],
+      [
+        "原矩阵算法、地址与读写接口保留",
+        "本轮原文件未修改；新增外围时序测试通过"
+      ],
+      [
+        "原历史张量真正参与联合生成及梯度更新",
+        "未完成：接入方式待确认"
+      ],
+      [
+        "使用仓库并行 RL 代码完成真实参数更新",
+        "未完成：目前仅复用其 DataProto、奖励接口和 GRPO advantage，并完成组件测试"
+      ],
+      [
+        "8192 输入下真实模型单 GPU 与多 GPU 可运行",
+        "未完成：微型原接口 CUDA 测试不能替代"
+      ],
+      [
+        "给出完整训练速度和显存实测",
+        "未完成"
+      ],
+      [
+        "保存／恢复原矩阵状态及所有训练参数，并验证恢复一致性",
+        "未完成"
+      ],
+      [
+        "最终 HTML 与代码／真实实验配置、日志一致",
+        "本文为进行中的设计和证据记录，完成运行后更新为最终版"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout rec\"><div class=\"callout-h\">下一步</div><p>等待确认“同僚 token 位置对齐”和“新实验 HF rollout”两项接入决定。确认后继续实现 worker / trainer、运行真实 GPU 闭环并补齐速度与恢复测试。在此之前，不能宣布整套新实验已可运行。</p></div>"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

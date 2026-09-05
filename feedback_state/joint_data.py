@@ -26,6 +26,7 @@ def batch_candidate_judge_inputs(
     max_length: int,
     device: torch.device | None = None,
     legacy_prompt_protocol: bool = False,
+    slot_notes=None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Tokenize one Yes/No judge prompt per candidate into a right-padded batch."""
     prompts = [
@@ -37,6 +38,7 @@ def batch_candidate_judge_inputs(
             context=context,
             include_identity=include_identity,
             real=real,
+            slot_notes=slot_notes,
         )
         for slot in range(int(real))
     ]

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Σ-Mem 能力方向更新审查</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {"type":"html","html":"<div class=\"eyebrow\">CODE AUDIT · Σ-MEM</div><h1>Mem 矩阵能否沿能力方向定向更新？</h1><p class=\"lede\">结论：<b>写入创新项可以</b>，而且是严格的 rank-1 轴向写入；但当前 <code>phi</code> 只保证是学习到的任务地址方向，并不保证不同能力彼此正交或语义解耦。因此，结构上具备方向性，经验上是否形成清晰的“能力轴”仍需测量。</p><div class=\"summary-band\"><div><span class=\"k\">结构判断</span><span class=\"badge add\">通过</span> 定向 rank-1 写入</div><div><span class=\"k\">隔离性</span><span class=\"badge warn\">有条件</span> 取决于 phi 夹角</div><div><span class=\"k\">代码改动</span>无，仅审查</div></div>"},
+  {"type":"html","html":"<div class=\"toc\"><a href=\"#mechanism\">更新机制</a><a href=\"#effect\">方向效应</a><a href=\"#phi\">phi 的含义</a><a href=\"#risks\">边界与风险</a><a href=\"#verify\">验证建议</a></div>"},
+  {"type":"html","html":"<div id=\"mechanism\" class=\"card\"><h2>1. 代码确实执行定向写入</h2><p>核心实现在 <code>feedback_state/symmetric_memory.py:148–157</code>：</p><pre><code>w = phi_of(ctx)\nouter = torch.outer(w, w)\nM[peer] = gamma * M[peer] + eta * sign * outer</code></pre><p>即 $M_t = γM_{t-1} + ηs_tφ_tφ_t^T$。因为 <code>phi</code> 在 <code>phi_of()</code> 末尾做 L2 归一化，所以每次创新项的谱范数固定为 $η$；<code>sign=+1</code> 沿该轴增加可靠性，<code>sign=-1</code> 沿同一轴减少可靠性。外积天然对称，因此 <code>M</code> 保持实对称。</p><div class=\"callout olive\"><div class=\"callout-h\">严格结论</div>若只看新写入项 $ηsφφ^T$，它的像空间只有 <code>span(phi)</code>，所以不会向与 <code>phi</code> 正交的方向写入任何新信息。</div></div>"},
+  {"type":"html","html":"<div id=\"effect\" class=\"card\"><h2>2. 对任意查询方向的影响是余弦平方</h2><p>路由读出在 <code>feedback_state/ood_routing.py:264–266</code> 使用 Rayleigh 商 $r_p(u)=u^TM_pu$。一次沿 $φ$ 的写入，对查询方向 $u$ 的分数增量为：</p><p>$$Δr_p(u)=ηs(u^Tφ)^2=ηs cos^2(angle(u,φ))$$</p><div class=\"grid col-3\"><div class=\"card\"><div class=\"eyebrow\">同方向</div><h3>完整更新</h3><p>$u=φ$ 时，增量为 $ηs$。</p></div><div class=\"card\"><div class=\"eyebrow\">正交方向</div><h3>写入为零</h3><p>$u^Tφ=0$ 时，创新项对该方向无影响。</p></div><div class=\"card\"><div class=\"eyebrow\">部分对齐</div><h3>平滑迁移</h3><p>按夹角余弦平方共享可靠性证据。</p></div></div><p>残差 steering 的读出 <code>M @ u</code> 也符合这一点：单次写入造成 $Δ(Mu)=ηsφ(φ^Tu)$，增量本身沿写入方向 <code>phi</code>，大小由查询与写入方向的对齐程度决定。</p></div>"},
+  {"type":"table","head":["数值检查（phi=[0.6,0.8], eta=0.25）","u·phi","分数写入增量","读出写入增量"],"rows":[["同方向 u=phi","1.0","0.25","[0.15, 0.20]"],["正交 u=[-0.8,0.6]","0.0","0.00","[0.00, 0.00]"],["部分对齐 u=[1,0]","0.6","0.09","[0.09, 0.12]"]]},
+  {"type":"html","html":"<div id=\"phi\" class=\"card\"><h2>3. 当前 phi 更准确地说是“任务地址方向”</h2><p><code>feedback_state/symmetric_memory.py:116–132</code> 的生成链路是：冻结中心模型的问题向量 → whitening → 与固定任务 centroid 做 cosine → softmax 地址分布 → 可学习的 <code>proto_proj</code> → L2 归一化。</p><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">问题表示</div><div class=\"tl-body\">中心模型中层 hidden state 的 mean pooling。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">软地址</div><div class=\"tl-body\">对 math / code / rag centroid 的相似度分布；<code>proto_tau=0.1</code>。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">能力空间</div><div class=\"tl-body\"><code>proto_proj</code> 将地址映射到 rank=16，再归一化为 phi。</div></div></div><div class=\"callout rec\"><div class=\"callout-h\">措辞建议</div>论文或代码注释中称它为“task-conditioned competence address / 任务条件能力地址”更严谨。它通过选择损失学习，但没有一个损失项直接要求每个方向对应可解释、互不干扰的能力。</div></div>"},
+  {"type":"html","html":"<div id=\"risks\" class=\"card\"><h2>4. “只沿特定能力方向更新”成立的边界</h2><div class=\"review blocking\"><div class=\"avatar\">1</div><div class=\"bubble\"><div class=\"who\">全局衰减</div>完整更新不只包含定向写入，还包含 <code>gamma * M</code>。因此正交方向虽然没有新信息写入，已有信息仍会一起衰减。严格说是“创新项局部，遗忘项全局”。</div></div><div class=\"review\"><div class=\"avatar\">2</div><div class=\"bubble\"><div class=\"who\">方向串扰</div>两个地址若不正交，写入 A 会按 <code>cos²</code> 影响 B。当前没有正交、去相关或最小夹角约束；这种共享可用于迁移，也可能造成污染。</div></div><div class=\"review\"><div class=\"avatar\">3</div><div class=\"bubble\"><div class=\"who\">有效维度</div>默认只有 3 个 prototype，<code>proto_proj</code> 的输入维度为 3。即使配置 <code>rank=16</code>，所有 phi 仍位于最多 3 维的列空间，16 维不等于 16 个独立能力轴。</div></div><div class=\"review\"><div class=\"avatar\">4</div><div class=\"bubble\"><div class=\"who\">轴而非有向向量</div><code>phi phiᵀ = (-phi)(-phi)ᵀ</code>，写入无法区分 phi 与 -phi；正确/错误的极性由 <code>sign</code> 提供。因此它存的是无向能力轴上的带符号可靠性，而不是 phi 本身的朝向。</div></div><div class=\"review\"><div class=\"avatar\">5</div><div class=\"bubble\"><div class=\"who\">子集训练边界</div><code>set_prototypes()</code> 会在 prototype 数量改变时重建 <code>proto_proj</code>，但训练代码在调用它之前已经创建 optimizer。默认三类任务齐全时不会触发；若训练数据只含任务子集，新投影参数可能不在 optimizer 中。</div></div></div>"},
+  {"type":"html","html":"<div class=\"card\"><h2>5. 在线时序实现是正确的 decide-then-update</h2><p>评估流程先用历史 <code>M</code> 读取并选择，再访问当前正确性并更新：<code>tests/experiments/common/evaluate_sigma.py:371–431</code>。因此当前标签不会泄漏到当前决策。无反馈时调用 <code>decay_without_feedback()</code>，只推进遗忘时钟，不写入伪标签。</p><div class=\"procon\"><div class=\"pros\"><ul><li>评估先决策后更新，无当前标签泄漏</li><li>每个 peer 有独立矩阵，写入互不覆盖</li><li>归一化 phi 让单步更新幅度可控</li></ul></div><div class=\"cons\"><ul><li>训练为让 gamma / eta / phi 得到梯度，会用当前标签构造可微的一步写入；这是训练专用路径</li><li>若事件中 peer 缺席，逐 peer 更新路径不会衰减其矩阵；需确认这是否符合你的“全局事件时钟”定义</li></ul></div></div></div>"},
+  {"type":"html","html":"<div id=\"verify\" class=\"card\"><h2>6. 建议的最小验证</h2><ol><li><b>方向局部性单测：</b>固定单位 phi 和正交 u，断言去掉 decay 后 $u^TΔMu=0$，同方向为 $ηs$。</li><li><b>闭式累计单测：</b>从零开始多次写入，核对 $M_t=ηΣ_kγ^{t-k}s_kφ_kφ_k^T$。</li><li><b>地址可分离性诊断：</b>在真实 checkpoint 上输出各任务/数据集 phi 的 cosine 矩阵、类内方差、类间最大相似度和有效秩。</li><li><b>串扰曲线：</b>写入某一数据集后，测量所有其他数据集的 reliability 变化，核对是否符合 <code>cos²</code> 预测。</li><li><b>optimizer 边界单测：</b>训练数据 prototype 数少于配置任务数时，断言新 <code>proto_proj.weight</code> 存在于 optimizer param groups。</li></ol><div class=\"callout olive\"><div class=\"callout-h\">本次可验证范围</div>仓库中的 NumPy 单测已经覆盖有符号更新公式、Rayleigh 读出和 decide-then-update。当前工作区没有模型 checkpoint、训练 JSONL，也未安装 pytest / numpy / torch，因此本次完成的是代码级与纯数学数值验证，尚不能回答“学出来的 phi 是否真的分离”。</div></div>"},
+  {"type":"table","head":["问题","结论","置信度","代码证据"],"rows":[["Mem 是否沿当前 phi 写入？","是，创新项严格为 rank-1 的 phi phiᵀ","高","symmetric_memory.py:148–157"],["正交能力是否完全不受影响？","新写入不影响；旧记忆仍被 gamma 全局衰减","高","symmetric_memory.py:156–157"],["相近能力是否共享更新？","是，可靠性影响按 cos² 传播","高","ood_routing.py:264–266"],["phi 是否保证是独立能力轴？","否；它是学习到的软 prototype 地址，无显式解耦约束","高","symmetric_memory.py:98–132"],["在线时序是否泄漏当前标签？","评估不泄漏；先读/选，再写","高","evaluate_sigma.py:371–431"],["真实 checkpoint 中方向是否分离？","当前工作区无法实证，需要 cosine / 有效秩诊断","待测","缺少 checkpoint 与运行依赖"]]},
+  {"type":"html","html":"<div class=\"callout rec\"><div class=\"callout-h\">最终判断</div><b>你的 Mem 机制具有真正的方向选择性，但不是“绝对隔离的能力槽”。</b>如果你希望相似任务共享可靠性，现有 <code>cos²</code> 串扰正是设计特性；如果你希望每个能力只更新自己的槽，需要额外约束或显式正交地址，并先用真实 checkpoint 的 phi cosine 矩阵确认问题是否实际存在。</div>"}
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>
