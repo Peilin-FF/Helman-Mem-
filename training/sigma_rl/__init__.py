@@ -8,7 +8,7 @@ Modules
   trainer         SigmaRayPPOTrainer: plain GRPO plus the memory hint pass for zero-reward groups
   main_grpo       hydra entry point (config: training/configs/grpo_sigma.yaml)
 
-Strict outcome layer (contributed separately; guards and a future tensor-memory path, not used by train_grpo.sh):
+Strict outcome layer (contributed separately; guards for a future tensor-memory path, not used by train_grpo.sh):
   outcome_protocol  public prompts (question + all peers, no notes), CausalPeerEpisode (read -> answer -> grade -> write)
   outcome_batch     DataProto guards requiring peer_evidence tensors from the rollout (no backend provides them yet)
   outcome_reward    OutcomeRewardManager: post-answer verification only (reward_model.reward_manager=outcome)

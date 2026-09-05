@@ -58,15 +58,15 @@ is visited in order (`data.shuffle: False`), so the memory of event t never know
 
 ## Strict outcome layer (review of the separately contributed modules, 2026-09-05)
 
-`outcome_protocol.py`, `outcome_batch.py`, `outcome_reward.py`, `audit_outcome_data.py` and
-`tests/unit/test_outcome_*.py` were added on the server by another model.  They are kept, with
+`outcome_protocol.py`, `outcome_batch.py`, `outcome_reward.py` and `audit_outcome_data.py` were added
+on the server by another model (their unit tests were removed as redundant).  They are kept, with
 these findings:
 
 - **What they are.** A label-private formulation of the same protocol: `public_messages` (question +
   all peer responses, no reliability notes, no clipping), `CausalPeerEpisode` (a live wrapper around
   `MemoryRuntime` enforcing read -> answer -> grade -> write, with rollback), `OutcomeRewardManager`
   (post-answer verification only; refuses pseudo-rewards and untagged rows), DataProto guards, and a
-  token-budget audit.  All their unit tests pass (`pytest tests/unit`).
+  token-budget audit.
 - **Not runnable as a trainer.** `outcome_batch.checked_generation` requires the rollout to return
   `peer_evidence`/`peer_mask` tensors (the memory injected as a tensor, ActivationSteerer-style).  No
   rollout backend does that (vLLM cannot), and the modules are not wired into `main_grpo.py`.  They
@@ -149,6 +149,7 @@ own Ray workers (`trap` in `train_grpo.sh`).
 | smoke2_memory (ours) | 2 (shared) | Qwen3-0.6B | 13-48 s | every event gets its guided answer (8/8, 7/8, 7/8), both views added, no label filtering; stream accuracy of the guided answer 0.38 -> 0.57 -> 0.86 over 3 steps (tiny sample) |
 | smoke2_label (classical baseline) | 1 | Qwen3-0.6B | 10-16 s | `--guided hint_label` + `guided_filter=verified`: only verified guided answers enter (5/5, 3/8, 5/7) |
 | smoke_q3_4b | 2 (shared), param + optimizer offload | Qwen3-4B | 48 s (gen 14 s, guided 12 s, update 18 s) | peak torch memory 59 GB allocated / 68 GB reserved; sharded checkpoint 123 s |
+| smoke8_q3_4b | 8 (all idle), no offload, default config (8192-token prompts) | Qwen3-4B | 40-58 s for 32 prompts x 4 samples + 32 guided answers (gen 18 s, guided 12-18 s, update 4-6 s) | peak 52.6 GB allocated / 61 GB reserved per GPU; validation before and after; all GPUs released at exit |
 
 Fixed costs dominate at this size; at the default 64 x 8 batch on 4 GPUs expect roughly 3-5 min
 per step, i.e. one epoch of the training stream (~230 steps) in about half a day.  A sharded

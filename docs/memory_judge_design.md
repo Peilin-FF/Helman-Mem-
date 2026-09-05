@@ -669,8 +669,7 @@ the many-threaded trainer actor it can hang before exec). Qwen3.5-4B cannot use 
 supports it (torch 2.8+) is installed in a separate env.
 
 **Addendum (review of the contributed strict layer).** A second implementation of the protocol was added to
-`training/sigma_rl/` (`outcome_protocol`, `outcome_batch`, `outcome_reward`, `audit_outcome_data`, with unit tests
-that pass). It is label-private by construction — public prompts without reliability notes, a live episode wrapper
+`training/sigma_rl/` (`outcome_protocol`, `outcome_batch`, `outcome_reward`, `audit_outcome_data`). It is label-private by construction — public prompts without reliability notes, a live episode wrapper
 around `MemoryRuntime` that grades before it writes, a reward manager that refuses pseudo-rewards — but its
 trajectory guards require the rollout to return the memory as a tensor (`peer_evidence`), which no backend does, so
 it is a contract for a future tensor-memory path rather than a trainer. Its prohibitions of memory notes as text,
