@@ -690,8 +690,13 @@ Final checkpoint, question only, on the **whole** test streams:
 
 | stream | frozen Qwen3-4B | memory-trained (step 276) |
 |---|---|---|
-| in-distribution (4,319) | 60.06 (math 89.5, reading 59.6, code 22.3) | **67.42** (math 90.8, reading 75.4, code 20.6) |
-| OOD (17,403) | 67.57 (boolqa 83.5, mcqa 82.1, shortqa 42.0) | **68.48** (boolqa 77.0, mcqa 81.3, shortqa 50.8) |
+| in-distribution (4,319) | 59.92 (math 89.2, reading 59.1, code 23.0) | **67.05** (math 89.9, reading 75.4, code 20.2) |
+| OOD (17,403) | 67.61 (boolqa 83.5, mcqa 82.3, shortqa 41.9) | **68.61** (boolqa 77.0, mcqa 81.2, shortqa 51.2) |
+
+(All evaluation numbers from here on are decoded with vLLM, `evaluate_memory_generator --engine vllm`; the transformers-generate
+numbers quoted earlier agree within half a point and were deleted.) The no-memory control (`q3_4b_grpo_peers`, same protocol without
+the notes): **67.79** in-distribution (math 90.2, reading 78.6, code 16.6) and **69.55** OOD (boolqa 82.6, mcqa 81.7, shortqa 48.5) —
+level with or above the memory run on both streams; its step-70 checkpoint reaches 69.85 in-distribution, above its own final.
 
 The trained model beats the frozen one on both streams with math preserved; the in-distribution gain is reading comprehension
 (the task where the peers are stronger than the model), the OOD gain is BIG-Bench Hard (+8.8) against a loss on the yes/no task

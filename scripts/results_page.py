@@ -28,11 +28,14 @@ TASKS_OOD = ["boolqa", "mcqa", "shortqa"]
 
 
 def load_eval(path: Path):
-    if not path.exists():
-        return None
-    m = json.loads(path.read_text())
-    return {"acc": 100 * m["accuracy"], "by": {k: 100 * v for k, v in m["by_task"].items()}, "n": m["num_samples"],
-            "halves": (100 * m["generated"]["first_half"], 100 * m["generated"]["second_half"]), "windows": [100 * w for w in m["generated"]["windows"]]}
+    """vLLM-decoded evaluations only (<dir>_vllm); the HF-generate results were removed."""
+    cands = [path.with_name(path.parent.name + "_vllm") / path.name]
+    for f in cands:
+        if f.exists():
+            m = json.loads(f.read_text())
+            return {"acc": 100 * m["accuracy"], "by": {k: 100 * v for k, v in m["by_task"].items()}, "n": m["num_samples"], "engine": m.get("engine", "hf"),
+                    "halves": (100 * m["generated"]["first_half"], 100 * m["generated"]["second_half"]), "windows": [100 * w for w in m["generated"]["windows"]]}
+    return None
 
 
 def load_metrics(d: Path):
@@ -52,6 +55,10 @@ def load_metrics(d: Path):
 
 def fmt(x, d=1):
     return "—" if x is None else f"{x:.{d}f}"
+
+
+def acc_cell(ev, d=2):
+    return "—" if ev is None else f"<b>{ev['acc']:.{d}f}</b>" + ("" if ev.get("engine") == "vllm" else " <span class='sub'>hf</span>")
 
 
 def by_line(ev, tasks):
@@ -108,12 +115,11 @@ def main() -> None:
         tag = "th" if head else "td"
         return "<tr>" + "".join(f"<{tag}>{c}</{tag}>" for c in cells) + "</tr>"
     main_rows = [row(["model", "labels before the answer", "memory", "in-distribution (4,319)", "math / reading / code", "OOD (17,403)", "boolqa / mcqa / shortqa"], True)]
-    main_rows.append(row(["frozen Qwen3-4B, alone", "—", "—", f"<b>{fmt(frozen_in['acc'], 2) if frozen_in else '—'}</b>", by_line(frozen_in, TASKS_IN),
-                          f"<b>{fmt(frozen_ood['acc'], 2) if frozen_ood else '—'}</b>", by_line(frozen_ood, TASKS_OOD)]))
+    main_rows.append(row(["frozen Qwen3-4B, alone", "—", "—", acc_cell(frozen_in), by_line(frozen_in, TASKS_IN), acc_cell(frozen_ood), by_line(frozen_ood, TASKS_OOD)]))
     for r in runs:
         ein, eood = r["ev_in"], r["ev_ood"]
-        cin = f"<b>{fmt(ein['acc'], 2)}</b>" if ein else f"<span class='pend'>{'pending' if r['status'] == 'trained' else r['status']}</span>"
-        cood = f"<b>{fmt(eood['acc'], 2)}</b>" if eood else f"<span class='pend'>{'pending' if r['status'] == 'trained' else r['status']}</span>"
+        cin = acc_cell(ein) if ein else f"<span class='pend'>{'pending' if r['status'] == 'trained' else r['status']}</span>"
+        cood = acc_cell(eood) if eood else f"<span class='pend'>{'pending' if r['status'] == 'trained' else r['status']}</span>"
         main_rows.append(row([r["label"], r["before"], r["mem"], cin, by_line(ein, TASKS_IN), cood, by_line(eood, TASKS_OOD)]))
     ref_rows = [row(["frozen Qwen3-4B with the peers in the prompt", "in-distribution", "OOD"], True),
                 row(["with peers + memory notes", fmt(frozen_in_mem["acc"], 2) if frozen_in_mem else "—", (fmt(frozen_ood_mem["acc"], 2) + " (" + by_line(frozen_ood_mem, TASKS_OOD) + ")") if frozen_ood_mem else "—"]),
@@ -246,7 +252,7 @@ ul{{max-width:82ch}} li{{margin:.35rem 0}} code{{font-family:"JetBrains Mono",mo
 <h2>Test streams, final checkpoints</h2>
 <div class="tbl"><table>{''.join(main_rows)}</table></div>
 <div class="tbl"><table>{''.join(ref_rows)}</table></div>
-<p class="sub">In-distribution: SQuAD reading, GSM8K math, APPS code (4,319 events). OOD: SuperGLUE yes/no, PIQA/MMLU/SciQ multiple choice, BIG-Bench Hard short answers (17,403 events). Greedy decoding, task verifiers (math equality, normalized QA match, sandboxed code tests).</p>
+<p class="sub">In-distribution: SQuAD reading, GSM8K math, APPS code (4,319 events). OOD: SuperGLUE yes/no, PIQA/MMLU/SciQ multiple choice, BIG-Bench Hard short answers (17,403 events). Greedy decoding, task verifiers (math equality, normalized QA match, sandboxed code tests). All numbers are decoded with vLLM (greedy, in-process engine); the earlier transformers-generate results agreed within a point (98% identical verdicts on a 300-event check) and were removed.</p>
 </section>
 
 <section>
