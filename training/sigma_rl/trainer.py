@@ -232,10 +232,19 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
         super()._save_checkpoint()
         if not self.config.trainer.get("keep_hf_checkpoints", True):
             return
-        src = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}", "actor", "huggingface")
+        actor_dir = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}", "actor")
+        src = os.path.join(actor_dir, "huggingface")
+        adapter = os.path.join(actor_dir, "lora_adapter")
         dst = os.path.join(self.config.trainer.default_local_dir, "hf", f"global_step_{self.global_steps}")
-        if os.path.isdir(src) and any(f.endswith(".safetensors") for f in os.listdir(src)):
-            hf_copy(src, dst, dtype=str(self.config.trainer.get("hf_checkpoint_dtype", "bfloat16")))
+        dtype = str(self.config.trainer.get("hf_checkpoint_dtype", "bfloat16"))
+        if os.path.isfile(os.path.join(adapter, "adapter_config.json")):
+            # LoRA run: verl saves the adapter only; merge it into the base model so the evaluators can load it
+            from training.sigma_rl.merge_lora import merge_lora_adapter
+
+            merge_lora_adapter(self.config.actor_rollout_ref.model.path, adapter, dst, dtype if dtype not in ("none", "") else "bfloat16")
+            print(f"[sigma] LoRA adapter merged into a full checkpoint at {dst} (adapter kept in {dst}/lora_adapter)")
+        elif os.path.isdir(src) and any(f.endswith(".safetensors") for f in os.listdir(src)):
+            hf_copy(src, dst, dtype=dtype)
             print(f"[sigma] HF checkpoint kept at {dst}")
 
     @staticmethod

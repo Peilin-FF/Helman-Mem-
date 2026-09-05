@@ -161,6 +161,17 @@ above; (2) sandboxed code grading must not fork from the many-threaded trainer a
 not inherit its stdin — it runs in Ray task workers with stdin on /dev/null
 (`training/sigma_rl/reward.py`), otherwise the reward step can hang forever.
 
+## LoRA
+
+The GRPO stack trains the full parameters (`actor_rollout_ref.model.lora_rank: 0`).  verl 0.3.1's LoRA
+path fails on this server inside vLLM's adapter serving (`TypeError: argument of type 'torch.device' is
+not iterable` in `generate_sequences`), and the internalisation objective wants the weights anyway.
+LoRA training is the single-GPU path: `feedback_state/train_memory_judge.py` (rank-16 judge adapters
+plus the memory's steering vector) and `feedback_state/train_memory_generator.py --lora_rank 16
+[--gated on]` (generator adapters, gated ones leave the question-only behaviour identical to the base
+model).  `training/sigma_rl/merge_lora.py` merges a peft adapter into a plain HF directory; it is only
+needed for a LoRA run of the verl SFT trainer (`model.lora_rank`), which has not been exercised.
+
 ## Models
 
 - **Qwen3-4B**: fully supported (vLLM 0.8.5, transformers 4.56 in env `sigma`).
