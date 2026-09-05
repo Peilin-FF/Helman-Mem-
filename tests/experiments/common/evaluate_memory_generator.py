@@ -42,6 +42,9 @@ def parse_args():
     p.add_argument("--max_examples", type=int, default=None)
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--windows", type=int, default=10)
+    p.add_argument("--thinking", choices=["on", "off"], default="off", help="on = Qwen3 thinking mode (raise --max_new_tokens; the answer after </think> is graded)")
+    p.add_argument("--engine", choices=["hf", "vllm"], default="hf", help="vllm = decode with vLLM (greedy, continuous batching; ~30x faster than HF generate); hf = transformers generate")
+    p.add_argument("--gpu_memory_utilization", type=float, default=0.85, help="vLLM engine memory share (lower it when the GPU is shared)")
     return p.parse_args()
 
 
@@ -64,6 +67,19 @@ def main() -> None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"
     hf_dir = args.checkpoint if (args.checkpoint is not None and (args.checkpoint / "config.json").exists()) else None
+    records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(args.records).records}
+    rows = [json.loads(l) for l in args.prompts.open()]
+    if args.max_examples:
+        rows = rows[: args.max_examples]
+    prompts = [render_prompt(tok, r[f"messages_{args.mode}"], thinking=args.thinking == "on") for r in rows]
+    t0 = time.time()
+    if args.engine == "vllm":
+        if args.checkpoint is not None and hf_dir is None:
+            raise SystemExit("--engine vllm needs a plain HF checkpoint directory (or no checkpoint for the frozen model); LoRA payloads need --engine hf")
+        outputs = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args)
+        print(f"[gen-eval] vllm decoded {len(prompts)} prompts ({time.time() - t0:.0f}s)", flush=True)
+        write_results(args, rows, records, outputs, t0)
+        return
     base = load_central_model(str(hf_dir) if hf_dir is not None else args.central_model, dtype=dtype, local_files_only=True).to(device=device, dtype=dtype)
     if hf_dir is not None:
         print(f"[gen-eval] full-parameter checkpoint {hf_dir}", flush=True)
@@ -76,13 +92,7 @@ def main() -> None:
             set_lora_active(base, args.mode != "solo")   # evidence gate: no peers in the prompt -> base model exactly
             print(f"[gen-eval] gated adapters: active={args.mode != 'solo'}", flush=True)
     base.eval()
-    records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(args.records).records}
-    rows = [json.loads(l) for l in args.prompts.open()]
-    if args.max_examples:
-        rows = rows[: args.max_examples]
-    prompts = [render_prompt(tok, r[f"messages_{args.mode}"]) for r in rows]
     outputs: list[str] = [""] * len(rows)
-    t0 = time.time()
     # decode in length-sorted batches (order restored afterwards; the memory state is already in the prompts)
     idx = sorted(range(len(rows)), key=lambda i: len(prompts[i]))
     with torch.no_grad():
@@ -95,6 +105,26 @@ def main() -> None:
                 outputs[i] = t
             if (b // args.batch_size) % 25 == 0:
                 print(f"[gen-eval] {min(b + args.batch_size, len(idx))}/{len(idx)} ({time.time() - t0:.0f}s)", flush=True)
+    write_results(args, rows, records, outputs, t0)
+
+
+def generate_vllm(model_path: str, prompts: list[str], args) -> list[str]:
+    """Greedy decoding of already-rendered prompts with vLLM (same prompts, same stop condition as the HF path)."""
+    import os
+
+    os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")   # in-process engine: the parent already holds a CUDA context
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    from vllm import LLM, SamplingParams
+
+    max_prompt = max(len(p) for p in prompts) // 2 + 64   # rough character->token bound only for max_model_len
+    llm = LLM(model=model_path, tokenizer=args.central_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization,
+              max_model_len=min(32768, max(4096, max_prompt + args.max_new_tokens + 256)), enable_prefix_caching=True, trust_remote_code=False, seed=0)
+    params = SamplingParams(temperature=0.0, max_tokens=args.max_new_tokens)
+    outs = llm.generate(prompts, params, use_tqdm=True)
+    return [o.outputs[0].text for o in outs]
+
+
+def write_results(args, rows, records, outputs, t0) -> None:
     hits, oracle, majority, out_rows = [], [], [], []
     for r, text in zip(rows, outputs):
         rec = records[str(r["id"])]
@@ -106,7 +136,7 @@ def main() -> None:
         out_rows.append({"pos": r["pos"], "id": r["id"], "task_type": r["task_type"], "source": r["source"], "correct": int(ok),
                          "peer_correct": pc, "memory_prob": r.get("memory_prob"), "generation": text})
     h = np.array(hits)
-    metrics = {"accuracy": float(h.mean()), "num_samples": int(len(h)), "mode": args.mode, "checkpoint": str(args.checkpoint) if args.checkpoint else None,
+    metrics = {"accuracy": float(h.mean()), "num_samples": int(len(h)), "mode": args.mode, "thinking": args.thinking == "on", "max_new_tokens": args.max_new_tokens, "engine": args.engine, "checkpoint": str(args.checkpoint) if args.checkpoint else None,
                "central_model": args.central_model, "prompts": str(args.prompts),
                "generated": curve(h, args.windows), "oracle_any_peer": curve(np.array(oracle), args.windows),
                "peer_majority_correct": curve(np.array(majority), args.windows),

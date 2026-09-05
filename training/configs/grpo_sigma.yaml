@@ -9,6 +9,7 @@ data:
   val_files: outputs/rl/data/q3_4b/val_indist.parquet
   prompt_key: prompt            # question-only chat messages
   guided_key: guided_prompt     # question + peers' solutions (annotated by the memory, or not, or one hint); null = none
+  enable_thinking: False        # Qwen3 thinking mode for every prompt (then raise max_response_length to 4096+; the grader scores the answer after </think>)
   reward_fn_key: data_source    # task type -> per-task validation metrics
   max_prompt_length: 8192       # input budget (question + all peer solutions + context); rows whose guided prompt exceeds it lose the guidance (counted at load)
   max_response_length: 768
@@ -275,6 +276,7 @@ trainer:
   max_critic_ckpt_to_keep: null
   keep_hf_checkpoints: True
   hf_checkpoint_dtype: bfloat16         # HF copies are cast to bf16 (8 GB per 4B checkpoint); none = keep verl's fp32 files
+  remove_fp32_hf_copy: True             # delete verl's fp32 weights (16 GB) as soon as the bf16 copy exists
   ray_wait_register_center_timeout: 300
   device: cuda
 

@@ -248,6 +248,11 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
         if os.path.isdir(src) and any(f.endswith(".safetensors") for f in os.listdir(src)):
             hf_copy(src, dst, dtype=str(self.config.trainer.get("hf_checkpoint_dtype", "bfloat16")))
             print(f"[sigma] HF checkpoint kept at {dst}")
+            if self.config.trainer.get("remove_fp32_hf_copy", True):   # the 16 GB fp32 copy is redundant once the bf16 one exists
+                for name in os.listdir(src):
+                    if name.endswith(".safetensors") or name == "model.safetensors.index.json":
+                        os.remove(os.path.join(src, name))
+                print(f"[sigma] fp32 weights removed from {src}")
 
     @staticmethod
     def _shutdown_dataloader(iterator) -> None:

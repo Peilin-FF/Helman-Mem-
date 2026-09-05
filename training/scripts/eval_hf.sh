@@ -9,9 +9,11 @@ GPU="${GPU:-0}"
 TAG="${MODEL_TAG:-q3_4b}"
 MODEL="${MODEL:-/mnt/data/peilin/HF_MODEL/Qwen3-4B}"
 MAXN="${MAX_EXAMPLES:-}"
+THINK="${THINKING:-off}"                       # THINKING=on: Qwen3 thinking mode, 4096 new tokens
+NEWTOK="${MAX_NEW_TOKENS:-$([ "$THINK" = on ] && echo 4096 || echo 384)}"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" FEEDBACK_CODE_EXEC_ALLOW=1 CUDA_VISIBLE_DEVICES="$GPU"
 for split in indist ood; do
   python -m tests.experiments.common.evaluate_memory_generator --central_model "$MODEL" --checkpoint "$CKPT" \
       --prompts "outputs/gen/$TAG/prompts_${split}_shuffled0.jsonl" --records "data/$split/test.jsonl" --mode solo \
-      --output "$CKPT/eval_${split}_solo" --batch_size 16 ${MAXN:+--max_examples $MAXN}
+      --output "$CKPT/eval_${split}_solo$([ "$THINK" = on ] && echo _think)" --batch_size 16 --thinking "$THINK" --max_new_tokens "$NEWTOK" ${MAXN:+--max_examples $MAXN}
 done

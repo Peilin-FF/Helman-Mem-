@@ -21,11 +21,11 @@ GUIDED_TENSOR_KEYS = ("guided_input_ids", "guided_attention_mask", "guided_posit
 GUIDED_NON_TENSOR_KEYS = ("guided_raw_prompt_ids",)
 
 
-def render(tokenizer, messages) -> str:
-    """Chat template with the generation prompt and the thinking block disabled (same as feedback_state.memory_generator.render_prompt)."""
+def render(tokenizer, messages, thinking: bool = False) -> str:
+    """Chat template with the generation prompt; Qwen3's thinking block is disabled unless ``thinking`` (same as feedback_state.memory_generator.render_prompt)."""
     messages = [dict(m) for m in messages]
     try:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=bool(thinking))
     except TypeError:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
@@ -55,6 +55,7 @@ class SigmaRLDataset(RLHFDataset):
 
     def __init__(self, data_files, tokenizer, config, processor=None):
         self.guided_key = config.get("guided_key", "guided_prompt")
+        self.thinking = bool(config.get("enable_thinking", False))   # Qwen3 thinking mode for every prompt of this run
         super().__init__(data_files=data_files, tokenizer=tokenizer, config=config, processor=processor)
 
     def _read_files_and_tokenize(self):
@@ -64,10 +65,10 @@ class SigmaRLDataset(RLHFDataset):
         self.dataframe = datasets.concatenate_datasets(frames)
         print(f"dataset len: {len(self.dataframe)}")
         if self.filter_overlong_prompts:
-            tok, key, limit = self.tokenizer, self.prompt_key, self.max_prompt_length
+            tok, key, limit, think = self.tokenizer, self.prompt_key, self.max_prompt_length, self.thinking
 
             def fits(doc):
-                return len(tok.encode(render(tok, doc[key]), add_special_tokens=False)) <= limit
+                return len(tok.encode(render(tok, doc[key], think), add_special_tokens=False)) <= limit
 
             self.dataframe = self.dataframe.filter(fits, num_proc=self.num_workers, desc=f"Filtering prompts longer than {limit} tokens")
             print(f"filter dataset len: {len(self.dataframe)}")
@@ -83,7 +84,7 @@ class SigmaRLDataset(RLHFDataset):
         longest = 0
         for start in range(0, len(self.dataframe), chunk):
             rows = self.dataframe[start : start + chunk][self.guided_key]
-            texts = [render(tok, g) for g in rows if g is not None and len(g) > 0]
+            texts = [render(tok, g, self.thinking) for g in rows if g is not None and len(g) > 0]
             total += len(rows)
             with_guidance += len(texts)
             if texts:
@@ -115,7 +116,7 @@ class SigmaRLDataset(RLHFDataset):
     def __getitem__(self, item):
         row: dict = dict(self.dataframe[item])
         messages = row.pop(self.prompt_key)
-        raw = render(self.tokenizer, messages)
+        raw = render(self.tokenizer, messages, self.thinking)
         ids, att, pos = self._encode(raw)
         row["input_ids"], row["attention_mask"], row["position_ids"] = ids, att, pos
         row["raw_prompt_ids"] = self._raw_ids(raw)
@@ -123,7 +124,7 @@ class SigmaRLDataset(RLHFDataset):
         has_guided = 0
         guided_raw: list[int] = []
         if guided is not None and len(guided) > 0:
-            graw = render(self.tokenizer, guided)
+            graw = render(self.tokenizer, guided, self.thinking)
             guided_raw = self.tokenizer.encode(graw, add_special_tokens=False)
             if len(guided_raw) <= self.max_prompt_length:   # an over-long guided prompt just means "no guidance" for this row
                 gids, gatt, gpos = self._encode(graw)

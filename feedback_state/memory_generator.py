@@ -90,11 +90,22 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, p
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def render_prompt(tokenizer, messages: list[dict]) -> str:
+def render_prompt(tokenizer, messages: list[dict], *, thinking: bool = False) -> str:
+    """Chat template with the generation prompt; Qwen3's thinking mode is off unless ``thinking`` is set."""
     try:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=bool(thinking))
     except TypeError:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+
+THINK_END = "</think>"
+
+
+def strip_thinking(text: str) -> str:
+    """The answer part of a generation: everything after the last closing think tag (the whole text when there is none)."""
+    if THINK_END in text:
+        return text.rsplit(THINK_END, 1)[1]
+    return text
 
 
 def target_text(record: dict[str, Any], texts: Sequence[str], correct: Sequence[int], *, mode: str = "peer", char_limit: int = 4000) -> str | None:
@@ -120,6 +131,7 @@ def target_text(record: dict[str, Any], texts: Sequence[str], correct: Sequence[
 
 def grade(record: dict[str, Any], text: str, *, code_timeout: float = 10.0) -> bool:
     task = task_type_of(record)
+    text = strip_thinking(text)   # never grade the reasoning trace, only the answer after it
     if task == "code":
         program = code_extract_answer(text)
         if not program.strip():

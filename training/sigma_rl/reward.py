@@ -17,7 +17,7 @@ import torch
 
 from verl import DataProto
 
-from feedback_state.memory_generator import grade
+from feedback_state.memory_generator import grade, strip_thinking
 from feedback_state.memory_rl import memory_pseudo_reward, peer_texts_in_prompt_order
 
 
@@ -79,7 +79,7 @@ def compute_score(data_source: str, solution_str: str, ground_truth, extra_info=
         return {"score": acc, "acc": acc, "verified": 1.0, "pseudo": 0.0}
     try:
         peers = peer_texts_in_prompt_order(rec, [int(p) for p in info["peer_order"]])
-        pr = memory_pseudo_reward(rec, peers, [float(p) for p in info["memory_prob"]], solution_str)
+        pr = memory_pseudo_reward(rec, peers, [float(p) for p in info["memory_prob"]], strip_thinking(solution_str))
     except Exception:
         pr = None
     return {"score": float(pr) if pr is not None else 0.0, "acc": acc, "verified": 0.0, "pseudo": 1.0 if pr is not None else 0.0}
