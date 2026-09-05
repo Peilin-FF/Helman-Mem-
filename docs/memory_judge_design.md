@@ -696,3 +696,7 @@ Final checkpoint, question only, on the **whole** test streams:
 The trained model beats the frozen one on both streams with math preserved; the in-distribution gain is reading comprehension
 (the task where the peers are stronger than the model), the OOD gain is BIG-Bench Hard (+8.8) against a loss on the yes/no task
 (−6.5). Attribution to the memory awaits the no-memory (`peers`), classical (`hint_label`) and plain-RLVR runs, chained next.
+
+Frozen references on the whole OOD stream: alone 67.57; with the peers' solutions and the memory's notes in the prompt 63.26 (boolqa
+83.8, mcqa 83.3, shortqa 29.3) — on BIG-Bench Hard, where every peer is far below the model (28.7 / 10.7 / 12.8 vs 42.0), the
+untrained model follows the peers and loses 13 points; the memory-trained model alone reaches 50.8 there.
