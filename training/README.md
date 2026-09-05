@@ -103,7 +103,7 @@ rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_grpo_label  TRAIN=outputs/rl/data/q3_4b/tra
 rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_grpo_plain  TRAIN=outputs/rl/data/q3_4b/train_none.parquet       VAL=... bash training/scripts/train_grpo.sh memory.guided_rollouts=0'            # plain RLVR
 rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_grpo_v30    TRAIN=outputs/rl/data/q3_4b/train_v30_memory.parquet VAL=... bash training/scripts/train_grpo.sh'                                     # verifier on 30% only
 
-# 3. full evaluation of any HF checkpoint (question-only, indist + OOD)
+# 3. full evaluation of any HF checkpoint (question-only, the whole in-distribution stream and the whole OOD stream)
 rproj submit 'GPU=1 CKPT=outputs/rl/q3_4b_grpo_hint/hf/global_step_40 bash training/scripts/eval_hf.sh'
 
 # 4. optional SFT stage on memory-chosen hinted solutions (multi-GPU replacement of scripts/generate_hinted.py + train_memory_generator.py)

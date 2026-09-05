@@ -655,7 +655,8 @@ memory*: the peers' solutions without notes (`--guided peers`). *No peers*: plai
 **What is measured.** `outputs/rl/<EXP>/metrics.jsonl` per step: `reward/acc_guided` (the stream-time answer, per
 task), `reward/acc_solo` (the question-only samples), `memory/*` counts; `val-core/<task>/acc` on 512
 in-distribution prompts every 20 steps; and the full question-only evaluation of every kept bf16 checkpoint
-(`training/scripts/eval_hf.sh`) on the in-distribution and OOD streams. The claims to test: (1) the stream-time
+(`training/scripts/eval_hf.sh`) on the whole in-distribution stream (4,319 events) and the whole OOD stream (17,403
+events; the earlier OOD figures such as 67.07 were on its first 4,000 events and are being recomputed on the full stream). The claims to test: (1) the stream-time
 accuracy rises along the stream; (2) the question-only accuracy of the checkpoints rises during training and
 beats the frozen model; (3) the labels-after model with memory beats labels-after without memory and reaches
 or beats the labels-before baseline, which sees information ours never sees.
