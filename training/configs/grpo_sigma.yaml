@@ -65,7 +65,7 @@ actor_rollout_ref:
     shuffle: False
     ulysses_sequence_parallel_size: 1
     checkpoint:
-      contents: ['model', 'optimizer', 'extra', 'hf_model']   # hf_model = a loadable HF directory next to the shards
+      contents: ['hf_model']               # only the loadable HF copy (bf16 8 GB under hf/); add 'model','optimizer','extra' for resumable 63 GB shards
     optim:
       lr: 1e-6
       lr_warmup_steps: -1
@@ -271,7 +271,7 @@ trainer:
   default_hdfs_dir: null
   del_local_ckpt_after_load: False
   default_local_dir: outputs/rl/${trainer.experiment_name}
-  max_actor_ckpt_to_keep: 1             # sharded (resumable) checkpoints kept (~70 GB each for a 4B model); HF copies are kept under hf/
+  max_actor_ckpt_to_keep: 1             # actor checkpoint dirs kept (with contents=['hf_model'] each holds only config + a fp32 HF copy); bf16 copies stay under hf/
   max_critic_ckpt_to_keep: null
   keep_hf_checkpoints: True
   hf_checkpoint_dtype: bfloat16         # HF copies are cast to bf16 (8 GB per 4B checkpoint); none = keep verl's fp32 files

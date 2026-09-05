@@ -26,3 +26,5 @@ entropy-based branching knobs (`initial_rollouts`, `beam_size`, `branch_probabil
 Everything else is byte-identical to the fork.
 3. `verl/__init__.py`: `pkg_resources` (absent from the `sigma` env) replaced by
    `importlib.metadata` for the version check.
+4. `verl/utils/checkpoint/fsdp_checkpoint_manager.py`: the fp32 model / optimizer / extra shards are written only
+   when listed in `checkpoint.contents` (63 GB per checkpoint of a 4B model filled the disk); `['hf_model']` keeps the HF copy only.
