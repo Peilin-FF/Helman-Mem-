@@ -27,6 +27,7 @@ RAY_BASE="${RAY_BASE:-/mnt/data/peilin/.ray}"
 export RAY_TMPDIR="$RAY_BASE/$(printf '%s' "$EXP" | md5sum | cut -c1-8)"
 export FEEDBACK_CODE_EXEC_ALLOW=1 PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TOKENIZERS_PARALLELISM=true
 export VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
+export WANDB_DIR="$OUT"                      # wandb run files next to the outputs (login: `wandb login` on the server)
 mkdir -p "$OUT" "$RAY_TMPDIR"
 # a killed job (rproj kill -> SIGHUP) must not leave Ray workers holding the GPUs: kill the whole process tree
 # of this job's driver (Ray's gcs / raylet / workers / vLLM engines are all its descendants), nothing else

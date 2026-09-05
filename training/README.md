@@ -117,6 +117,9 @@ Every hydra key of `configs/grpo_sigma.yaml` can be appended to the launch comma
 
 ## Outputs (`outputs/rl/<EXP>/`)
 
+- wandb: every run logs to the `helman-mem` project (run name = EXP), including the per-task
+  validation accuracy; the server is logged in (`wandb login`), so nothing else is needed.  Append
+  `trainer.logger=[console]` for offline smoke runs.
 - `train.log` — the full log; `metrics.jsonl` — one JSON line per step with
   `reward/acc_guided` (the stream-time answer, and per task), `reward/acc_solo` (and per task),
   `memory/guided_groups`, `memory/guided_success`, `memory/guided_samples_added`,

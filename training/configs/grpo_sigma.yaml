@@ -253,9 +253,9 @@ trainer:
   balance_batch: True
   total_epochs: 1
   total_training_steps: null
-  project_name: sigma-mem-rl
+  project_name: helman-mem                # wandb project (created on first use); runs are named after experiment_name
   experiment_name: q3_4b_grpo_memory
-  logger: [ 'console' ]
+  logger: [ 'console', 'wandb' ]         # wandb needs `wandb login` on the server (done); drop it for offline smoke runs
   metrics_file: metrics.jsonl           # one JSON line per step under default_local_dir
   log_val_generations: 0
   rollout_data_dir: null                # set to dump every rollout (prompt, response, score, kind) as jsonl

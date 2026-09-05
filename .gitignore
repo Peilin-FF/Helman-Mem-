@@ -18,3 +18,4 @@ artifacts/*
 !artifacts/*.html
 .ray/
 *.egg-info/
+wandb/

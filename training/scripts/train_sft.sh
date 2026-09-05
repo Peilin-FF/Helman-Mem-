@@ -15,6 +15,7 @@ export CUDA_VISIBLE_DEVICES="$GPUS"
 NGPU=$(awk -F, '{print NF}' <<<"$GPUS")
 export PYTHONPATH="$ROOT:$ROOT/training/verl${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TOKENIZERS_PARALLELISM=true
+export WANDB_DIR="$OUT"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 mkdir -p "$OUT"
 echo "[train_sft] exp=$EXP gpus=$GPUS model=$MODEL train=$TRAIN out=$OUT extra=$*"

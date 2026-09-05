@@ -50,11 +50,11 @@ trainer:
   default_local_dir: outputs/rl/${trainer.experiment_name}
   default_hdfs_dir: null
   resume_path: null
-  project_name: sigma-mem-sft
+  project_name: helman-mem
   experiment_name: q3_4b_sft_hinted_memory
   total_epochs: 1
   total_training_steps: null
-  logger: [ 'console' ]
+  logger: [ 'console', 'wandb' ]
   seed: 1
   save_freq: -1
   test_freq: -1
