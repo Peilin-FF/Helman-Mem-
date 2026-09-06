@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import html
 import json
+from results_diagrams import build as build_conclusion
 import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RL = ROOT / "outputs/rl"
+PROBE = ROOT / "outputs/gen/q3_4b/probe"
+PROBE_ROWS_D = [("frozen_think_notes", "the frozen model"), ("memthink_notes", "the checkpoint trained with notes")]
 FROZEN = ROOT / "outputs/gen/q3_4b/frozen"
 OUT = ROOT / "artifacts/helman_mem_results.html"
 VAL_N = {"rag": 231, "math": 162, "code": 119}
@@ -129,6 +132,70 @@ def main() -> None:
     ref_rows = [row(["frozen Qwen3-4B with the peers in the prompt", "in-distribution", "OOD"], True),
                 row(["with peers + memory notes", fmt(frozen_in_mem["acc"], 2) if frozen_in_mem else "—", (fmt(frozen_ood_mem["acc"], 2) + " (" + by_line(frozen_ood_mem, TASKS_OOD) + ")") if frozen_ood_mem else "—"]),
                 row(["with peers, no notes", fmt(frozen_in_peers["acc"], 2) if frozen_in_peers else "—", (fmt(frozen_ood_peers["acc"], 2) + " (" + by_line(frozen_ood_peers, TASKS_OOD) + ")") if frozen_ood_peers else "pending"])]
+    # thinking mode (70 steps, 4096-token responses, Qwen3 thinking on in training and evaluation)
+    think = []
+    for d, label in (("q3_4b_grpo_memory_think", "ours + thinking: peers + memory notes"), ("q3_4b_grpo_plain_think", "plain RLVR + thinking: question only")):
+        rd = RL / d
+        tv, tt = load_metrics(rd)
+        think.append(dict(dir=d, label=label, val=tv, train=tt, ev_in=load_eval(rd / "hf/global_step_70/eval_indist_solo_think/eval_metrics.json"),
+                          ev_ood=load_eval(rd / "hf/global_step_70/eval_ood_solo_think/eval_metrics.json"), status=("trained" if len(tt) >= 70 else (f"training, step {len(tt)}" if tt else "queued"))))
+    frozen_in_think = load_eval(FROZEN / "eval_indist_shuffled0_solo_think/eval_metrics.json")
+    frozen_ood_think = load_eval(FROZEN / "eval_ood_shuffled0_solo_think/eval_metrics.json")
+    think_rows = [row(["model (thinking on)", "in-distribution (4,319)", "math / reading / code", "OOD (17,403)", "boolqa / mcqa / shortqa"], True),
+                  row(["frozen Qwen3-4B, alone", acc_cell(frozen_in_think), by_line(frozen_in_think, TASKS_IN), acc_cell(frozen_ood_think), by_line(frozen_ood_think, TASKS_OOD)])]
+    for r in think:
+        pend = f"<span class='pend'>{'pending' if r['status'] == 'trained' else r['status']}</span>"
+        think_rows.append(row([r["label"] + " (step 70)", acc_cell(r["ev_in"]) if r["ev_in"] else pend, by_line(r["ev_in"], TASKS_IN), acc_cell(r["ev_ood"]) if r["ev_ood"] else pend, by_line(r["ev_ood"], TASKS_OOD)]))
+    think_val_rows = []
+    if any(r["val"] for r in think):
+        tsteps = sorted({st for r in think for st, _, _ in r["val"]})
+        think_val_rows.append(row(["step"] + [r["label"] for r in think if r["val"]], True))
+        for st in tsteps:
+            cells = [str(st)]
+            for r in think:
+                if not r["val"]:
+                    continue
+                m = next(((tot, v) for s_, tot, v in r["val"] if s_ == st), None)
+                cells.append(f"{m[0]:.1f} ({m[1].get('rag', 0):.0f} / {m[1].get('math', 0):.0f} / {m[1].get('code', 0):.0f})" if m else "")
+            think_val_rows.append(row(cells))
+    # note-use probe (scripts/memory_use_probe.py): does the answer follow the peer the memory trusts most?
+    def load_probe(name):
+        f = PROBE / name
+        return json.loads(f.read_text()) if f.exists() else {}
+    probe_ood = load_probe("analysis_ood.json") | load_probe("analysis_ood_think.json")
+    probe_in = load_probe("analysis_indist.json") | load_probe("analysis_indist_think.json")
+    PROBE_ROWS = [("frozen_notes", "frozen", "shown"), ("frozen_nonotes", "frozen", "hidden"), ("frozen_swapped", "frozen", "swapped"),
+                  ("trained_notes", "trained with notes, step 276", "shown"), ("trained_nonotes", "trained with notes, step 276", "hidden"), ("trained_swapped", "trained with notes, step 276", "swapped"),
+                  ("frozen_think_notes", "frozen + thinking", "shown"), ("frozen_think_nonotes", "frozen + thinking", "hidden"), ("frozen_think_swapped", "frozen + thinking", "swapped"),
+                  ("memthink_notes", "trained with notes + thinking, step 70", "shown"), ("memthink_nonotes", "trained with notes + thinking, step 70", "hidden"), ("memthink_swapped", "trained with notes + thinking, step 70", "swapped")]
+    def probe_table(pr, n_events):
+        rows_ = [row(["central model", "notes", "accuracy on the slice", "follows the peer shown as most reliable", "follows the peer the memory really trusts most", "follows the shown top peer when it is in the minority", "follows the majority in those cases", "reasoning mentions the reliability"], True)]
+        for key, model, notes in PROBE_ROWS:
+            st = pr.get(key)
+            if not st:
+                continue
+            real_top = st["follow_low_informative"] if notes == "swapped" else st["follow_top_informative"]
+            th = st.get("thinking")
+            rows_.append(row([model, notes, f"{st['accuracy']:.2f}", f"{st['follow_top_informative']:.1f}%", f"{real_top:.1f}%",
+                              f"{st['follow_top_when_minority']:.1f}% (n={st['n_top_minority']})", f"{st['follow_majority_when_minority']:.1f}%",
+                              (f"{th['mentions_notes']:.0f}% of {th['n']} traces" if th else "—")]))
+        return rows_ if len(rows_) > 1 else []
+    probe_rows_ood, probe_rows_in = probe_table(probe_ood, 1500), probe_table(probe_in, 1200)
+    probe_note = ""
+    if probe_rows_ood and "frozen_swapped" in probe_ood:
+        fo, fn, fs = probe_ood["frozen_notes"], probe_ood["frozen_nonotes"], probe_ood["frozen_swapped"]
+        probe_note = (f"<p>On the OOD slice ({fo['n_informative']} events where the peers disagree and the notes are not flat) the frozen model follows the memory's favourite peer in {fo['follow_top_informative']:.1f}% of cases with the note shown and {fn['follow_top_informative']:.1f}% with it hidden. "
+                      f"With the notes swapped, so that the highest reliability is printed on the peer the memory trusts least, it still follows the really trusted peer {fs['follow_low_informative']:.1f}% of the time and the peer now labelled most reliable only {fs['follow_top_informative']:.1f}%: the answer tracks the peers' content, not the number in the header.")
+        if "trained_swapped" in probe_ood:
+            to, tn, ts = probe_ood["trained_notes"], probe_ood["trained_nonotes"], probe_ood["trained_swapped"]
+            probe_note += (f" One epoch of GRPO under the note prompt does not change this: the trained checkpoint follows the favourite peer {to['follow_top_informative']:.1f}% with notes, {tn['follow_top_informative']:.1f}% without, and under swapped notes keeps following the really trusted peer ({ts['follow_low_informative']:.1f}%) rather than the labelled one ({ts['follow_top_informative']:.1f}%). "
+                           f"When the memory contradicts the majority it sides with the memory {to['follow_top_when_minority']:.1f}% of the time with the note and {tn['follow_top_when_minority']:.1f}% without.")
+        th = [k for k in ("frozen_think_notes", "memthink_notes") if k in probe_ood and probe_ood[k].get("thinking")]
+        if th:
+            probe_note += " With thinking on, " + " and ".join(f"{dict(PROBE_ROWS_D)[k]} mentions the reliability estimates in {probe_ood[k]['thinking']['mentions_notes']:.0f}% of its reasoning traces" for k in th) + "."
+        probe_note += "</p>"
+    gs = [r.get("memory/guided_samples_added", 0) / (r.get("memory/guided_samples_added", 0) + 256) for r in (runs[0]["train"] or []) if r.get("memory/guided_samples_added")]
+    conclusion_html = build_conclusion(PROBE, runs=runs, frozen_in=frozen_in, frozen_ood=frozen_ood, frozen_ood_think=frozen_ood_think, think=think, guided_share=(sum(gs) / len(gs)) if gs else None)
     # validation table
     steps = sorted({s for r in runs for s, _, _ in r["val"]})
     val_rows = [row(["step"] + [r["label"] for r in runs if r["val"]], True)]
@@ -239,12 +306,17 @@ def main() -> None:
                "<li>The OOD stream is a different task mix (yes/no, multiple choice, BIG-Bench Hard), not harder questions; the frozen model is already at or above the best peer there.</li>"
                "<li>All runs: Qwen3-4B, full parameters, one epoch of the 17,709-event training stream in order, 64 prompts × 4 question-only samples + 1 guided answer per step, GRPO with clip 0.2, lr 1e-6, no KL, verifier reward after the answer.</li>")
     pending = [f"{r['label']}: {r['status']}" + ("" if r["ev_in"] and r["ev_ood"] else " → full-stream evaluation pending") for r in runs if not (r["ev_in"] and r["ev_ood"])]
+    for r in think:
+        if r["status"] != "trained":
+            pending.append(f"{r['label']}: {r['status']}")
+        elif not (r["ev_in"] and r["ev_ood"]):
+            pending.append(f"{r['label']}: whole-stream evaluation pending")
     page = f'''<title>Helman-Mem Results</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-:root{{--paper:#f6f7f5;--ink:#1b2229;--muted:#5c6670;--rule:#d7dcd8;--code:#eef1ee;--accent:#0d6b6c;--amber:#b26f12;--amber-bg:#fbf3e4;--teal-bg:#e6f2f1}}
-@media (prefers-color-scheme: dark){{:root:not([data-theme="light"]){{--paper:#12171b;--ink:#e4e8e6;--muted:#98a3ab;--rule:#2b333a;--code:#1a2126;--accent:#45b8b2;--amber:#dfa24d;--amber-bg:#2a2216;--teal-bg:#152a2a}}}}
-:root[data-theme="dark"]{{--paper:#12171b;--ink:#e4e8e6;--muted:#98a3ab;--rule:#2b333a;--code:#1a2126;--accent:#45b8b2;--amber:#dfa24d;--amber-bg:#2a2216;--teal-bg:#152a2a}}
+:root{{--paper:#f6f7f5;--ink:#1b2229;--muted:#5c6670;--rule:#d7dcd8;--code:#eef1ee;--accent:#0d6b6c;--amber:#b26f12;--amber-bg:#fbf3e4;--teal-bg:#e6f2f1;--bad:#b3261e}}
+@media (prefers-color-scheme: dark){{:root:not([data-theme="light"]){{--paper:#12171b;--ink:#e4e8e6;--muted:#98a3ab;--rule:#2b333a;--code:#1a2126;--accent:#45b8b2;--amber:#dfa24d;--amber-bg:#2a2216;--teal-bg:#152a2a;--bad:#ef7d74}}}}
+:root[data-theme="dark"]{{--paper:#12171b;--ink:#e4e8e6;--muted:#98a3ab;--rule:#2b333a;--code:#1a2126;--accent:#45b8b2;--amber:#dfa24d;--amber-bg:#2a2216;--teal-bg:#152a2a;--bad:#ef7d74}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--paper);color:var(--ink);font-family:"Source Sans 3","Segoe UI",system-ui,sans-serif;font-size:16.5px;line-height:1.55}}
 h1,h2,h3{{font-family:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;text-wrap:balance;letter-spacing:-0.01em;margin:0}} h1{{font-size:2.4rem;line-height:1.08}} h2{{font-size:1.5rem;margin:0 0 .5rem}} h3{{font-size:1.1rem;margin:1rem 0 .3rem}}
 .page{{max-width:1120px;margin:0 auto;padding:2.2rem 1.4rem 4rem}} header{{border-bottom:1px solid var(--rule);padding-bottom:1.4rem;margin-bottom:1.4rem}}
@@ -256,6 +328,7 @@ table{{border-collapse:collapse;width:100%;margin:.6rem 0 1rem;font-size:.93rem;
 .callout{{border-left:4px solid var(--accent);background:var(--teal-bg);padding:.7rem .95rem;border-radius:0 8px 8px 0;margin:.9rem 0;max-width:80ch}} .callout.warn{{border-left-color:var(--amber);background:var(--amber-bg)}}
 ul{{max-width:82ch}} li{{margin:.35rem 0}} code{{font-family:"JetBrains Mono",monospace;font-size:.86em;background:var(--code);padding:.05em .3em;border-radius:4px}}
 .charts{{display:grid;grid-template-columns:1fr;gap:.9rem}} figure.chart{{margin:0;background:var(--code);border:1px solid var(--rule);border-radius:10px;padding:.5rem .6rem .4rem}} .legend-row{{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;padding:.4rem .2rem 0;font-family:"JetBrains Mono",monospace;font-size:.8rem;color:var(--ink)}} .legend-row .lg{{display:inline-flex;align-items:center;gap:.45rem;white-space:nowrap}} .legend-row .lg svg{{flex:none}} @media(min-width:900px){{.charts.three{{grid-template-columns:1fr 1fr 1fr}}}}
+.dbox{{fill:var(--code);stroke:var(--rule);stroke-width:1.2}} .dbox.dashed{{stroke-dasharray:4 3}} .dtitle{{fill:var(--ink);font-family:"Bricolage Grotesque",sans-serif;font-size:13px;font-weight:600}} .dsub{{fill:var(--muted);font-family:"JetBrains Mono",monospace;font-size:11px}} .dcol{{fill:var(--muted);font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}} .dmark{{fill:var(--bad)}} .dmarkt{{fill:#fff;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700}} .dmarkt2{{fill:var(--bad);font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700}} .darrow{{stroke:var(--muted);stroke-width:1.6;fill:none}} .darrow.bad{{stroke:var(--bad);stroke-width:2.2}} .darrow.thin{{stroke-width:1;opacity:.55}} .dhead{{fill:var(--muted)}} .dbar{{fill:#fff;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600}} .dbar.ink{{fill:var(--ink)}} .dfo{{font-family:system-ui,sans-serif;font-size:12px;line-height:1.4;color:var(--ink)}} .diagram{{background:var(--code);border:1px solid var(--rule);border-radius:10px;padding:.6rem;margin:.5rem 0 .9rem}} .conclusion h3{{margin:1.4rem 0 .4rem;font-size:1.05rem}} .conclusion .lead{{max-width:100ch;font-size:1rem}} ol.breaks{{max-width:100ch;padding-left:1.4rem}} ol.breaks li{{margin:.3rem 0}} ol.problems{{max-width:105ch;padding-left:1.4rem}} ol.problems>li{{margin:.9rem 0}} .pf{{margin:.3rem 0 .3rem .1rem;color:var(--ink)}} .tag{{display:inline-block;font-family:"JetBrains Mono",monospace;font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:0 .35em;margin-right:.45em;vertical-align:middle}} .tag.fix{{color:var(--amber);border-color:var(--amber)}} @media(min-width:900px){{.charts.grid3{{grid-template-columns:1fr 1fr 1fr}}}} figure.chart.small{{padding:.4rem .4rem .3rem}}
 </style>
 <div class="page">
 <header>
@@ -263,6 +336,8 @@ ul{{max-width:82ch}} li{{margin:.35rem 0}} code{{font-family:"JetBrains Mono",mo
 <h1>Helman-Mem Results</h1>
 <p class="thesis">Qwen3-4B trained on a stream of peer solutions whose correctness is revealed only after the model has answered, with or without the Kalman reliability memory, against the classical labels-before baselines and plain RLVR. Every number below is the central model answering the question alone, graded on the complete test streams.</p>
 </header>
+
+{conclusion_html}
 
 <section>
 <h2>Test streams, final checkpoints</h2>
@@ -272,9 +347,26 @@ ul{{max-width:82ch}} li{{margin:.35rem 0}} code{{font-family:"JetBrains Mono",mo
 </section>
 
 <section>
-<h2>Findings</h2>
+<h2>Detailed findings</h2>
 <ul>{''.join(findings)}</ul>
 <div class="callout warn"><b>Caveats.</b><ul>{caveats}</ul></div>
+</section>
+
+<section>
+<h2>Does the central model read the notes?</h2>
+<p>Probe on note-informative slices of the streams (OOD positions 4,000–5,499; in-distribution positions 1,500–2,699, code excluded), with the peers in the prompt. For every event where the peers disagree and the memory's estimates differ by more than 0.1, the model's final answer is matched against each peer's answer. Three prompts per model: the notes as the memory wrote them, the same peers with no notes, and the notes swapped by rank (the highest estimate printed on the least trusted peer). A model that reads the notes follows the labelled peer; a model that reads the content follows the same peer whatever the label says.</p>
+{probe_note}
+<div class="tbl"><table>{''.join(probe_rows_ood) or '<tr><td class="pend">OOD probe pending</td></tr>'}</table></div>
+<p class="sub">OOD slice, 1,500 events.</p>
+<div class="tbl"><table>{''.join(probe_rows_in) or '<tr><td class="pend">in-distribution probe pending</td></tr>'}</table></div>
+<p class="sub">In-distribution slice, 1,200 events (math and reading). "Follows" = the final answer falls in the same answer group as that peer's. Script: <code>scripts/memory_use_probe.py</code>; outputs under <code>outputs/gen/q3_4b/probe/</code>.</p>
+</section>
+
+<section>
+<h2>Thinking mode</h2>
+<div class="tbl"><table>{''.join(think_rows)}</table></div>
+{("<div class='tbl'><table>" + ''.join(think_val_rows) + "</table></div><p class='sub'>Validation during the thinking-mode runs: weighted total (reading / math / code) on the 512 fixed prompts, thinking on.</p>") if think_val_rows else ""}
+<p class="sub">Same protocol with Qwen3's thinking switched on in training and evaluation (responses up to 4,096 tokens, the text after the think block is graded), 70 steps on 4 GPUs each. Frozen row: the frozen model with thinking on.</p>
 </section>
 
 <section>
