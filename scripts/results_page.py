@@ -88,7 +88,7 @@ def svg_curves(series: dict[str, list[tuple[int, float]]], ymin: float, ymax: fl
     legend = []
     for i, (label, pts) in enumerate(series.items()):
         c = COLORS[i % len(COLORS)]
-        legend.append(f'<span class="lg"><i style="background:{c}"></i>{html.escape(label)}</span>')
+        legend.append(f'<span class="lg"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><rect x="0" y="3" width="22" height="4" rx="2" fill="{c}"/><circle cx="11" cy="5" r="4" fill="{c}"/></svg><span style="color:{c};font-weight:600">{html.escape(label)}</span></span>')
         if not pts:
             continue
         path = " ".join(f"{'M' if j == 0 else 'L'}{X(s):.1f},{Y(min(max(v, ymin), ymax)):.1f}" for j, (s, v) in enumerate(pts))
@@ -255,7 +255,7 @@ table{{border-collapse:collapse;width:100%;margin:.6rem 0 1rem;font-size:.93rem;
 .grid{{stroke:var(--rule);stroke-width:1}} .tick,.legend,.ctitle{{fill:var(--muted);font-family:"JetBrains Mono",monospace;font-size:11px}} .ctitle{{fill:var(--ink);font-family:"Bricolage Grotesque",sans-serif;font-size:13px;font-weight:700}}
 .callout{{border-left:4px solid var(--accent);background:var(--teal-bg);padding:.7rem .95rem;border-radius:0 8px 8px 0;margin:.9rem 0;max-width:80ch}} .callout.warn{{border-left-color:var(--amber);background:var(--amber-bg)}}
 ul{{max-width:82ch}} li{{margin:.35rem 0}} code{{font-family:"JetBrains Mono",monospace;font-size:.86em;background:var(--code);padding:.05em .3em;border-radius:4px}}
-.charts{{display:grid;grid-template-columns:1fr;gap:.6rem}} @media(min-width:900px){{.charts.three{{grid-template-columns:1fr 1fr 1fr}}}}
+.charts{{display:grid;grid-template-columns:1fr;gap:.9rem}} figure.chart{{margin:0;background:var(--code);border:1px solid var(--rule);border-radius:10px;padding:.5rem .6rem .4rem}} .legend-row{{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;padding:.4rem .2rem 0;font-family:"JetBrains Mono",monospace;font-size:.8rem;color:var(--ink)}} .legend-row .lg{{display:inline-flex;align-items:center;gap:.45rem;white-space:nowrap}} .legend-row .lg svg{{flex:none}} @media(min-width:900px){{.charts.three{{grid-template-columns:1fr 1fr 1fr}}}}
 </style>
 <div class="page">
 <header>
