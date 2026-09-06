@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import math
 import re
 from pathlib import Path
 
@@ -85,7 +86,8 @@ def event_stats(rec: dict, row: dict, gen: dict, min_spread: float) -> dict | No
     think = text.rsplit("</think>", 1)[0] if "</think>" in text else ""
     plurality_correct = int(gen["peer_correct"][peers.index(plurality)]) if plurality is not None else 0
     any_correct = int(max(gen["peer_correct"]))
-    return {"plurality_correct": plurality_correct, "any_peer_correct": any_correct, "plurality_exists": plurality is not None,"task": gen["task_type"], "correct": int(gen["correct"]), "split": len(set(peers)) > 1, "spread": max(probs) - min(probs) > min_spread,
+    return {"plurality_correct": plurality_correct, "any_peer_correct": any_correct, "plurality_exists": plurality is not None,
+            "peer_groups": list(peers), "mine_group": mine, "probs": [float(p) for p in probs], "peer_correct": [int(c) for c in gen["peer_correct"]],"task": gen["task_type"], "correct": int(gen["correct"]), "split": len(set(peers)) > 1, "spread": max(probs) - min(probs) > min_spread,
             "follow_top": mine == peers[top], "follow_low": mine == peers[low], "follow_majority": plurality is not None and mine == plurality,
             "novel": mine not in peers, "top_minority": plurality is not None and peers[top] != plurality, "top_correct": int(gen["peer_correct"][top]),
             "top_prob": probs[top], "slot_follow": [(probs[s], mine == peers[s], int(gen["peer_correct"][s])) for s in range(len(probs))],
@@ -139,6 +141,33 @@ def summarize(events: list[dict]) -> dict:
     out["n_minority_anycorrect"] = len(selm)
     out["minority_anycorrect_favourite_right"] = rate(selm, "top_correct")[0]
     out["minority_anycorrect_model_right"] = rate(selm, "correct")[0]
+    # system-level steering: the model's answer is one voter in a reliability-weighted vote with the peers (Nitzan-Paroush),
+    # applied only where the peers disagree and the record is not flat; w_m = the model's own vote weight (log-odds)
+    def committee_pick(e, wm):
+        if not (e["split"] and e["spread"]):
+            return e["correct"]
+        scores = collections.defaultdict(float)
+        for s_, g in enumerate(e["peer_groups"]):
+            scores[g] += math.log(max(e["probs"][s_], 1e-3) / max(1 - e["probs"][s_], 1e-3))
+        scores[e["mine_group"]] += wm
+        best = max(scores, key=scores.get)
+        if best == e["mine_group"]:
+            return e["correct"]
+        return e["peer_correct"][e["peer_groups"].index(best)]
+    out["committee"] = {}
+    for wm in (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0):
+        picks = [committee_pick(e, wm) for e in events]
+        sel_picks = [committee_pick(e, wm) for e in inf if e["any_peer_correct"]]
+        out["committee"][str(wm)] = {"accuracy": 100 * sum(picks) / max(1, len(picks)), "selection_accuracy": 100 * sum(sel_picks) / max(1, len(sel_picks))}
+    # cost of steering: events where the favourite is wrong (the note points at a wrong answer)
+    bad = [e for e in inf if not e["top_correct"]]
+    out["n_favourite_wrong"] = len(bad)
+    out["accuracy_when_favourite_wrong"] = rate(bad, "correct")[0]
+    out["follow_top_when_favourite_wrong"] = rate(bad, "follow_top")[0]
+    good = [e for e in inf if e["top_correct"]]
+    out["n_favourite_right"] = len(good)
+    out["accuracy_when_favourite_right"] = rate(good, "correct")[0]
+    out["follow_top_when_favourite_right"] = rate(good, "follow_top")[0]
     # a reader that follows the favourite only when its estimate is high, and otherwise keeps the model's own answer
     for thr in (0.65, 0.8, 0.9):
         gated = [e for e in inf if e["top_prob"] >= thr]
@@ -180,6 +209,8 @@ def cmd_analyze(args) -> None:
         print(f"   top peer in minority n={s['n_top_minority']}: follow top {s['follow_top_when_minority']:.1f} (top correct: {s['follow_top_when_minority_top_correct']:.1f}, top wrong: {s['follow_top_when_minority_top_wrong']:.1f}), "
               f"follow majority {s['follow_majority_when_minority']:.1f}, acc {s['accuracy_when_minority']:.2f}")
         print(f"   who is right on informative events: memory's favourite {s['informative_top_correct']:.1f}%, plurality {s['informative_plurality_correct']:.1f}%, any peer {s['informative_any_peer_correct']:.1f}%, model {s['accuracy_informative']:.1f}% | in minority cases: favourite {s['minority_top_correct']:.1f}%, plurality {s['minority_plurality_correct']:.1f}%, model {s['accuracy_when_minority']:.1f}% | unanimous n={s['n_unanimous']}: peers {s['unanimous_peer_correct']:.1f}%, model {s['unanimous_accuracy']:.1f}%; split but flat notes n={s['n_split_flat']}")
+        print("   committee (model's answer as one voter, weight w; only where peers disagree): " + ", ".join(f"w={w}: {v['accuracy']:.2f} (selection {v['selection_accuracy']:.1f})" for w, v in s["committee"].items()))
+        print(f"   favourite right n={s['n_favourite_right']}: model {s['accuracy_when_favourite_right']:.1f}% (follows {s['follow_top_when_favourite_right']:.1f}%) | favourite wrong n={s['n_favourite_wrong']}: model {s['accuracy_when_favourite_wrong']:.1f}% (follows {s['follow_top_when_favourite_wrong']:.1f}%)")
         print(f"   selection problem (peers disagree, some peer right) n={s['n_informative_anycorrect']}: favourite right {s['anycorrect_favourite_right']:.1f}%, plurality {s['anycorrect_plurality_right']:.1f}%, model {s['anycorrect_model_right']:.1f}% (follows favourite {s['anycorrect_model_follows_favourite']:.1f}%) | favourite in minority & some peer right n={s['n_minority_anycorrect']}: favourite {s['minority_anycorrect_favourite_right']:.1f}%, model {s['minority_anycorrect_model_right']:.1f}%")
         print("   gated reader (follow the favourite only when its estimate >= t): " + ", ".join(f"t={t}: n={s[f'gate_{t}']['n']}, favourite {s[f'gate_{t}']['favourite_correct_in_gate']:.1f}% vs model {s[f'gate_{t}']['model_correct_in_gate']:.1f}% there, informative acc {s[f'gate_{t}']['policy_accuracy_informative']:.1f} ({s[f'gate_{t}']['stream_gain_points']:+.2f} pts on the slice)" for t in (0.65, 0.8, 0.9)))
         print("   follow rate by shown probability: " + ", ".join(f"{k}: {v['follow']:.1f}% (n={v['n']}, peer acc {v['peer_correct']:.0f}%)" for k, v in s["follow_by_shown_prob"].items()))
