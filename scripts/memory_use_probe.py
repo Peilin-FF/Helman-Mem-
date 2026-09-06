@@ -70,7 +70,16 @@ def cmd_swap(args) -> None:
     print(f"[probe] wrote {len(rows)} rows (positions {args.start}..{args.start + len(rows) - 1}) to {orig} and {swapped}; notes with spread > {args.min_spread}: {n_inf}")
 
 
-def event_stats(rec: dict, row: dict, gen: dict, min_spread: float) -> dict | None:
+def digamma(x: float) -> float:
+    r = 0.0
+    while x < 6:
+        r -= 1 / x
+        x += 1
+    f = 1 / (x * x)
+    return r + math.log(x) - 0.5 / x - f * (1 / 12 - f * (1 / 120 - f * (1 / 252 - f * (1 / 240 - f / 132))))
+
+
+def event_stats(rec: dict, row: dict, gen: dict, min_spread: float, self_q: float | None = None) -> dict | None:
     if gen["task_type"] == "code":
         return None
     texts = peer_texts_in_prompt_order(rec, row["peer_order"])
@@ -87,7 +96,8 @@ def event_stats(rec: dict, row: dict, gen: dict, min_spread: float) -> dict | No
     plurality_correct = int(gen["peer_correct"][peers.index(plurality)]) if plurality is not None else 0
     any_correct = int(max(gen["peer_correct"]))
     return {"plurality_correct": plurality_correct, "any_peer_correct": any_correct, "plurality_exists": plurality is not None,
-            "peer_groups": list(peers), "mine_group": mine, "probs": [float(p) for p in probs], "peer_correct": [int(c) for c in gen["peer_correct"]],"task": gen["task_type"], "correct": int(gen["correct"]), "split": len(set(peers)) > 1, "spread": max(probs) - min(probs) > min_spread,
+            "peer_groups": list(peers), "mine_group": mine, "probs": [float(p) for p in probs], "peer_correct": [int(c) for c in gen["peer_correct"]],
+            "evid": [float(v) for v in row.get("memory_evidence", [0.0] * len(probs))], "self_q": self_q,"task": gen["task_type"], "correct": int(gen["correct"]), "split": len(set(peers)) > 1, "spread": max(probs) - min(probs) > min_spread,
             "follow_top": mine == peers[top], "follow_low": mine == peers[low], "follow_majority": plurality is not None and mine == plurality,
             "novel": mine not in peers, "top_minority": plurality is not None and peers[top] != plurality, "top_correct": int(gen["peer_correct"][top]),
             "top_prob": probs[top], "slot_follow": [(probs[s], mine == peers[s], int(gen["peer_correct"][s])) for s in range(len(probs))],
@@ -154,6 +164,36 @@ def summarize(events: list[dict]) -> dict:
         if best == e["mine_group"]:
             return e["correct"]
         return e["peer_correct"][e["peer_groups"].index(best)]
+    # information-form fusion variants: score(a) = sum_{voters for a} weight_i (+ log(K-1) under the K-alternatives model),
+    # weight_i = logit(p_i) (Nitzan-Paroush) or E[logit] under the Beta posterior implied by (p_i, n_i) = psi(a) - psi(b);
+    # the model's own vote gets w (constant) or logit of its own running accuracy on the task (self-record, no tuning)
+    def fused_pick(e, wm, k_corr, uncertain, self_w):
+        if not (e["split"] and e["spread"]):
+            return e["correct"]
+        K = len(set(e["peer_groups"]) | {e["mine_group"]})
+        bonus = math.log(K - 1) if (k_corr and K > 1) else 0.0
+        scores = collections.defaultdict(float)
+        for s_, g in enumerate(e["peer_groups"]):
+            p_, n_ = min(max(e["probs"][s_], 1e-3), 1 - 1e-3), max(e["evid"][s_], 0.0)
+            w = (digamma(p_ * n_ + 1.0) - digamma((1 - p_) * n_ + 1.0)) if uncertain else math.log(p_ / (1 - p_))
+            scores[g] += w + bonus
+        if self_w and e.get("self_q") is not None:
+            q = min(max(e["self_q"], 1e-3), 1 - 1e-3)
+            wm = math.log(q / (1 - q))
+        scores[e["mine_group"]] += wm + bonus
+        best = max(scores, key=scores.get)
+        if best == e["mine_group"]:
+            return e["correct"]
+        return e["peer_correct"][e["peer_groups"].index(best)]
+    out["fusion"] = {}
+    for name, k_corr, uncertain in (("logit", False, False), ("logit+K", True, False), ("beta", False, True), ("beta+K", True, True)):
+        entry = {}
+        for wm in (0.0, 0.5, 1.0, 1.5, 2.0, 3.0):
+            picks = [fused_pick(e, wm, k_corr, uncertain, False) for e in events]
+            entry[f"w={wm}"] = 100 * sum(picks) / max(1, len(picks))
+        picks = [fused_pick(e, 0.0, k_corr, uncertain, True) for e in events]
+        entry["w=self"] = 100 * sum(picks) / max(1, len(picks))
+        out["fusion"][name] = entry
     out["committee"] = {}
     for wm in (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0):
         picks = [committee_pick(e, wm) for e in events]
@@ -191,9 +231,13 @@ def cmd_analyze(args) -> None:
         gens = [json.loads(l) for l in (Path(path) / "generations.jsonl").open()]
         if args.max_examples:
             gens = gens[: args.max_examples]
+        tally: dict = collections.defaultdict(lambda: [0, 0]); self_q = {}
+        for g in sorted(gens, key=lambda g: int(g["pos"])):
+            t = g["task_type"]; self_q[str(g["id"])] = (tally[t][1] + 1) / (tally[t][0] + 2)
+            tally[t][0] += 1; tally[t][1] += int(g["correct"])
         if args.pos_start is not None:
             gens = [g for g in gens if args.pos_start <= int(g["pos"]) < args.pos_start + args.pos_count]
-        events = [s for g in gens if (s := event_stats(records[str(g["id"])], rows[str(g["id"])], g, args.min_spread))]
+        events = [s for g in gens if (s := event_stats(records[str(g["id"])], rows[str(g["id"])], g, args.min_spread, self_q.get(str(g["id"]))))]
         result[name] = summarize(events)
         if args.examples and any(e["has_think"] for e in events):
             shown = 0
@@ -209,6 +253,7 @@ def cmd_analyze(args) -> None:
         print(f"   top peer in minority n={s['n_top_minority']}: follow top {s['follow_top_when_minority']:.1f} (top correct: {s['follow_top_when_minority_top_correct']:.1f}, top wrong: {s['follow_top_when_minority_top_wrong']:.1f}), "
               f"follow majority {s['follow_majority_when_minority']:.1f}, acc {s['accuracy_when_minority']:.2f}")
         print(f"   who is right on informative events: memory's favourite {s['informative_top_correct']:.1f}%, plurality {s['informative_plurality_correct']:.1f}%, any peer {s['informative_any_peer_correct']:.1f}%, model {s['accuracy_informative']:.1f}% | in minority cases: favourite {s['minority_top_correct']:.1f}%, plurality {s['minority_plurality_correct']:.1f}%, model {s['accuracy_when_minority']:.1f}% | unanimous n={s['n_unanimous']}: peers {s['unanimous_peer_correct']:.1f}%, model {s['unanimous_accuracy']:.1f}%; split but flat notes n={s['n_split_flat']}")
+        print("   fusion variants (accuracy on the slice): " + " | ".join(f"{k}: " + ", ".join(f"{w} {v:.2f}" for w, v in d.items()) for k, d in s["fusion"].items()))
         print("   committee (model's answer as one voter, weight w; only where peers disagree): " + ", ".join(f"w={w}: {v['accuracy']:.2f} (selection {v['selection_accuracy']:.1f})" for w, v in s["committee"].items()))
         print(f"   favourite right n={s['n_favourite_right']}: model {s['accuracy_when_favourite_right']:.1f}% (follows {s['follow_top_when_favourite_right']:.1f}%) | favourite wrong n={s['n_favourite_wrong']}: model {s['accuracy_when_favourite_wrong']:.1f}% (follows {s['follow_top_when_favourite_wrong']:.1f}%)")
         print(f"   selection problem (peers disagree, some peer right) n={s['n_informative_anycorrect']}: favourite right {s['anycorrect_favourite_right']:.1f}%, plurality {s['anycorrect_plurality_right']:.1f}%, model {s['anycorrect_model_right']:.1f}% (follows favourite {s['anycorrect_model_follows_favourite']:.1f}%) | favourite in minority & some peer right n={s['n_minority_anycorrect']}: favourite {s['minority_anycorrect_favourite_right']:.1f}%, model {s['minority_anycorrect_model_right']:.1f}%")

@@ -38,7 +38,7 @@ from feedback_state.memory_rl import peer_texts_in_prompt_order
 from feedback_state.tasks import _choice_labels, _rag_context_text, boolqa_extract_answer, mcqa_extract_answer, qa_extract_answer, shortqa_extract_answer, task_type_of
 from feedback_state.utils import extract_final_answer
 
-VARIANTS = ("number", "ordinal", "sorted", "favourite", "filtered", "vote", "self_note", "verify", "defer")
+VARIANTS = ("number", "ordinal", "sorted", "favourite", "filtered", "vote", "self_note", "verify", "defer", "posterior")
 CHAR_LIMIT = 3000
 FLAT_SPREAD = 0.1
 
@@ -213,6 +213,37 @@ def build_variant(variant: str, rec: dict, row: dict, probs: list[float], evid: 
         step = (f"Procedure: first check {names[fav]}'s solution against the question step by step ({names[fav]} is the peer with the best record on similar questions). "
                 f"If it holds, adopt its final answer. Only if you find a definite error in it, solve the question yourself. Do not switch to another peer's answer merely because more peers give it.")
         return messages(SYSTEM_STEER, q + [peer_blocks(names, texts), memory_paragraph(names, probs, evid), step, instr]), extra
+    if variant == "posterior":
+        # the sufficient statistic: P(answer | peers' votes, record) under the symmetric-error voter model, plus the model's own reliability
+        if flat or task == "code":
+            return build_variant("ordinal", rec, row, probs, evid, solo_text=solo_text, self_record=self_record)
+        groups = answer_groups(rec, texts)
+        by_group: dict[int, list[int]] = collections.defaultdict(list)
+        for s, g in enumerate(groups):
+            by_group[g].append(s)
+        K = max(2, len(by_group) + 1)
+        def score(slots):
+            return sum(math.log(max(probs[s], 1e-3) / max(1 - probs[s], 1e-3)) + math.log(K - 1) for s in slots)
+        items = [(score(sl), sl) for sl in by_group.values()] + [(0.0, [])]   # [] = an answer none of the peers gave
+        z = max(v for v, _ in items)
+        tot = sum(math.exp(v - z) for v, _ in items)
+        post = sorted(((math.exp(v - z) / tot, sl) for v, sl in items), key=lambda x: -x[0])
+        lines = ["Record's posterior over the answers (from the peers' answers and their verified track records on similar questions):"]
+        for pr, sl in post:
+            if sl:
+                lines.append(f"- {_clip(final_of(task, texts[sl[0]]) or '(unparsable)', 120)}: {pr:.2f} (given by {', '.join(names[s] for s in sl)})")
+            else:
+                lines.append(f"- some other answer: {pr:.2f}")
+        lead_pr, lead_sl = post[0]
+        if self_record and self_record[1] >= 5:
+            qself = (self_record[0] + 1) / (self_record[1] + 2)
+            lines.append(f"Your own reliability on this kind of question, answering alone: {qself:.2f} (from {self_record[1]} earlier cases).")
+            rule = (f"Decision rule: if your own answer differs from the leading answer, keep yours only if you are more certain of it than {lead_pr:.2f}; "
+                    f"your average reliability here is {qself:.2f}, so by default adopt the leading answer unless you can verify it is wrong.")
+        else:
+            rule = f"Decision rule: adopt the leading answer unless you can verify that it is wrong."
+        lines.append(rule)
+        return messages(SYSTEM_STEER, q + [peer_blocks(names, texts), "\n".join(lines), instr]), extra
     if variant == "defer":
         extra["steer_triggered"] = False
         if solo_text is None or flat or probs[fav] < 0.6:

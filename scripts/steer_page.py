@@ -28,9 +28,12 @@ VARIANTS = [
     ("vote", "reliability-weighted vote shown", "prompt structure", "the peers' final answers grouped, each group with its combined reliability weight, the leading answer named"),
     ("filtered", "unreliable peers withheld", "prompt structure", "peers with an estimate below 0.35 are removed from the prompt (their records mentioned); the rest ranked in words"),
     ("favourite", "only the favourite shown", "prompt structure", "only the most reliable peer's solution is shown, with its record; the others withheld"),
+    ("posterior", "the record's posterior over the answers + own reliability", "prompt text (sufficient statistic)", "the peers' answers grouped and scored under the symmetric-error voter model into a posterior over answers, the model's own tracked reliability on the task, and the decision rule that follows from the two"),
     ("defer", "two-pass: alone, then confront", "second pass", "the model answers alone; only when its answer disagrees with the favourite and the favourite's estimate is at least 0.6 is it shown both and asked to re-examine"),
-    ("attn_g1", "credibility-weighted attention", "attention weights", "plain peers prompt with no reliability text; every attention head's scores over peer i's tokens get + log(p_i / max p), CrAM's re-weighting, in all 36 layers"),
+    ("attn_g1", "credibility-weighted attention (γ = 1)", "attention weights", "plain peers prompt with no reliability text; every attention head's scores over peer i's tokens get + log(p_i / max p), CrAM's re-weighting, in all 36 layers"),
+    ("attn_g3", "credibility-weighted attention (γ = 3)", "attention weights", "as above with the bias tripled"),
 ]
+PROBE = ROOT / "outputs/gen/q3_4b/probe"
 REFS = [("solo", "alone (no peers, no notes)"), ("number", "number in the header (current)"), ("peers", "peers, no notes")]
 
 
@@ -45,6 +48,19 @@ def analyses(stream: str) -> dict:
     for k, _ in REFS:
         if k in refs:
             out[k] = refs[k]
+    st = load(d / "analysis_solo_think.json")
+    if st:
+        out["solo_think"] = next(iter(st.values()))
+    fu = load(d / "analysis_fusion.json")
+    if fu:
+        out["fusion_solo"] = fu.get("solo", {}).get("fusion", {})
+        out["fusion_solo_think"] = fu.get("solo_think", {}).get("fusion", {})
+        if "solo_think" not in out and "solo_think" in fu:
+            out["solo_think"] = fu["solo_think"]
+    pt = load(PROBE / f"analysis_{stream}_think.json")
+    for k, name in (("frozen_think_notes", "number_think"), ("frozen_think_nonotes", "peers_think"), ("frozen_think_swapped", "number_swapped_think")):
+        if k in pt:
+            out[name] = pt[k]
     for key, *_ in VARIANTS:
         for sw in ("", "_swapped"):
             a = load(d / f"analysis_{key}{sw}.json")
@@ -151,6 +167,7 @@ code{font-family:"JetBrains Mono",monospace;font-size:.86em;background:var(--cod
 figure.chart{margin:0 0 1rem;background:var(--code);border:1px solid var(--rule);border-radius:10px;padding:.5rem .6rem .4rem}
 ol.findings{max-width:105ch;padding-left:1.3rem} ol.findings li{margin:.55rem 0} ul{max-width:100ch}
 .survey td:first-child{min-width:220px}
+.math{font-family:"JetBrains Mono",monospace;font-size:.95rem;background:var(--code);border-radius:8px;padding:.5rem .8rem;display:inline-block}
 pre.prompt{background:var(--code);border:1px solid var(--rule);border-radius:8px;padding:.6rem .8rem;font-size:.8rem;white-space:pre-wrap;max-width:100ch;overflow-x:auto}
 """
 
@@ -208,15 +225,43 @@ def main() -> None:
                     bars.append((f"alone + weighted vote (w={w})", acc, None))
                     if w == best_w:
                         best_by_stream[s] = (acc, alone, number, com[w]["selection_accuracy"], w)
-        # thinking rows
+        # thinking rows: references (alone, current prompt, peers) then variants, deltas against alone-with-thinking and the current prompt with thinking
+        alone_t = A.get("solo_think", {}).get("accuracy"); number_t = A.get("number_think", {}).get("accuracy")
+        think_rows = []
+        for key, lab, point in (("solo_think", "alone + thinking", "—"), ("number_think", "number in the header + thinking (current)", "prompt text"), ("peers_think", "peers, no notes + thinking", "—")):
+            st = A.get(key)
+            if st:
+                sw = A.get("number_swapped_think") if key == "number_think" else None
+                think_rows.append(row([lab, point, f1(st["accuracy"], 2), delta(st["accuracy"], alone_t), delta(st["accuracy"], number_t), f1(st.get("anycorrect_model_right")), f1(st.get("anycorrect_model_follows_favourite"), 1, "%"), f1(st.get("accuracy_when_favourite_wrong")), f1(sw["accuracy"] if sw else None, 2), (f"{st['accuracy'] - sw['accuracy']:+.1f}" if sw else "—")]))
         for key, lab, point, _ in VARIANTS:
             st = A.get(key + "_think")
             if st:
                 sw = A.get(key + "_swapped_think")
-                rows_html.append(row([lab + " + thinking", point, f1(st["accuracy"], 2), "—", "—", f1(st.get("anycorrect_model_right")), f1(st.get("anycorrect_model_follows_favourite"), 1, "%"), f1(st.get("accuracy_when_favourite_wrong")), f1(sw["accuracy"] if sw else None, 2), (f"{st['accuracy'] - sw['accuracy']:+.1f}" if sw else "—")]))
+                cls = ["", "", "best" if (alone_t is not None and st["accuracy"] >= alone_t + 1.0) else "", "", "", "", "", "", "", ""]
+                think_rows.append(row([lab + " + thinking", point, f1(st["accuracy"], 2), delta(st["accuracy"], alone_t), delta(st["accuracy"], number_t), f1(st.get("anycorrect_model_right")), f1(st.get("anycorrect_model_follows_favourite"), 1, "%"), f1(st.get("accuracy_when_favourite_wrong")), f1(sw["accuracy"] if sw else None, 2), (f"{st['accuracy'] - sw['accuracy']:+.1f}" if sw else "—")], classes=cls))
+        if think_rows:
+            rows_html.append(row(["<i>thinking on (4,096-token budget)</i>", "", "", "vs alone + thinking", "vs current + thinking", "", "", "", "", ""], True))
+            rows_html.extend(think_rows)
         result_sections.append(f"<h3>{label}</h3><p class=\"sub\">{desc}. Frozen Qwen3-4B, greedy, thinking off unless stated. Selection events: the peers' answers differ and one of them is right (n={A.get('solo', {}).get('n_informative_anycorrect', '—')}); the favourite is the peer the memory rates most reliable and is right {f1(A.get('solo', {}).get('anycorrect_favourite_right'))}% of them.</p><div class=\"tbl\"><table>{''.join(rows_html)}</table></div>")
         chart_sections.append(f'<figure class="chart">{svg_bars(bars, alone, f"{label}: accuracy with the true record (solid) and with the record swapped by rank (dashed); amber line = the model alone")}</figure>')
 
+    # ---------------- fusion table (principle section)
+    frows = [row(["system", "OOD slice", "vs alone", "in-distribution slice", "vs alone"], True)]
+    def fu(stream, base, rule, w):
+        return data[stream].get(base, {}).get(rule, {}).get(w)
+    for base, blabel in (("fusion_solo", "alone"), ("fusion_solo_think", "alone + thinking")):
+        ao = data["ood"].get("solo" if base == "fusion_solo" else "solo_think", {}).get("accuracy"); ai = data["indist"].get("solo" if base == "fusion_solo" else "solo_think", {}).get("accuracy")
+        frows.append(row([f"model {blabel}, no aggregation", f1(ao, 2), "—", f1(ai, 2), "—"]))
+        for rule, rlabel in (("logit", "logit weights (Nitzan–Paroush)"), ("logit+K", "logit + K-alternatives term"), ("beta", "Beta-posterior weights ψ(α) − ψ(β)"), ("beta+K", "Beta weights + K term")):
+            for w, wl in (("w=self", "model weight = self-record"), ("w=0.0", "model weight 0 (peers decide)"), ("w=1.0", "model weight 1.0")):
+                vo, vi = fu("ood", base, rule, w), fu("indist", base, rule, w)
+                if vo is None and vi is None:
+                    continue
+                if rule != "logit" and w != "w=self":
+                    continue
+                cls = ["", "best" if (vo is not None and ao is not None and vo >= ao + 1.0) else "", "", "best" if (vi is not None and ai is not None and vi >= ai + 1.0) else "", ""]
+                frows.append(row([f"{blabel} + fusion: {rlabel}, {wl}", f1(vo, 2), delta(vo, ao), f1(vi, 2), delta(vi, ai)], classes=cls))
+    fusion_table = "".join(frows)
     # ---------------- findings
     o, i_ = data["ood"], data["indist"]
     def acc(s, k): return data[s].get(k, {}).get("accuracy")
@@ -225,12 +270,22 @@ def main() -> None:
     findings = []
     findings.append(f"<li><b>Words do not steer; structure does.</b> Describing the record in words (ranked, with the model's own record, with a verification procedure) leaves accuracy where the number left it (OOD {f1(acc('ood', 'number'), 1)} → {f1(acc('ood', 'ordinal'), 1)} / {f1(acc('ood', 'self_note'), 1)} / {f1(acc('ood', 'verify'), 1)}; in-distribution {f1(acc('indist', 'number'), 1)} → {f1(acc('indist', 'ordinal'), 1)} / {f1(acc('indist', 'self_note'), 1)} / {f1(acc('indist', 'verify'), 1)}) and the swapped control barely moves. Removing or re-ordering what the model sees does steer: only-the-favourite {f1(acc('ood', 'favourite'), 1)} / {f1(acc('indist', 'favourite'), 1)}, unreliable peers withheld {f1(acc('ood', 'filtered'), 1)} / {f1(acc('indist', 'filtered'), 1)}, sorted {f1(acc('ood', 'sorted'), 1)} / {f1(acc('indist', 'sorted'), 1)}, and these lose {f1((acc('ood', 'favourite') or 0) - (sw('ood', 'favourite') or 0), 1)} / {f1((acc('indist', 'favourite') or 0) - (sw('indist', 'favourite') or 0), 1)} points when the record is swapped, which is what a steered model must do. This matches the literature: credibility text is ignored by untrained models (CAG), while position and majority size drive conformity (the conformity studies), so changing position and majority is the lever.</li>")
     findings.append(f"<li><b>On OOD every prompt with peers in it is below the model alone</b> ({f1(acc('ood', 'solo'), 1)}): the peers are weaker than the model there, and no arrangement of them recovers the loss (best structural variant {f1(max(v for v in (acc('ood', 'favourite'), acc('ood', 'filtered'), acc('ood', 'sorted')) if v), 1)}). Steering inside the prompt can only redistribute trust among the peers; it cannot give the model back its own answer.</li>")
-    if bo and bi:
-        findings.append(f"<li><b>The best steering keeps the record out of the model entirely.</b> Let the model answer alone, then let the record combine that answer with the peers' answers in a reliability-weighted vote, applied only where the peers disagree and the record is not flat: {bo[0]:.2f} on the OOD slice ({bo[0] - bo[1]:+.1f} over alone, {bo[0] - bo[2]:+.1f} over the current prompt) and {bi[0]:.2f} in-distribution ({bi[0] - bi[1]:+.1f} over alone, {bi[0] - bi[2]:+.1f} over the current prompt); on the selection events {bo[3]:.1f} and {bi[3]:.1f}, close to the favourite's own {f1(o.get('solo', {}).get('anycorrect_favourite_right'))} / {f1(i_.get('solo', {}).get('anycorrect_favourite_right'))}. No training, no prompt change, one weight (the model's own vote) that the same memory could track as a self-record. This is the design the aggregation literature converges on (ReConcile, Roundtable Policy, credibility-scored aggregation): the reliability weights act at the aggregation, where they cannot be ignored.</li>")
+    fs_o, fs_i = data["ood"].get("fusion_solo", {}).get("logit", {}), data["indist"].get("fusion_solo", {}).get("logit", {})
+    ft_o, ft_i = data["ood"].get("fusion_solo_think", {}).get("logit", {}), data["indist"].get("fusion_solo_think", {}).get("logit", {})
+    ao, ai = data["ood"].get("solo", {}).get("accuracy"), data["indist"].get("solo", {}).get("accuracy")
+    ato, ati = data["ood"].get("solo_think", {}).get("accuracy"), data["indist"].get("solo_think", {}).get("accuracy")
+    if fs_o and fs_i:
+        findings.append(f"<li><b>The best steering keeps the record out of the model entirely, and it is the Bayes rule.</b> Let the model answer alone; where the peers disagree and the record is not flat, choose the answer with the largest summed log-odds of its supporters, the model's own answer counting with the log-odds of its own tracked reliability on the task. With that self-record weight and no tuned constant: {f1(fs_o.get('w=self'), 2)} on the OOD slice ({delta(fs_o.get('w=self'), ao)} over alone) and {f1(fs_i.get('w=self'), 2)} in-distribution ({delta(fs_i.get('w=self'), ai)} over alone, {delta(fs_i.get('w=self'), acc('indist', 'number'))} over the current prompt); with thinking on, {f1(ft_o.get('w=self'), 2)} OOD ({delta(ft_o.get('w=self'), ato)}) and {f1(ft_i.get('w=self'), 2)} in-distribution ({delta(ft_i.get('w=self'), ati)} over alone with thinking, {delta(ft_i.get('w=self'), data['indist'].get('number_think', {}).get('accuracy'))} over the current prompt with thinking). The self-record does the work a tuned weight would do: on math the model's vote wins, on reading the peers' votes win. The K-alternatives term and the Beta-posterior weights change the result by less than a point here (evidence counts are large, so ψ(α) − ψ(β) ≈ logit p). OOD with thinking is the one place the fusion cannot add: the thinking model is right {f1(data['ood'].get('solo_think', {}).get('anycorrect_model_right'))}% of the selection events against the favourite's {f1(o.get('solo', {}).get('anycorrect_favourite_right'))}%, so there is nothing left for the record to correct on this stream. This is the design the aggregation literature converges on (ReConcile, Roundtable Policy, credibility-scored aggregation), with the weights supplied by a calibrated filter instead of verbalised confidence.</li>")
+    po_ = data["ood"].get("posterior"); pi_ = data["indist"].get("posterior")
+    if po_ or pi_:
+        findings.append(f"<li><b>Handing the model the same statistic does not make it apply the rule.</b> The posterior prompt prints P(answer | votes, record), the model's own reliability and the decision rule; the model scores {f1(po_['accuracy'] if po_ else None, 2)} OOD and {f1(pi_['accuracy'] if pi_ else None, 2)} in-distribution (swapped {f1(sw('ood', 'posterior'), 2)} / {f1(sw('indist', 'posterior'), 2)}), against {f1(fs_o.get('w=self'), 2)} / {f1(fs_i.get('w=self'), 2)} when the rule is applied for it. The transformed information is legible; the arithmetic still has to be done outside the model.</li>")
     findings.append(f"<li><b>Two-pass deference is safe but empty.</b> Answering alone and confronting the model with the favourite only on confident disagreement gives {f1(acc('ood', 'defer'), 1)} OOD / {f1(acc('indist', 'defer'), 1)} in-distribution, within a point of alone, and the swapped record costs almost nothing ({f1(sw('ood', 'defer'), 1)} / {f1(sw('indist', 'defer'), 1)}): shown a disagreeing peer, the model keeps its own answer whether the peer is reliable or not.</li>")
     pn, pp, ps = poe["ood"].get("poe_number"), poe["ood"].get("poe_peers"), poe["ood"].get("poe_solo")
     if pn and pp:
-        findings.append(f"<li><b>Reranking at the final answer works only behind a disagreement gate, and inherits the prompt it sits on.</b> Re-scoring the candidates (peers' answers and the model's own) with the memory's log-odds at the \"Final answer:\" position gains about {pn['accuracy'] - pn['own']:+.1f} on the current prompt and {pp['accuracy'] - pp['own']:+.1f} on the peers prompt (OOD); without the gate it loses on unanimous-but-wrong peers what it gains on the disagreements." + (f" On the alone reasoning it reaches {ps['accuracy']:.2f}." if ps else "") + "</li>")
+        findings.append(f"<li><b>Reranking at the final answer works only behind a disagreement gate, and inherits the prompt it sits on.</b> Re-scoring the candidates (peers' answers and the model's own) with the memory's log-odds at the \"Final answer:\" position gains about {pn['accuracy'] - pn['own']:+.1f} on the current prompt and {pp['accuracy'] - pp['own']:+.1f} on the peers prompt (OOD); without the gate it loses on unanimous-but-wrong peers what it gains on the disagreements." + (f" On the alone reasoning it reaches {ps['accuracy']:.2f} OOD, below the pure vote: the log-probability term anchors the model to the answer its own reasoning just argued for, so the record only wins at large λ, where the method is the vote again." if ps else "") + "</li>")
+    dt, dts, at_, nt = o.get("defer_think"), o.get("defer_swapped_think"), o.get("solo_think"), o.get("number_think")
+    if dt and at_ and nt:
+        findings.append(f"<li><b>With thinking on, the second pass is worth having.</b> Alone with thinking the model scores {at_['accuracy']:.2f} on the OOD slice; the current prompt with thinking {nt['accuracy']:.2f}; alone-then-confront with thinking {dt['accuracy']:.2f} (swapped {f1(dts['accuracy'] if dts else None, 2)}), and on the selection events {f1(dt.get('anycorrect_model_right'))} against the favourite's {f1(o.get('solo', {}).get('anycorrect_favourite_right'))}: given room to reason, the model resolves the confrontation better than either party alone. Only-the-favourite and filtered with thinking ({f1(o.get('favourite_think', {}).get('accuracy'), 1)} / {f1(o.get('filtered_think', {}).get('accuracy'), 1)}) stay well below alone with thinking, for the same reason as without: any peer in the prompt costs more on OOD than the record can repay.</li>")
     at, ats = o.get("attn_g1"), o.get("attn_g1_swapped")
     if at:
         findings.append(f"<li><b>Attention-level steering (CrAM-style) with no reliability text:</b> {at['accuracy']:.2f} OOD (swapped {f1(ats['accuracy'] if ats else None, 2)}), " + (f"{i_['attn_g1']['accuracy']:.2f} in-distribution (swapped {f1(i_.get('attn_g1_swapped', {}).get('accuracy'), 2)})" if i_.get("attn_g1") else "in-distribution pending") + f"; follows the favourite {f1(at.get('anycorrect_model_follows_favourite'))}% on the selection events against {f1(o.get('peers', {}).get('anycorrect_model_follows_favourite'))}% for the same prompt without the bias. A bias on all heads is a blunt instrument; CrAM selects heads by causal tracing, which is the next refinement if this point is pursued.</li>")
@@ -291,9 +346,19 @@ def main() -> None:
 </section>
 
 <section>
+<h2>Principle: fuse evidence in the information domain</h2>
+<p>The memory is an information-form filter: each verified outcome adds precision and information to a Gaussian state over the peer's reliability at the question's address, and the update is additive, hence reversible. The decision should be additive in the same currency. For voters that err independently with competences p<sub>i</sub>, the Bayes-optimal choice among answers is the one with the largest summed log-odds of its supporters (Nitzan and Paroush, 1982; Shapley and Grofman, 1984):</p>
+<p class="math">score(a) = Σ<sub>i: v<sub>i</sub> = a</sub> [ log p<sub>i</sub> / (1 − p<sub>i</sub>) + log (K − 1) ] ,&nbsp;&nbsp; â = argmax<sub>a</sub> score(a)</p>
+<p>The log (K − 1) term is the symmetric-error model with K alternatives: a wrong voter spreads its vote over K − 1 wrong answers, so a vote for a is likelihood ratio p<sub>i</sub>(K − 1)/(1 − p<sub>i</sub>) for "a is right" against any single rival; with K = 2 it is the plain logit. Three consequences fix the three failures above. (1) The record enters as a weight the decision cannot ignore, because the decision is the sum. (2) The central model is one more voter: its answer a<sub>0</sub> enters with weight logit(q), where q is its own reliability at the address, tracked by the same filter as the peers' (a self-record); when the model is strong on the task (math) its vote wins, when it is weak (reading) the peers' votes win, with no tuned constant. (3) Uncertainty is handled the same way: if the state is uncertain, the expected weight under a Beta(α, β) posterior is ψ(α) − ψ(β), which shrinks toward zero for peers with little evidence. The rule is applied only where the peers disagree and the record is not flat; elsewhere the model's answer stands. Everything below the model is arithmetic on the record, and the whole chain (state update, weight, decision) is additive in log-odds.</p>
+<div class="tbl"><table>{fusion_table}</table></div>
+<p class="sub">Accuracy on the slices of the fused system, the model answering alone (with or without thinking) and the record aggregating. "w" is the model's vote weight in log-odds; "self" is logit of the model's own running accuracy on the task along the stream (read-before-write, no tuning). "+K": the K-alternatives term; "Beta": weights ψ(α) − ψ(β) with α = p·n + 1, β = (1 − p)·n + 1 from the shown estimate and evidence count. Script: <code>scripts/memory_use_probe.py</code> (fusion block), outputs <code>analysis_fusion.json</code>.</p>
+<p>The same statistic can be handed to the model instead of applied for it: the "posterior" variant in the tables prints P(answer | votes, record) and the model's own reliability, with the decision rule spelled out. Whether the model then follows the rule is an empirical question, answered in the results.</p>
+</section>
+
+<section>
 <h2>Findings</h2>
 <ol class="findings">{''.join(findings)}</ol>
-<div class="callout"><b>Recommended design.</b> Keep the memory outside the model. The central model answers alone; the memory aggregates: where the peers disagree and its record is not flat, it scores each distinct answer by the summed log-odds of its supporters, counting the model's own answer as a supporter whose weight is the model's own tracked reliability, and emits the best-scored answer. The prompt does not change, nothing is trained, and the memory's quality converts directly into accuracy. If the model must see the peers (to reason over their solutions), give it only the peers the record admits (the filtered variant), which steers without a directive, and still aggregate afterwards.</div>
+<div class="callout"><b>Recommended design.</b> Keep the memory outside the model and make the whole chain additive in log-odds. The central model answers alone (thinking on); the same Kalman filter that tracks the peers tracks the central model's own reliability at the question's address; where the peers disagree and the record is not flat, the memory scores each distinct answer by the summed log-odds of its supporters, the model's answer included with its self-record weight, and emits the best-scored answer. The prompt does not change, nothing is trained, the memory's quality converts directly into accuracy, and every step (state update, weight, decision) is an addition that can be undone. If the model must see the peers, give it only the peers the record admits (the filtered variant) and still aggregate afterwards.</div>
 <div class="callout warn"><b>Caveats.</b> One frozen model, one seed, greedy decoding, slices of 1,500 and 1,200 events; the committee's model weight was chosen on the same slice (a held-out choice, or the self-record, is the honest version); thinking-mode rows cover the OOD slice only; the attention bias uses all heads and one strength.</div>
 </section>
 </div>
