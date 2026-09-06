@@ -26,7 +26,7 @@ from pathlib import Path
 
 from feedback_state.answer_groups import answer_groups
 from feedback_state.data import JsonlDataset
-from feedback_state.memory_generator import build_messages, strip_thinking
+from feedback_state.memory_generator import build_messages, grade, strip_thinking
 from feedback_state.memory_rl import peer_texts_in_prompt_order
 
 NOTE_WORDS = re.compile(r"reliab|probability correct|estimated probability|past case|track record|trust|more likely to be correct|weight", re.I)
@@ -79,10 +79,12 @@ def digamma(x: float) -> float:
     return r + math.log(x) - 0.5 / x - f * (1 / 12 - f * (1 / 120 - f * (1 / 252 - f * (1 / 240 - f / 132))))
 
 
-def event_stats(rec: dict, row: dict, gen: dict, min_spread: float, self_q: float | None = None) -> dict | None:
+def event_stats(rec: dict, row: dict, gen: dict, min_spread: float, self_q: float | None = None, graded: bool = True) -> dict | None:
     if gen["task_type"] == "code":
         return None
     texts = peer_texts_in_prompt_order(rec, row["peer_order"])
+    if graded:   # the evaluator's rule for the peers too (the stored reading labels are more lenient than the grader)
+        gen = dict(gen); gen["peer_correct"] = [int(grade(rec, t)) for t in texts]
     probs = list(gen.get("memory_prob") or row["memory_prob"])
     text = gen["generation"]
     answer = strip_thinking(text)
@@ -151,19 +153,6 @@ def summarize(events: list[dict]) -> dict:
     out["n_minority_anycorrect"] = len(selm)
     out["minority_anycorrect_favourite_right"] = rate(selm, "top_correct")[0]
     out["minority_anycorrect_model_right"] = rate(selm, "correct")[0]
-    # system-level steering: the model's answer is one voter in a reliability-weighted vote with the peers (Nitzan-Paroush),
-    # applied only where the peers disagree and the record is not flat; w_m = the model's own vote weight (log-odds)
-    def committee_pick(e, wm):
-        if not (e["split"] and e["spread"]):
-            return e["correct"]
-        scores = collections.defaultdict(float)
-        for s_, g in enumerate(e["peer_groups"]):
-            scores[g] += math.log(max(e["probs"][s_], 1e-3) / max(1 - e["probs"][s_], 1e-3))
-        scores[e["mine_group"]] += wm
-        best = max(scores, key=scores.get)
-        if best == e["mine_group"]:
-            return e["correct"]
-        return e["peer_correct"][e["peer_groups"].index(best)]
     # information-form fusion variants: score(a) = sum_{voters for a} weight_i (+ log(K-1) under the K-alternatives model),
     # weight_i = logit(p_i) (Nitzan-Paroush) or E[logit] under the Beta posterior implied by (p_i, n_i) = psi(a) - psi(b);
     # the model's own vote gets w (constant) or logit of its own running accuracy on the task (self-record, no tuning)
@@ -194,11 +183,6 @@ def summarize(events: list[dict]) -> dict:
         picks = [fused_pick(e, 0.0, k_corr, uncertain, True) for e in events]
         entry["w=self"] = 100 * sum(picks) / max(1, len(picks))
         out["fusion"][name] = entry
-    out["committee"] = {}
-    for wm in (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0):
-        picks = [committee_pick(e, wm) for e in events]
-        sel_picks = [committee_pick(e, wm) for e in inf if e["any_peer_correct"]]
-        out["committee"][str(wm)] = {"accuracy": 100 * sum(picks) / max(1, len(picks)), "selection_accuracy": 100 * sum(sel_picks) / max(1, len(sel_picks))}
     # cost of steering: events where the favourite is wrong (the note points at a wrong answer)
     bad = [e for e in inf if not e["top_correct"]]
     out["n_favourite_wrong"] = len(bad)
@@ -237,7 +221,7 @@ def cmd_analyze(args) -> None:
             tally[t][0] += 1; tally[t][1] += int(g["correct"])
         if args.pos_start is not None:
             gens = [g for g in gens if args.pos_start <= int(g["pos"]) < args.pos_start + args.pos_count]
-        events = [s for g in gens if (s := event_stats(records[str(g["id"])], rows[str(g["id"])], g, args.min_spread, self_q.get(str(g["id"]))))]
+        events = [s for g in gens if (s := event_stats(records[str(g["id"])], rows[str(g["id"])], g, args.min_spread, self_q.get(str(g["id"])), graded=not args.stored_labels))]
         result[name] = summarize(events)
         if args.examples and any(e["has_think"] for e in events):
             shown = 0
@@ -254,7 +238,6 @@ def cmd_analyze(args) -> None:
               f"follow majority {s['follow_majority_when_minority']:.1f}, acc {s['accuracy_when_minority']:.2f}")
         print(f"   who is right on informative events: memory's favourite {s['informative_top_correct']:.1f}%, plurality {s['informative_plurality_correct']:.1f}%, any peer {s['informative_any_peer_correct']:.1f}%, model {s['accuracy_informative']:.1f}% | in minority cases: favourite {s['minority_top_correct']:.1f}%, plurality {s['minority_plurality_correct']:.1f}%, model {s['accuracy_when_minority']:.1f}% | unanimous n={s['n_unanimous']}: peers {s['unanimous_peer_correct']:.1f}%, model {s['unanimous_accuracy']:.1f}%; split but flat notes n={s['n_split_flat']}")
         print("   fusion variants (accuracy on the slice): " + " | ".join(f"{k}: " + ", ".join(f"{w} {v:.2f}" for w, v in d.items()) for k, d in s["fusion"].items()))
-        print("   committee (model's answer as one voter, weight w; only where peers disagree): " + ", ".join(f"w={w}: {v['accuracy']:.2f} (selection {v['selection_accuracy']:.1f})" for w, v in s["committee"].items()))
         print(f"   favourite right n={s['n_favourite_right']}: model {s['accuracy_when_favourite_right']:.1f}% (follows {s['follow_top_when_favourite_right']:.1f}%) | favourite wrong n={s['n_favourite_wrong']}: model {s['accuracy_when_favourite_wrong']:.1f}% (follows {s['follow_top_when_favourite_wrong']:.1f}%)")
         print(f"   selection problem (peers disagree, some peer right) n={s['n_informative_anycorrect']}: favourite right {s['anycorrect_favourite_right']:.1f}%, plurality {s['anycorrect_plurality_right']:.1f}%, model {s['anycorrect_model_right']:.1f}% (follows favourite {s['anycorrect_model_follows_favourite']:.1f}%) | favourite in minority & some peer right n={s['n_minority_anycorrect']}: favourite {s['minority_anycorrect_favourite_right']:.1f}%, model {s['minority_anycorrect_model_right']:.1f}%")
         print("   gated reader (follow the favourite only when its estimate >= t): " + ", ".join(f"t={t}: n={s[f'gate_{t}']['n']}, favourite {s[f'gate_{t}']['favourite_correct_in_gate']:.1f}% vs model {s[f'gate_{t}']['model_correct_in_gate']:.1f}% there, informative acc {s[f'gate_{t}']['policy_accuracy_informative']:.1f} ({s[f'gate_{t}']['stream_gain_points']:+.2f} pts on the slice)" for t in (0.65, 0.8, 0.9)))
@@ -279,6 +262,7 @@ def main() -> None:
     a.add_argument("--pos_count", type=int, default=1500)
     a.add_argument("--examples", type=int, default=0, help="print this many thinking excerpts that mention the notes")
     a.add_argument("--out", type=Path, default=None)
+    a.add_argument("--stored_labels", action="store_true", help="use the stored peer labels instead of re-grading the peers' texts with the evaluator's rule")
     s = sub.add_parser("swap")
     s.add_argument("--records", type=Path, required=True); s.add_argument("--prompts", type=Path, required=True)
     s.add_argument("--start", type=int, default=0); s.add_argument("--count", type=int, default=800); s.add_argument("--min_spread", type=float, default=0.1)

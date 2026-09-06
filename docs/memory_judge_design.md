@@ -724,3 +724,22 @@ not separate ours from the no-memory control (67.05 vs 67.79, 68.61 vs 69.55). (
 69.72 with math down to 82.6, was dropped from the comparison at the user's request; its evaluations remain on disk.) One seed each; the no-memory run had a
 length-degeneracy collapse at steps 229–248 (recovered). Thinking-mode runs (memory, plain; 70 steps, 4096-token responses) are in
 progress with thinking-mode frozen references.
+
+## 19. Steering the central model with the record (training-free)
+
+Two methods are retained (2026-09-06); everything else that was tried (record in words, sorted / filtered / favourite-only
+prompts, second pass, final-answer reranking) was removed from the code after the study, with its numbers kept on the
+steering page (`artifacts/helman_mem_steering.html`, generator `scripts/steer_page.py`).
+
+**Method 1, fusion at the decision** (`scripts/fusion_decision.py`). The model answers alone. Where the peers' answers differ
+and the record is not flat, the memory picks the answer with the largest summed log-odds of its supporters,
+`score(a) = Σ_{i: v_i=a} [logit(p_i) + log(K−1)]` (Nitzan–Paroush; K = distinct answers on the table), the model's own answer
+counting as a supporter with weight `logit(q)`, q = its running accuracy on the task (self-record, read-before-write).
+Optional Beta-posterior weights `ψ(α) − ψ(β)`. Probe slices, frozen Qwen3-4B: OOD 71.5 (alone 71.1), in-dist 80.5 (alone 70.8);
+with thinking 81.5 (81.6) and 84.7 (72.7). Control: `--swap_record`.
+
+**Method 2, fusion in the attention** (`scripts/steer_attention.py`). Peers in the prompt, no reliability text; every head's
+attention over peer i's tokens receives `γ · log(p_i / max_j p_j)` (CrAM's Norm(A ⊙ c)). γ = 3: OOD 67.5 (swapped 62.9),
+in-dist 74.8 (swapped 71.7); the strongest in-model steering, still below alone on OOD because the peers are in the prompt.
+
+Analysis of any run: `scripts/memory_use_probe.py analyze` (follow rates, selection events, swapped controls, fusion variants).

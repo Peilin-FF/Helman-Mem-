@@ -1,4 +1,4 @@
-"""Steering below the prompt: credibility-weighted attention over the peers' tokens (CrAM-style), training-free.
+"""Method 2: the record steers the model through its attention (credibility-weighted attention, CrAM-style), training-free.
 
 The prompt carries no reliability text at all (the plain peers prompt).  Instead, in every attention head of the
 chosen layers the scores over the tokens of peer i's block receive an additive bias gamma * log(c_i), where
@@ -8,8 +8,8 @@ get no bias.  Implemented as a forward pre-hook that edits the additive attentio
 with left padding (spans shifted by the pad length).  Output format = the standard evaluator's.
 
   PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 python scripts/steer_attention.py --central_model /mnt/data/peilin/HF_MODEL/Qwen3-4B \
-      --prompts outputs/gen/q3_4b/steer/ood/prompts_number.jsonl --records data/ood/test.jsonl --gamma 1.0 --layers all \
-      --output outputs/gen/q3_4b/steer/ood/attn_g1
+      --prompts outputs/gen/q3_4b/prompts_ood_shuffled0.jsonl --records data/ood/test.jsonl --pos_start 4000 --pos_count 1500 \
+      --gamma 3.0 --layers all --output outputs/gen/q3_4b/steer/ood/attn_g3      (add --swap_record for the control)
 """
 from __future__ import annotations
 
@@ -42,6 +42,9 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=12)
     p.add_argument("--max_new_tokens", type=int, default=384)
     p.add_argument("--max_examples", type=int, default=None)
+    p.add_argument("--pos_start", type=int, default=None, help="slice of the stream by position")
+    p.add_argument("--pos_count", type=int, default=1500)
+    p.add_argument("--swap_record", action="store_true", help="control: permute the record by rank (highest credibility on the least trusted peer)")
     p.add_argument("--windows", type=int, default=10)
     return p.parse_args()
 
@@ -112,9 +115,19 @@ def main() -> None:
         layer.self_attn._steer_idx = idx
         layer.self_attn.register_forward_pre_hook(steer.hook, with_kwargs=True)
     records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(args.records).records}
-    rows = [json.loads(l) for l in args.prompts.open()]
+    rows = sorted((json.loads(l) for l in args.prompts.open()), key=lambda r: int(r["pos"]))
+    if args.pos_start is not None:
+        rows = [r for r in rows if args.pos_start <= int(r["pos"]) < args.pos_start + args.pos_count]
     if args.max_examples:
         rows = rows[: args.max_examples]
+    if args.swap_record:
+        for r in rows:
+            probs, evid = list(r["memory_prob"]), list(r.get("memory_evidence", [0.0] * len(r["memory_prob"])))
+            ranked = sorted(range(len(probs)), key=lambda s_: probs[s_])
+            new_p, new_e = list(probs), list(evid)
+            for i, s_ in enumerate(ranked):
+                new_p[s_], new_e[s_] = probs[ranked[-1 - i]], evid[ranked[-1 - i]]
+            r["memory_prob"], r["memory_evidence"] = new_p, new_e
     prompts = [render_prompt(tok, r["messages_peers"], thinking=False) for r in rows]
     # per-sample bias over prompt characters -> tokens
     tok_bias: list[torch.Tensor] = []
