@@ -262,6 +262,16 @@ def main() -> None:
                 cls = ["", "best" if (vo is not None and ao is not None and vo >= ao + 1.0) else "", "", "best" if (vi is not None and ai is not None and vi >= ai + 1.0) else "", ""]
                 frows.append(row([f"{blabel} + fusion: {rlabel}, {wl}", f1(vo, 2), delta(vo, ao), f1(vi, 2), delta(vi, ai)], classes=cls))
     fusion_table = "".join(frows)
+    # ---------------- does the history accumulate enough? (evidence per slice and fusion gain by position)
+    hrows = [row(["stream, positions", "similar past cases behind a note (mean / median / min)", "events with no evidence", "events with under 10 cases", "flat records", "model alone", "alone + fusion (self-record weight)", "gain"], True)]
+    for s_, label, _ in STREAMS:
+        ev = load(STEER / s_ / "evidence_stats.json")
+        for e in ev:
+            fa = load(STEER / s_ / (f"analysis_fusion_pos{e['start']}.json" if e["start"] not in (4000, 1500) else "analysis_fusion.json"))
+            solo = fa.get("solo", {})
+            alone_ = solo.get("accuracy"); fused = solo.get("fusion", {}).get("logit", {}).get("w=self")
+            hrows.append(row([f"{label.replace(' slice', '')} {e['start']:,}–{e['start'] + e['count'] - 1:,}" + (" (probe slice)" if e["start"] in (4000, 1500) else ""), f"{e['mean_evidence']:.0f} / {e['median_evidence']:.0f} / {e['min_evidence']:.0f}", f"{e['no_evidence']} ({100 * e['no_evidence'] / e['count']:.1f}%)", f"{e['under_10']} ({100 * e['under_10'] / e['count']:.1f}%)", f"{e['flat']} ({100 * e['flat'] / e['count']:.1f}%)", f1(alone_, 2), f1(fused, 2), delta(fused, alone_)]))
+    history_table = "".join(hrows)
     # ---------------- findings
     o, i_ = data["ood"], data["indist"]
     def acc(s, k): return data[s].get(k, {}).get("accuracy")
@@ -353,6 +363,12 @@ def main() -> None:
 <div class="tbl"><table>{fusion_table}</table></div>
 <p class="sub">Accuracy on the slices of the fused system, the model answering alone (with or without thinking) and the record aggregating. "w" is the model's vote weight in log-odds; "self" is logit of the model's own running accuracy on the task along the stream (read-before-write, no tuning). "+K": the K-alternatives term; "Beta": weights ψ(α) − ψ(β) with α = p·n + 1, β = (1 − p)·n + 1 from the shown estimate and evidence count. Script: <code>scripts/memory_use_probe.py</code> (fusion block), outputs <code>analysis_fusion.json</code>.</p>
 <p>The same statistic can be handed to the model instead of applied for it: the "posterior" variant in the tables prints P(answer | votes, record) and the model's own reliability, with the decision rule spelled out. Whether the model then follows the rule is an empirical question, answered in the results.</p>
+</section>
+
+<section>
+<h2>Does the history accumulate enough?</h2>
+<p>The probe slices sit late in the streams on purpose: by OOD position 4,000 the record has absorbed 12,000 verified outcomes, and by in-distribution position 1,500, 4,500. The table gives the evidence behind the notes in the first, the probe and the last slice of each stream, and the gain of the fused system on each, using the model's alone answers on the whole streams. The gain does not depend on position: the record is informative from the first slice (where a quarter of the in-distribution events still rest on fewer than 10 similar cases) and the "flat" share on OOD does not shrink with more history, because it comes from peers that are equally good at yes/no and multiple choice, not from missing evidence.</p>
+<div class="tbl"><table>{history_table}</table></div>
 </section>
 
 <section>
