@@ -714,13 +714,13 @@ untrained model follows the peers and loses 13 points; the memory-trained model 
 | ours: peers + memory notes | no | yes | 67.05 (89.9 / 75.4 / 20.2) | 68.61 (77.0 / 81.2 / 51.2) | 67.15 @210 |
 | no memory: peers only | no | no | 67.79 (90.2 / 78.6 / 16.6) | 69.55 (82.6 / 81.7 / 48.5) | 70.83 @140 |
 | classical: all peers labelled | yes | no | 70.71 (88.9 / 85.2 / 17.8) | 65.30 (82.6 / 81.0 / 37.7) | 70.71 @276 |
-| classical: memory-ranked verified peer | yes | ranking | 67.84 (82.6 / 83.1 / 17.8) | 69.72 (84.0 / 82.2 / 47.4) | 69.00 @70 |
 | **plain GRPO, question only** | no | no | **70.36** (91.8 / 78.6 / 25.6) | **73.81** (85.3 / 84.5 / 55.3) | 70.36 @276 (monotone 66.4 → 69.6 → 70.0 → 70.4) |
 
 Reading: on these streams the peers' solutions in the prompt, with or without the memory's notes and with or without their
 labels, are not what improves the central model's own answers; the verifier reward on its own samples is. Peer-conditioned runs
 learn more reading (75–85 vs 78.6) at the cost of code and, OOD, of the peers' style (all-peers-labelled: 65.30, BIG-Bench Hard
 below frozen). Plain GRPO is the only run that improves every task and rises monotonically over the epoch. The memory's notes do
-not separate ours from the no-memory control (67.05 vs 67.79, 68.61 vs 69.55). One seed each; the no-memory run had a
+not separate ours from the no-memory control (67.05 vs 67.79, 68.61 vs 69.55). (The memory-ranked verified-peer variant, 67.84 /
+69.72 with math down to 82.6, was dropped from the comparison at the user's request; its evaluations remain on disk.) One seed each; the no-memory run had a
 length-degeneracy collapse at steps 229–248 (recovered). Thinking-mode runs (memory, plain; 70 steps, 4096-token responses) are in
 progress with thinking-mode frozen references.
