@@ -18,8 +18,8 @@ PEERS = [("peer_0", "gemma-3-4b-it", "Google, 4B"), ("peer_1", "Phi-4-mini-instr
          ("peer_3", "Meta-Llama-3.1-8B-Instruct", "Meta, 8B"), ("peer_4", "DeepSeek-Coder-V2-Lite-Instruct", "DeepSeek, 16B MoE (code specialist)"), ("peer_5", "DeepSeek-R1-Distill-Qwen-7B", "DeepSeek, 7B (reasoning; answer after its think block)")]
 TRAIN_ACC = {"gsm8k": [69, 61, 60, 88, 93, 91], "squad": [13, 79, 66, 63, 12, 23], "apps": [29, 9, 16, 20, 30, 22]}
 ARMS = [("q3_4b_6peer_mix75_memory", "history as written by the memory", "the method"), ("q3_4b_6peer_mix75_peers", "history hidden (peers only)", "control"), ("q3_4b_6peer_mix75_swapped", "history swapped by rank", "control")]
-EVALS = [("eval_indist6_memory_vllm", "in-dist, true history"), ("eval_indist6_memory_swapped_vllm", "in-dist, swapped history"), ("eval_indist6_peers_vllm", "in-dist, peers only"), ("eval_indist6_solo_vllm", "in-dist, alone"),
-         ("eval_ood6_memory_vllm", "OOD, true history"), ("eval_ood6_memory_swapped_vllm", "OOD, swapped history"), ("eval_ood6_peers_vllm", "OOD, peers only"), ("eval_ood6_solo_vllm", "OOD, alone")]
+EVALS = [("eval_indist6_memory_vllm", "in-dist, peers + history"), ("eval_indist6_solo_vllm", "in-dist, alone"),
+         ("eval_ood6_memory_vllm", "OOD, peers + history"), ("eval_ood6_solo_vllm", "OOD, alone")]
 
 
 def load(p: Path):
@@ -55,9 +55,9 @@ def svg_pipeline() -> str:
     s.append('<text x="20" y="292" class="dcol">3 · learning and evaluation</text>')
     s.append(box(20, 306, 260, 70, "labels after the answer", "verifier reward; GRPO; KL 0.001"))
     s.append(box(320, 306, 260, 70, "record updated", "peers' verified labels of the event"))
-    s.append(box(620, 306, 540, 70, "evaluation of the trained model", "true history · swapped history · peers only · alone, on both test streams"))
+    s.append(box(620, 306, 540, 70, "evaluation of the trained model", "with peers + history, and alone, on both test streams"))
     s.append(arrow(970, 236, 150, 306, "darrow")); s.append(arrow(280, 341, 320, 341)); s.append(arrow(450, 306, 1055, 96, "darrow thin")); s.append(arrow(580, 341, 620, 341))
-    s.append(f'<text x="590" y="405" text-anchor="middle" class="dsub">the gap between true and swapped history after training is the measure of learned use; alone accuracy guards the model\'s own ability</text>')
+    s.append(f'<text x="590" y="405" text-anchor="middle" class="dsub">peers + history is the deployed condition; alone accuracy guards the model\'s own ability; the swapped-history check is run on demand</text>')
     s.append("</svg>")
     return "".join(s)
 
@@ -177,11 +177,11 @@ def main() -> None:
 
 <section>
 <h2>Evaluation protocol</h2>
-<p>Each arm's final checkpoint is evaluated on the six-peer test streams (in-distribution 4,319 events; OOD 17,403 events, all tasks unseen in training) in four prompt conditions: the true history, the history swapped by rank, peers without history, and the question alone. Greedy decoding with vLLM, the task verifiers, whole streams.</p>
+<p>Each arm's final checkpoint is evaluated on the six-peer test streams (in-distribution 4,319 events; OOD 17,403 events, all tasks unseen in training) in two conditions: with the peers and their history in the prompt (the deployed setting), and alone. Greedy decoding with vLLM, the task verifiers, whole streams.</p>
 <ul>
-<li><b>Learned use of the history</b> = accuracy with the true history minus accuracy with the swapped history. The frozen model's gap is about zero.</li>
-<li><b>Value of the peers</b> = true history minus alone; <b>value of the history</b> = true history minus peers only.</li>
+<li><b>Deployed accuracy</b> = with peers and history; compared across the three arms, the difference between the method and the hidden-history arm is the value of the history, and against the swapped arm the cost of a wrong history.</li>
 <li><b>Own ability</b> = alone accuracy, compared with the frozen model and the three-peer runs.</li>
+<li>The swapped-history evaluation of a single checkpoint (the direct test of learned use of the history) is available on demand with the same script.</li>
 </ul>
 </section>
 
