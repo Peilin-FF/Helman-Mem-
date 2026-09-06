@@ -33,8 +33,12 @@ STREAMS = {
     "train5": ("mixed_train_big5/train.jsonl", "{m}_big5_ph/train"),
     "indist5": ("indist5/test.jsonl", "{m}_indist5_ph/ood"),
     "ood5": ("ood5/test.jsonl", "{m}_5_ph/ood"),
+    # six-peer streams: the five above plus DeepSeek-R1-Distill-Qwen-7B (answer text after its think block)
+    "train6": ("mixed_train_big6/train.jsonl", "{m}_big6_ph/train"),
+    "indist6": ("indist6/test.jsonl", "{m}_indist6_ph/ood"),
+    "ood6": ("ood6/test.jsonl", "{m}_6_ph/ood"),
 }
-PEERS_PER_STREAM = {"train5": 5, "indist5": 5, "ood5": 5}
+PEERS_PER_STREAM = {"train5": 5, "indist5": 5, "ood5": 5, "train6": 6, "indist6": 6, "ood6": 6}
 MODELS = {"q3_0_6b": "Qwen3-0.6B", "q3_4b": "Qwen3-4B", "q3_8b": "Qwen3-8B", "q35_4b": "Qwen3.5-4B", "q35_9b": "Qwen3.5-9B"}
 
 

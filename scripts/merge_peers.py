@@ -54,7 +54,10 @@ def main() -> None:
             for name, rows in new_peers:
                 k = f"peer_{len(keys)}"
                 r = rows[rid]
-                rec["peer_responses"][k] = r["response"]
+                text = r["response"]
+                if "</think>" in text:   # reasoning models: the peer block carries the answer, not the think block (clipped at 3,000 characters)
+                    text = text.rsplit("</think>", 1)[1].strip()
+                rec["peer_responses"][k] = text
                 meta = dict(next(iter(rec.get("peer_metadata", {}).values()), {}))
                 meta.update({"model": f"{args.model_root}/{name}", "received_context": True, "num_samples": 1})
                 rec.setdefault("peer_metadata", {})[k] = meta
