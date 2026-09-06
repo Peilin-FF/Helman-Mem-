@@ -26,7 +26,7 @@ from pathlib import Path
 
 from feedback_state.answer_groups import answer_groups
 from feedback_state.data import JsonlDataset
-from feedback_state.memory_generator import build_messages, grade, strip_thinking
+from feedback_state.memory_generator import build_messages, domain_note, grade, strip_thinking
 from feedback_state.memory_rl import peer_texts_in_prompt_order
 
 NOTE_WORDS = re.compile(r"reliab|probability correct|estimated probability|past case|track record|trust|more likely to be correct|weight", re.I)
@@ -51,7 +51,14 @@ def swap_notes(row: dict, rec: dict) -> dict:
     out = dict(row)
     out["memory_prob_original"], out["memory_evidence_original"] = probs, evid
     out["memory_prob"], out["memory_evidence"] = new_p, new_e
-    out["messages_memory"] = build_messages(rec, texts, mode="memory", probs=new_p, evidence=new_e)
+    domain = None
+    if row.get("memory_domain"):
+        counts = list(row["memory_domain"]); new_c = list(counts)
+        for i, s in enumerate(ranked):
+            new_c[s] = counts[ranked[-1 - i]]
+        out["memory_domain"] = new_c
+        domain = [domain_note(row.get("task_type_note", row["task_type"]), *c) for c in new_c]
+    out["messages_memory"] = build_messages(rec, texts, mode="memory", probs=new_p, evidence=new_e, domain=domain)
     return out
 
 

@@ -20,7 +20,7 @@ import torch
 
 from feedback_state.addresses import Projection
 from feedback_state.feature_streams import load_stream, load_stream_from
-from feedback_state.memory_generator import build_messages, prob_from_logit, target_text
+from feedback_state.memory_generator import build_messages, domain_note, prob_from_logit, target_text
 from feedback_state.memory_runtime import MemoryRuntime
 from feedback_state.permutations import random_order
 
@@ -84,6 +84,7 @@ def main() -> None:
         print(f"[gen-prompts] own correct generations available for {len(own)} events", flush=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     n_written = 0
+    task_record: dict = {}   # (canonical peer, task) -> [right, total], read before each event is written
     with args.out.open("w") as f:
         for pos, t in enumerate(order.tolist()):
             r = int(fs.real[t])
@@ -95,6 +96,9 @@ def main() -> None:
             texts = [fs.texts[t][p] for p in perm]
             probs = [prob_from_logit(float(ell[p])) for p in perm]
             evid = [float(n_eff[p]) for p in perm]
+            task = fs.task[t]
+            domain = [domain_note(task, *task_record.get((p, task), [0, 0])) for p in perm]
+            domain_counts = [list(task_record.get((p, task), [0, 0])) for p in perm]
             rec = fs.records[t]
             rid = str(fs.ids[t]); source = None; target = None
             if args.target == "onpolicy_hinted":      # own solo first (zero drift), then the own-words hinted solution
@@ -116,7 +120,8 @@ def main() -> None:
                 "pos": pos, "id": fs.ids[t], "task_type": fs.task[t], "source": fs.source[t], "target_source": source,
                 "peer_order": [int(p) for p in perm], "peer_correct": [int(y[p]) for p in perm],
                 "memory_prob": [round(p, 4) for p in probs], "memory_evidence": [round(e, 1) for e in evid],
-                "messages_memory": build_messages(rec, texts, mode="memory", probs=probs, evidence=evid),
+                "memory_domain": domain_counts, "task_type_note": task,
+                "messages_memory": build_messages(rec, texts, mode="memory", probs=probs, evidence=evid, domain=domain),
                 "messages_peers": build_messages(rec, texts, mode="peers"),
                 "messages_solo": build_messages(rec, texts, mode="solo"),
                 "target": target,
@@ -124,6 +129,9 @@ def main() -> None:
             f.write(json.dumps(row) + "\n")
             n_written += 1
             runtime.write(t, X, y)
+            for p in range(r):
+                rec_pt = task_record.setdefault((p, task), [0, 0])
+                rec_pt[0] += int(y[p]); rec_pt[1] += 1
     print(f"[gen-prompts] wrote {n_written} rows to {args.out}")
     import collections
     counts = collections.Counter(json.loads(l).get("target_source") for l in args.out.open())

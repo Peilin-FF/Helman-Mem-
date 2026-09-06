@@ -37,6 +37,7 @@ from pathlib import Path
 import pandas as pd
 
 from feedback_state.data import JsonlDataset
+from feedback_state.memory_generator import build_messages, domain_note
 from feedback_state.memory_rl import choose_hint_slot, hint_messages, labeled_peer_messages, peer_texts_in_prompt_order
 from training.sigma_rl.outcome_protocol import PROTOCOL   # "peer_outcome_v1": the answer is graded only after it is given
 
@@ -58,6 +59,10 @@ def parse_args():
     ap.add_argument("--every", type=int, default=1, help="keep every k-th row (even subsample along the stream)")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--prompt_source", choices=["solo", "memory", "peers"], default="solo",
+                    help="the policy's own prompt: question only (solo), or every peer solution with the history (memory) / without it (peers)")
+    ap.add_argument("--swap_history", action="store_true", help="control: the history permuted by rank (highest reliability on the least trusted peer)")
+    ap.add_argument("--solo_fraction", type=float, default=0.0, help="fraction of events whose whole group is answered under the question-only prompt (keeps the model's own ability)")
     return ap.parse_args()
 
 
@@ -106,12 +111,30 @@ def main() -> None:
         guided, slot, correct = guided_messages(r, rec, peer_texts, args.guided, rng)
         if args.guided in LABELS_BEFORE and not verified:
             guided, slot, correct = None, -1, -1   # labels-before needs the labels
+        probs, evid = [float(x) for x in r["memory_prob"]], [float(x) for x in r["memory_evidence"]]
+        domain_counts = r.get("memory_domain")
+        if args.swap_history:
+            ranked = sorted(range(len(probs)), key=lambda s_: probs[s_])
+            new_p, new_e, new_d = list(probs), list(evid), (list(domain_counts) if domain_counts else None)
+            for i_, s_ in enumerate(ranked):
+                new_p[s_], new_e[s_] = probs[ranked[-1 - i_]], evid[ranked[-1 - i_]]
+                if new_d is not None:
+                    new_d[s_] = domain_counts[ranked[-1 - i_]]
+            probs, evid, domain_counts = new_p, new_e, new_d
+        source = "solo" if (args.prompt_source == "solo" or rng.random() < args.solo_fraction) else args.prompt_source
+        if source == "solo":
+            main_prompt = r["messages_solo"]
+        elif source == "peers":
+            main_prompt = r["messages_peers"]
+        else:
+            domain = [domain_note(r.get("task_type_note", r["task_type"]), *d) for d in domain_counts] if domain_counts else None
+            main_prompt = build_messages(rec, peer_texts, mode="memory", probs=probs, evidence=evid, domain=domain)
         n_guided += guided is not None
         n_guided_correct += int(correct == 1)
         n_verified += verified
         out_rows.append({
             "data_source": str(r["task_type"]),
-            "prompt": r["messages_solo"],
+            "prompt": main_prompt,
             "guided_prompt": guided,
             "reward_model": {"style": "rule", "ground_truth": str(rec.get("answer", ""))},
             "extra_info": {
@@ -119,7 +142,7 @@ def main() -> None:
                 "verified": bool(verified), "guided": args.guided, "labels_before": args.guided in LABELS_BEFORE,
                 "protocol": LABELS_BEFORE_PROTOCOL if args.guided in LABELS_BEFORE else PROTOCOL,
                 "guided_slot": int(slot), "guided_correct": int(correct),
-                "memory_prob": [float(x) for x in r["memory_prob"]], "memory_evidence": [float(x) for x in r["memory_evidence"]],
+                "memory_prob": probs, "memory_evidence": evid, "prompt_source": source, "swapped_history": bool(args.swap_history),
                 "peer_correct": [int(x) for x in r["peer_correct"]], "peer_order": [int(x) for x in r["peer_order"]],
                 "record": json.dumps(rec),
             },
@@ -127,7 +150,8 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(out_rows).to_parquet(args.out, index=False)
     tasks = collections.Counter(x["data_source"] for x in out_rows)
-    print(f"[build-rl-data] wrote {len(out_rows)} rows to {args.out}: tasks={dict(tasks)} guided={args.guided} rows_with_guidance={n_guided} "
+    sources = collections.Counter(x["extra_info"]["prompt_source"] for x in out_rows)
+    print(f"[build-rl-data] wrote {len(out_rows)} rows to {args.out}: tasks={dict(tasks)} prompt={dict(sources)}{' (swapped history)' if args.swap_history else ''} guided={args.guided} rows_with_guidance={n_guided} "
           f"guidance_correct={n_guided_correct} verified={n_verified}")
 
 

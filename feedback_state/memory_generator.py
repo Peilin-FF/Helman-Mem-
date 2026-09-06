@@ -31,8 +31,8 @@ SYSTEM = (
     "You are the central model of a multi-agent system. Several peer models answered the same question. "
     "A reliability memory has tracked, from verified feedback on earlier questions, how often each peer was "
     "correct on similar questions; its estimate for each peer answer is given together with the number of "
-    "similar past cases it rests on. Treat the peer answers as evidence weighted by their reliability, verify "
-    "them yourself, and produce your own final answer."
+    "similar past cases it rests on and the peer's verified record on this kind of task. Treat the peer answers "
+    "as evidence weighted by their reliability, verify them yourself, and produce your own final answer."
 )
 SYSTEM_PEERS = (
     "You are the central model of a multi-agent system. Several peer models answered the same question. "
@@ -56,17 +56,28 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + " ..."
 
 
-def peer_block(index: int, text: str, prob: float | None, evidence: float | None, *, char_limit: int) -> str:
+def peer_block(index: int, text: str, prob: float | None, evidence: float | None, *, char_limit: int, domain: str | None = None) -> str:
     head = f"Peer {index + 1}"
     if prob is not None:
         n = int(round(evidence or 0.0))
         cases = "no similar past cases yet" if n < 1 else f"based on {n} similar past case{'s' if n != 1 else ''}"
-        head += f" (estimated probability correct: {prob:.2f}, {cases})"
+        head += f" (estimated probability correct: {prob:.2f}, {cases}" + (f"; {domain}" if domain else "") + ")"
     return f"{head}:\n{_clip(text, char_limit)}"
 
 
+TASK_DOMAIN = {"math": "math word problems", "rag": "reading comprehension", "code": "programming tasks", "boolqa": "yes/no questions",
+               "mcqa": "multiple-choice questions", "shortqa": "short-answer reasoning"}
+
+
+def domain_note(task: str, right: int, total: int) -> str:
+    """The peer's verified record on this kind of task so far (read before this event is written)."""
+    name = TASK_DOMAIN.get(task, task)
+    return f"on {name}: no record yet" if total < 1 else f"on {name}: right on {right} of {total} earlier questions"
+
+
 def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, probs: Sequence[float] | None = None,
-                   evidence: Sequence[float] | None = None, include_context: bool = True, char_limit: int = 3000) -> list[dict]:
+                   evidence: Sequence[float] | None = None, include_context: bool = True, char_limit: int = 3000,
+                   domain: Sequence[str] | None = None) -> list[dict]:
     task = task_type_of(record)
     parts = [f"Question:\n{str(record.get('problem', record.get('question', ''))).strip()}"]
     if task == "mcqa":
@@ -83,7 +94,7 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, p
         for i, t in enumerate(texts):
             p = float(probs[i]) if (mode == "memory" and probs is not None) else None
             e = float(evidence[i]) if (mode == "memory" and evidence is not None) else None
-            blocks.append(peer_block(i, t, p, e, char_limit=char_limit))
+            blocks.append(peer_block(i, t, p, e, char_limit=char_limit, domain=(domain[i] if (mode == "memory" and domain is not None) else None)))
         parts.append("Peer answers:\n\n" + "\n\n".join(blocks))
     parts.append("Instruction: " + INSTRUCTIONS.get(task, INSTRUCTIONS["shortqa"]))
     system = {"memory": SYSTEM, "peers": SYSTEM_PEERS, "solo": SYSTEM_SOLO}[mode]
