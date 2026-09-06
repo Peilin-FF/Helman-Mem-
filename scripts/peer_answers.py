@@ -25,7 +25,7 @@ from feedback_state.data import JsonlDataset
 from feedback_state.memory_generator import grade, strip_thinking
 from feedback_state.tasks import build_peer_prompt, get_task, task_type_of
 
-MAX_TOKENS = {"math": 512, "rag": 256, "code": 768}
+MAX_TOKENS = {"math": 512, "rag": 256, "code": 768, "boolqa": 96, "mcqa": 96, "shortqa": 96}   # the peer-generation configs (OOD peers were generated with 96)
 
 
 def parse_args():
@@ -118,11 +118,12 @@ def main() -> None:
         rows.append({"id": r.get("id"), "source": r.get("source"), "task_type": task_type_of(r), "response": text, "target": v, "correct": int(round(v))})
         by_source[r.get("source")][0] += 1; by_source[r.get("source")][1] += int(round(v))
     tag = ("." + args.sources.replace(",", "_")) if args.sources else ""
-    with (args.output / (f"train{tag}.jsonl" if args.num_shards == 1 else f"train{tag}.shard{args.shard_index}of{args.num_shards}.jsonl")).open("w") as f:
+    stem = args.records.stem   # train / test
+    with (args.output / (f"{stem}{tag}.jsonl" if args.num_shards == 1 else f"{stem}{tag}.shard{args.shard_index}of{args.num_shards}.jsonl")).open("w") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     summary = {"model": args.model, "n": len(rows), "reasoning": args.reasoning, "by_source": {s: {"n": n, "accuracy": 100 * k / n} for s, (n, k) in by_source.items()}, "seconds": time.time() - t0}
-    (args.output / (f"summary{tag}.json" if args.num_shards == 1 else f"summary{tag}.shard{args.shard_index}of{args.num_shards}.json")).write_text(json.dumps(summary, indent=1))
+    (args.output / (f"summary_{stem}{tag}.json" if args.num_shards == 1 else f"summary_{stem}{tag}.shard{args.shard_index}of{args.num_shards}.json")).write_text(json.dumps(summary, indent=1))
     print("[peer-answers] " + ", ".join(f"{s}: {v['accuracy']:.1f}% ({v['n']})" for s, v in summary["by_source"].items()) + f" ({summary['seconds']:.0f}s)", flush=True)
 
 

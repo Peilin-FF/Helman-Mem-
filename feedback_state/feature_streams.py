@@ -29,7 +29,12 @@ STREAMS = {
     "train_small": ("mixed_train/train.jsonl", "{m}_ph/train"),
     "indist": ("indist/test.jsonl", "{m}_indist_ph/ood"),
     "ood": ("ood/test.jsonl", "{m}_ph/ood"),
+    # five-peer streams (2026-09-06): the three peers above plus Meta-Llama-3.1-8B-Instruct and DeepSeek-Coder-V2-Lite-Instruct
+    "train5": ("mixed_train_big5/train.jsonl", "{m}_big5_ph/train"),
+    "indist5": ("indist5/test.jsonl", "{m}_indist5_ph/ood"),
+    "ood5": ("ood5/test.jsonl", "{m}_5_ph/ood"),
 }
+PEERS_PER_STREAM = {"train5": 5, "indist5": 5, "ood5": 5}
 MODELS = {"q3_0_6b": "Qwen3-0.6B", "q3_4b": "Qwen3-4B", "q3_8b": "Qwen3-8B", "q35_4b": "Qwen3.5-4B", "q35_9b": "Qwen3.5-9B"}
 
 
@@ -74,8 +79,9 @@ def stream_paths(name: str, model: str) -> tuple[Path, Path]:
     return DATA_ROOT / jsonl, FEATURE_ROOT / cache.format(m=model)
 
 
-def load_stream(name: str, model: str, *, num_peers: int = 3, limit: int | None = None) -> FeatureStream:
+def load_stream(name: str, model: str, *, num_peers: int | None = None, limit: int | None = None) -> FeatureStream:
     jsonl_path, cache_dir = stream_paths(name, model)
+    num_peers = PEERS_PER_STREAM.get(name, 3) if num_peers is None else num_peers
     return load_stream_from(jsonl_path, cache_dir, name=name, model=model, num_peers=num_peers, limit=limit)
 
 
