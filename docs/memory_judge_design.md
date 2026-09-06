@@ -743,3 +743,15 @@ attention over peer i's tokens receives `γ · log(p_i / max_j p_j)` (CrAM's Nor
 in-dist 74.8 (swapped 71.7); the strongest in-model steering, still below alone on OOD because the peers are in the prompt.
 
 Analysis of any run: `scripts/memory_use_probe.py analyze` (follow rates, selection events, swapped controls, fusion variants).
+
+## 20. Five-peer streams (2026-09-06)
+
+Peers: gemma-3-4b-it, Phi-4-mini-instruct, Qwen2.5-Coder-7B-Instruct, Meta-Llama-3.1-8B-Instruct, DeepSeek-Coder-V2-Lite-Instruct.
+New peers' answers generated with `scripts/peer_answers.py` (same task prompt, sampling and grading as the original peers; OOD budget 96
+tokens), merged by `scripts/merge_peers.py` into `data/{mixed_train_big5,indist5,ood5}`; judge features `outputs/context_features/
+q3_4b_{big5,indist5,5}_ph`; prompt files `outputs/gen/q3_4b/prompts_{train5_fixed,indist5_shuffled0,ood5_shuffled0}.jsonl`; RL data
+`outputs/rl/data/q3_4b_5peer/`. Prompt length: max 4,177 tokens (code), so `max_prompt_length` 8192 stands.
+
+Record quality (`scripts/record_quality.py`), 3 → 5 peers: OOD AUC 0.921 → 0.928, favourite right on mixed events 74.2 → 79.6%, mixed
+events 29 → 50% of the stream; in-dist AUC 0.912 → 0.921, favourite 88.7 → 89.8%; train AUC 0.906 → 0.926, favourite 91.1 → 92.2%.
+Where the favourite goes against the majority label it is right 94–98% of the time.
