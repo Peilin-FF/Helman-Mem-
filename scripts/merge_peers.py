@@ -55,8 +55,10 @@ def main() -> None:
                 k = f"peer_{len(keys)}"
                 r = rows[rid]
                 text = r["response"]
-                if "</think>" in text:   # reasoning models: the peer block carries the answer, not the think block (clipped at 3,000 characters)
+                if "</think>" in text:   # reasoning models: the peer block carries the answer, not the think block
                     text = text.rsplit("</think>", 1)[1].strip()
+                elif "<think>" in text or len(text) > 3000:   # reasoning that never finished: keep what fits in a peer block (3,000 characters)
+                    text = text[:3000].rstrip() + "\n[... reasoning cut off, no final answer]"
                 rec["peer_responses"][k] = text
                 meta = dict(next(iter(rec.get("peer_metadata", {}).values()), {}))
                 meta.update({"model": f"{args.model_root}/{name}", "received_context": True, "num_samples": 1})
