@@ -23,6 +23,11 @@ import os
 from typing import Tuple
 
 import torch
+
+try:   # sigma: the memory's attention tilt (additive mask) for the non-rmpad forward
+    from feedback_state import attn_bias as _sigma_attn_bias
+except ImportError:   # pragma: no cover
+    _sigma_attn_bias = None
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
@@ -92,6 +97,9 @@ class DataParallelPPOActor(BasePPOActor):
             attention_mask = micro_batch["attention_mask"]
             position_ids = micro_batch["position_ids"]
             entropy = None
+            if _sigma_attn_bias is not None and _sigma_attn_bias.HF_STEER is not None:   # sigma: tilt of this micro-batch (prompt part; response tokens get 0)
+                ab = micro_batch.get("attn_bias", None) if hasattr(micro_batch, "get") else micro_batch["attn_bias"] if "attn_bias" in micro_batch else None
+                _sigma_attn_bias.HF_STEER.bias = None if ab is None else torch.nn.functional.pad(ab.to(device=input_ids.device, dtype=torch.float32), (0, seqlen - ab.shape[1]))
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
@@ -208,10 +216,24 @@ class DataParallelPPOActor(BasePPOActor):
                 extra_args = {}
                 if self.use_fused_kernels:
                     extra_args["temperature"] = temperature
+                # sigma: trim the padding shared by the whole micro-batch (left pads of the prompts, right pads of the
+                # responses) before the padded forward: sequences are padded to max_prompt + max_response, ~6x the real
+                # tokens; the attention tilt (additive mask) rides along on the trimmed positions
+                trim = not self.use_fused_kernels and not multi_modal_inputs and position_ids.dim() == 2
+                if trim:
+                    prompt_len = seqlen - response_length
+                    s = int(attention_mask.argmax(dim=1).min())                       # first real token over the batch
+                    e = int(seqlen - attention_mask.flip(1).argmax(dim=1).min())      # one past the last real token
+                    s, e = min(s, prompt_len - 1), max(e, prompt_len + 1)
+                    input_ids_t, attention_mask_t, position_ids_t = input_ids[:, s:e], attention_mask[:, s:e], position_ids[:, s:e]
+                    if _sigma_attn_bias is not None and _sigma_attn_bias.HF_STEER is not None and _sigma_attn_bias.HF_STEER.bias is not None:
+                        _sigma_attn_bias.HF_STEER.bias = _sigma_attn_bias.HF_STEER.bias[:, s:e]
+                else:
+                    input_ids_t, attention_mask_t, position_ids_t = input_ids, attention_mask, position_ids
                 output = self.actor_module(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
+                    input_ids=input_ids_t,
+                    attention_mask=attention_mask_t,
+                    position_ids=position_ids_t,
                     **multi_modal_inputs,
                     use_cache=False,
                     **extra_args,
@@ -220,6 +242,27 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
                     entropy = output.entropy[:, -response_length - 1 : -1]  # (bsz, response_length)
+
+                elif trim:
+                    kept = e - prompt_len                                             # response positions inside the trimmed window
+                    logits = output.logits
+                    logits.div_(temperature)
+                    logits = logits[:, prompt_len - 1 - s : e - 1 - s, :]             # predicts response tokens 0..kept-1
+                    log_probs = logprobs_from_logits(logits, micro_batch["responses"][:, :kept])
+                    log_probs = torch.nn.functional.pad(log_probs, (0, response_length - kept))
+                    if calculate_entropy:
+                        entropy = torch.nn.functional.pad(verl_F.entropy_from_logits(logits), (0, response_length - kept))
+                    if os.environ.get("SIGMA_TRIM_CHECK") and not getattr(self, "_trim_checked", False):   # one-off: trimmed == padded forward
+                        self._trim_checked = True
+                        with torch.no_grad():
+                            if _sigma_attn_bias is not None and _sigma_attn_bias.HF_STEER is not None and _sigma_attn_bias.HF_STEER.bias is not None:
+                                _sigma_attn_bias.HF_STEER.bias = torch.nn.functional.pad(_sigma_attn_bias.HF_STEER.bias, (s, seqlen - e))
+                            full = self.actor_module(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, use_cache=False).logits
+                            full.div_(temperature)
+                            ref_lp = logprobs_from_logits(full[:, -response_length - 1 : -1, :], micro_batch["responses"])
+                            mask = micro_batch["attention_mask"][:, -response_length:].bool()
+                            diff = (ref_lp - log_probs.detach()).abs()[mask]
+                            print(f"[sigma-trim-check] window {s}:{e} of {seqlen} (kept {kept}/{response_length} response positions); |trimmed - padded| log-prob max {diff.max().item():.5f} mean {diff.mean().item():.6f}", flush=True)
 
                 else:
                     logits = output.logits
@@ -277,6 +320,8 @@ class DataParallelPPOActor(BasePPOActor):
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
 
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
+        if "attn_bias" in data.batch.keys():   # sigma
+            select_keys.append("attn_bias")
         batch = data.select(batch_keys=select_keys).batch
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
 
@@ -327,6 +372,8 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append("loss_mask")
         if self.config.use_kl_loss:
             select_keys.append("ref_log_prob")
+        if "attn_bias" in data.batch.keys():   # sigma
+            select_keys.append("attn_bias")
         batch = data.select(batch_keys=select_keys).batch
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
 

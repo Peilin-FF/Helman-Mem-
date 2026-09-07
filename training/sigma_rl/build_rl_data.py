@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from feedback_state.attn_bias import peer_char_spans
 from feedback_state.data import JsonlDataset
 from feedback_state.memory_generator import build_messages, domain_note
 from feedback_state.memory_rl import choose_hint_slot, hint_messages, labeled_peer_messages, peer_texts_in_prompt_order
@@ -132,6 +133,8 @@ def main() -> None:
         n_guided += guided is not None
         n_guided_correct += int(correct == 1)
         n_verified += verified
+        # character spans of the peer blocks inside the user turn: the attention tilt (data.attn_gamma) is placed on them
+        spans = peer_char_spans(peer_texts, main_prompt[-1]["content"]) if source != "solo" else []
         out_rows.append({
             "data_source": str(r["task_type"]),
             "prompt": main_prompt,
@@ -143,6 +146,7 @@ def main() -> None:
                 "protocol": LABELS_BEFORE_PROTOCOL if args.guided in LABELS_BEFORE else PROTOCOL,
                 "guided_slot": int(slot), "guided_correct": int(correct),
                 "memory_prob": probs, "memory_evidence": evid, "prompt_source": source, "swapped_history": bool(args.swap_history),
+                "peer_spans": [[int(a), int(b)] for a, b in spans],
                 "peer_correct": [int(x) for x in r["peer_correct"]], "peer_order": [int(x) for x in r["peer_order"]],
                 "record": json.dumps(rec),
             },

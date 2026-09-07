@@ -755,3 +755,54 @@ q3_4b_{big5,indist5,5}_ph`; prompt files `outputs/gen/q3_4b/prompts_{train5_fixe
 Record quality (`scripts/record_quality.py`), 3 → 5 peers: OOD AUC 0.921 → 0.928, favourite right on mixed events 74.2 → 79.6%, mixed
 events 29 → 50% of the stream; in-dist AUC 0.912 → 0.921, favourite 88.7 → 89.8%; train AUC 0.906 → 0.926, favourite 91.1 → 92.2%.
 Where the favourite goes against the majority label it is right 94–98% of the time.
+
+## 21. The memory steers the attention, not the prompt (2026-09-07)
+
+Decision: the record never enters the central model's prompt as text.  The prompt is the plain peers prompt
+(question, the six solutions as `Peer 1 … Peer 6`, the task instruction).  The record's estimate p_i for peer i
+(Kalman state over the frozen judge's features, read before the event is written) is added to the attention scores
+onto that peer's tokens in every layer and head:
+
+    b_i = γ · log(p_i / max_j p_j),  γ = 3;  b = 0 for the favourite and for flat records (spread ≤ 0.1)
+    softmax(s + b) = Norm(A ⊙ c),  c_i = (p_i / max_j p_j)^γ            (§19 Method 2, CrAM-style tilt)
+
+The tilt is applied in every forward of the policy: rollouts, old log-probs, the reference log-probs of the KL term
+(so the penalty compares the same attention) and the update.  γ = 0 recovers the base model exactly.
+
+Engine.  Serving engines take no per-token attention bias; HF generation with the mask hook decodes at 100–200 tokens/s
+per GPU (151–324 ms per step at batch 32), which made thinking-mode training infeasible (17 h+ per arm).  vLLM 0.8.5's
+Triton attention backend is Python source: `feedback_state/vllm_attn_bias.py` rewrites its prefill kernel
+(`prefix_prefill._fwd_kernel`) and paged decode kernel (`kernel_paged_attention_2d`) at install time with one float per
+KV slot (a bias cache next to the KV cache, written with the token's K/V) added to the scaled score; requests get their
+bias through an in-process registry keyed by the prompt token ids; prefix-cache block hashes include the bias prefix so
+KV blocks are never shared across tilts (K/V of tokens after a tilted block depend on the tilt).  Check
+(`scripts/check_vllm_tilt.py`, 16 six-peer prompts, 48 greedy tokens): mean |Δ log p| vLLM-tilt vs HF-hook-tilt 0.0099,
+vs HF-plain 0.34; vLLM-plain vs HF-plain 0.0135, vs HF-tilt 0.46; argmax agreement 99.1%.  Throughput on one GPU,
+thinking on: FlashAttention 4,192 tok/s, patched Triton 1,995 tok/s, HF+hook 100–200.  Rejected engines: TensorRT-LLM,
+DeepSpeed (compiled kernels, no verl weight sync), SGLang (same patch effort, not integrated), Megatron (training only).
+
+Trainer wiring.  `data.attn_gamma` / `data.attn_bias_form` (dataset builds `attn_bias` over the padded prompt from
+extra_info `peer_spans` + `memory_prob`), `actor_rollout_ref.rollout.attn_bias` (vLLM registry), `actor_rollout_ref.model.attn_bias`
+(HF hooks on actor and ref; needs `use_remove_padding=False attn_implementation=sdpa`; one shared steer per process —
+verl colocates actor and ref).  Evaluator: `--attn_gamma 3 [--swap_record] [--every k]`.
+
+Pilot (before any long run): every 7th event of the six-peer stream (2,530 events, 25% question-only), group of 8,
+thinking on (4,096 tokens), 40 steps, KL 0.001; arms pilot_tilt (γ = 3) and pilot_peers (control); tests with thinking on
+in four conditions (peers + tilt, peers, alone, swapped tilt) on in-dist (whole stream) and OOD (every 4th event), the frozen
+model under the same conditions as the reference.  Driver: `/mnt/data/peilin/launch_pilot.sh`.
+
+### 21.1 Pilot results (2026-09-07, thinking on; in-dist whole stream 4,319, OOD every 4th event 4,351)
+
+Tilt arm (40 steps, KL 0.001, step 39): in-dist peers+tilt 67.5 · alone 66.0 · peers 65.6 · swapped tilt 62.2; OOD 77.6 · 79.5 · 74.7 · 73.5.
+Frozen model: in-dist alone 60.0 · peers 60.9; OOD alone 79.1 · peers 72.0 (tilt / swapped references pending at the time of writing).
+Reading: the tilt is a real channel (+2.0 / +2.9 over the same prompt without it; the swapped record costs 5.4 / 4.1); in-dist the
+steered model beats alone, on OOD the weak 96-token peers cost 4.8 and the tilt recovers 2.9 (it can only damp, not add -> a
+self-record term b_i = γ log(p_i / max(p_max, p_self)) is the next mechanism change).  Training under the tilt added little beyond
+the tilt itself so far (frozen+tilt 66.2 vs trained 66.6 on the validation events; best 68.4 at step 20); the big training effect
+is own ability with thinking on (alone 60.0 -> 66.0, mostly reading format) from the 25% question-only events.
+Dynamics: no collapse (entropy 0.25 -> 0.21, grad norm 0.1-0.5, truncation 2-15%); KL drifted to 0.03-0.09 (control 0.19) after
+step 18 with coefficient 0.001 -> run 2 uses 0.01, checkpoints every 10 steps, validation every 20.
+Cost: tilt-arm step 547 s (gen 148, old log-probs 66, ref 64, update 269) because the SDPA path pads every sequence to
+4,608 + 4,096 tokens (~5.8x the real tokens); dp_actor now trims each micro-batch to its real span (4.5x faster update,
+|Δ log p| mean 0.009 vs the padded forward).  Control arm (rmpad + flash) 190-250 s/step on 4 GPUs.
+Lesson: monitor scripts must run inside the conda env (a silent `python: not found` hid the dynamics for 6 h).

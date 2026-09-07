@@ -40,11 +40,16 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--max_new_tokens", type=int, default=384)
     p.add_argument("--max_examples", type=int, default=None)
+    p.add_argument("--every", type=int, default=1, help="keep every k-th event of the stream (positions and memory states unchanged; even subsample)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--windows", type=int, default=10)
     p.add_argument("--thinking", choices=["on", "off"], default="off", help="on = Qwen3 thinking mode (raise --max_new_tokens; the answer after </think> is graded)")
     p.add_argument("--engine", choices=["hf", "vllm"], default="hf", help="vllm = decode with vLLM (greedy, continuous batching; ~30x faster than HF generate); hf = transformers generate")
     p.add_argument("--gpu_memory_utilization", type=float, default=0.85, help="vLLM engine memory share (lower it when the GPU is shared)")
+    p.add_argument("--attn_gamma", type=float, default=0.0, help="the memory's attention tilt: gamma * log(p_i / max p) on peer i's block (0 = off); peers / memory modes")
+    p.add_argument("--attn_bias_form", default="logratio", help="logratio | logodds (feedback_state.attn_bias)")
+    p.add_argument("--attn_layers", default="all", help="HF engine only: 'all' or 'a:b'")
+    p.add_argument("--swap_record", action="store_true", help="control for the tilt: the record permuted by rank (highest estimate on the least trusted peer)")
     return p.parse_args()
 
 
@@ -69,14 +74,35 @@ def main() -> None:
     hf_dir = args.checkpoint if (args.checkpoint is not None and (args.checkpoint / "config.json").exists()) else None
     records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(args.records).records}
     rows = [json.loads(l) for l in args.prompts.open()]
+    if args.every > 1:
+        rows = rows[:: args.every]
     if args.max_examples:
         rows = rows[: args.max_examples]
     prompts = [render_prompt(tok, r[f"messages_{args.mode}"], thinking=args.thinking == "on") for r in rows]
+    ids_list = biases = None
+    if args.attn_gamma > 0:   # the tilt: per prompt, the token positions of each peer block and its additive score
+        from feedback_state.attn_bias import prompt_token_bias
+        from feedback_state.memory_rl import peer_texts_in_prompt_order
+
+        ids_list, biases = [], []
+        for r, prompt in zip(rows, prompts):
+            rec = records[str(r["id"])]
+            probs = [float(p) for p in r["memory_prob"]]
+            if args.swap_record:
+                ranked = sorted(range(len(probs)), key=lambda s_: probs[s_])
+                swapped = list(probs)
+                for i_, s_ in enumerate(ranked):
+                    swapped[s_] = probs[ranked[-1 - i_]]
+                probs = swapped
+            ids, b = prompt_token_bias(tok, prompt, peer_texts_in_prompt_order(rec, r["peer_order"]), probs, args.attn_gamma, args.attn_bias_form)
+            ids_list.append(ids); biases.append(b)
+        print(f"[gen-eval] attention tilt gamma {args.attn_gamma} ({args.attn_bias_form}{', swapped record' if args.swap_record else ''}): "
+              f"{sum(bool(b.any()) for b in biases)}/{len(biases)} prompts tilted", flush=True)
     t0 = time.time()
     if args.engine == "vllm":
         if args.checkpoint is not None and hf_dir is None:
             raise SystemExit("--engine vllm needs a plain HF checkpoint directory (or no checkpoint for the frozen model); LoRA payloads need --engine hf")
-        outputs = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args)
+        outputs = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args, ids_list=ids_list, biases=biases)
         print(f"[gen-eval] vllm decoded {len(prompts)} prompts ({time.time() - t0:.0f}s)", flush=True)
         write_results(args, rows, records, outputs, t0)
         return
@@ -92,6 +118,11 @@ def main() -> None:
             set_lora_active(base, args.mode != "solo")   # evidence gate: no peers in the prompt -> base model exactly
             print(f"[gen-eval] gated adapters: active={args.mode != 'solo'}", flush=True)
     base.eval()
+    steer = None
+    if biases is not None:
+        from feedback_state.attn_bias import install_hf_hooks
+
+        steer = install_hf_hooks(base, args.attn_layers)
     outputs: list[str] = [""] * len(rows)
     # decode in length-sorted batches (order restored afterwards; the memory state is already in the prompts)
     idx = sorted(range(len(rows)), key=lambda i: len(prompts[i]))
@@ -99,6 +130,12 @@ def main() -> None:
         for b in range(0, len(idx), args.batch_size):
             ids = idx[b : b + args.batch_size]
             enc = tok([prompts[i] for i in ids], return_tensors="pt", padding=True, add_special_tokens=False).to(device)
+            if steer is not None:   # left padding: the prompt's tilt ends at the last prompt token
+                L = enc["input_ids"].shape[1]
+                bias = torch.zeros(len(ids), L + args.max_new_tokens + 1)
+                for bi, i in enumerate(ids):
+                    bias[bi, L - len(biases[i]): L] = torch.from_numpy(biases[i])
+                steer.bias = bias.to(device)
             gen = base.generate(**enc, max_new_tokens=args.max_new_tokens, do_sample=False, pad_token_id=tok.pad_token_id)
             texts = tok.batch_decode(gen[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
             for i, t in zip(ids, texts):
@@ -108,19 +145,28 @@ def main() -> None:
     write_results(args, rows, records, outputs, t0)
 
 
-def generate_vllm(model_path: str, prompts: list[str], args) -> list[str]:
-    """Greedy decoding of already-rendered prompts with vLLM (same prompts, same stop condition as the HF path)."""
+def generate_vllm(model_path: str, prompts: list[str], args, ids_list=None, biases=None) -> list[str]:
+    """Greedy decoding of already-rendered prompts with vLLM (same prompts, same stop condition as the HF path).
+    With ``biases`` (one float32 vector per prompt over its tokens ``ids_list``) the attention tilt runs inside the engine."""
     import os
 
     os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")   # in-process engine: the parent already holds a CUDA context
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    if biases is not None:
+        from feedback_state import vllm_attn_bias
+
+        vllm_attn_bias.install()
     from vllm import LLM, SamplingParams
 
     max_prompt = max(len(p) for p in prompts) // 2 + 64   # rough character->token bound only for max_model_len
     llm = LLM(model=model_path, tokenizer=args.central_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization,
               max_model_len=min(32768, max(4096, max_prompt + args.max_new_tokens + 256)), enable_prefix_caching=True, trust_remote_code=False, seed=0)
     params = SamplingParams(temperature=0.0, max_tokens=args.max_new_tokens)
-    outs = llm.generate(prompts, params, use_tqdm=True)
+    inputs = prompts if ids_list is None else [{"prompt_token_ids": ids} for ids in ids_list]
+    if biases is not None:
+        for ids, b in zip(ids_list, biases):
+            vllm_attn_bias.register(ids, b)
+    outs = llm.generate(inputs, params, use_tqdm=True)
     return [o.outputs[0].text for o in outs]
 
 

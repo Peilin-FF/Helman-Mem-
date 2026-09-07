@@ -258,6 +258,13 @@ class ActorRolloutRefWorker(Worker):
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
 
+            if self.config.model.get("attn_bias", False):   # sigma: the memory's attention tilt through the additive mask (sdpa / eager, no rmpad)
+                assert not use_remove_padding, "actor_rollout_ref.model.attn_bias needs use_remove_padding=False (the flash varlen path has no mask)"
+                from feedback_state.attn_bias import install_hf_hooks
+                install_hf_hooks(actor_module)
+                if self.rank == 0:
+                    print(f"[sigma] attention-tilt hooks installed on the {role} model ({actor_model_config._attn_implementation})")
+
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
             if self._is_lora:

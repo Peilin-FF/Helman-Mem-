@@ -17,6 +17,8 @@ from verl.utils.dataset.rl_dataset import RLHFDataset
 from verl.utils.dataset.sft_dataset import SFTDataset
 from verl.utils.model import compute_position_id_with_mask
 
+from feedback_state.attn_bias import bias_values, token_bias
+
 GUIDED_TENSOR_KEYS = ("guided_input_ids", "guided_attention_mask", "guided_position_ids", "has_guided")
 GUIDED_NON_TENSOR_KEYS = ("guided_raw_prompt_ids",)
 
@@ -56,7 +58,29 @@ class SigmaRLDataset(RLHFDataset):
     def __init__(self, data_files, tokenizer, config, processor=None):
         self.guided_key = config.get("guided_key", "guided_prompt")
         self.thinking = bool(config.get("enable_thinking", False))   # Qwen3 thinking mode for every prompt of this run
+        self.attn_gamma = float(config.get("attn_gamma", 0.0))         # the memory's attention tilt: gamma * log(p_i / max p) on peer i's block
+        self.attn_bias_form = str(config.get("attn_bias_form", "logratio"))
         super().__init__(data_files=data_files, tokenizer=tokenizer, config=config, processor=processor)
+
+    def _attn_bias(self, raw: str, messages, extra: dict, att: torch.Tensor) -> torch.Tensor:
+        """The tilt over the left-padded prompt tokens (row extra_info: peer_spans in the user turn, memory_prob per slot)."""
+        out = torch.zeros(self.max_prompt_length, dtype=torch.float32)
+        spans, probs = extra.get("peer_spans"), extra.get("memory_prob")
+        if spans is None or probs is None or len(spans) == 0:
+            return out
+        values = bias_values([float(p) for p in probs], self.attn_gamma, self.attn_bias_form)
+        if not any(values):
+            return out
+        content = messages[-1]["content"]
+        off = raw.find(content)
+        if off < 0:
+            return out
+        offsets = self.tokenizer(raw, add_special_tokens=False, return_offsets_mapping=True)["offset_mapping"]
+        b = token_bias(offsets, [(int(a) + off, int(e) + off) for a, e in spans], values)
+        n = int(att.sum())
+        b = b[-n:] if len(b) > n else b
+        out[self.max_prompt_length - len(b):] = torch.from_numpy(b)
+        return out
 
     def _read_files_and_tokenize(self):
         import datasets
@@ -120,6 +144,8 @@ class SigmaRLDataset(RLHFDataset):
         ids, att, pos = self._encode(raw)
         row["input_ids"], row["attention_mask"], row["position_ids"] = ids, att, pos
         row["raw_prompt_ids"] = self._raw_ids(raw)
+        if self.attn_gamma > 0:
+            row["attn_bias"] = self._attn_bias(raw, messages, row.get("extra_info") or {}, att)
         guided = row.pop(self.guided_key, None)
         has_guided = 0
         guided_raw: list[int] = []

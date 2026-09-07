@@ -147,6 +147,10 @@ class vLLMRollout(BaseRollout):
         #    (which can vary across different vLLM versions);
         # - Otherwise it's the desired value we want to explicitly set.
         engine_kwargs = {key: val for key, val in engine_kwargs.items() if val is not None}
+        self.attn_bias = bool(config.get("attn_bias", False))
+        if self.attn_bias:   # sigma: the memory's attention tilt inside the engine (patched Triton attention kernels)
+            from feedback_state.vllm_attn_bias import install as _install_attn_bias
+            _install_attn_bias()
         self.inference_engine = LLM(
             model=model_path,
             enable_sleep_mode=True,
@@ -255,6 +259,14 @@ class vLLMRollout(BaseRollout):
                 input_data["prompt_token_ids"] = input_data["prompt_token_ids"].tolist()
             elif not isinstance(input_data["prompt_token_ids"], list):
                 raise TypeError(f"prompt_token_ids must be a list or numpy array, got {type(input_data['prompt_token_ids'])}")
+
+        if self.attn_bias and "attn_bias" in prompts.batch.keys():   # sigma: hand every prompt its tilt (aligned with the unpadded prompt tokens)
+            from feedback_state import vllm_attn_bias
+
+            vllm_attn_bias.clear()
+            for input_data, row in zip(vllm_inputs, prompts.batch["attn_bias"]):
+                ids = input_data["prompt_token_ids"]
+                vllm_attn_bias.register(ids, row[-len(ids):].float().cpu().numpy())
 
         do_sample = prompts.meta_info.get("do_sample", True)
         is_validate = prompts.meta_info.get("validate", False)

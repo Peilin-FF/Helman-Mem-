@@ -667,6 +667,8 @@ class RayPPOTrainer:
             sample_inputs.extend(input_texts)
 
             batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
+            if "attn_bias" in test_batch.batch.keys():   # sigma: the memory's attention tilt goes to the rollout with the prompts
+                batch_keys_to_pop.append("attn_bias")
             non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
             if "multi_modal_data" in test_batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append("multi_modal_data")

@@ -10,6 +10,8 @@ data:
   prompt_key: prompt            # question-only chat messages
   guided_key: guided_prompt     # question + peers' solutions (annotated by the memory, or not, or one hint); null = none
   enable_thinking: False        # Qwen3 thinking mode for every prompt (then raise max_response_length to 4096+; the grader scores the answer after </think>)
+  attn_gamma: 0.0               # the memory's attention tilt: gamma * log(p_i / max_j p_j) added to every attention score onto peer i's block (0 = off)
+  attn_bias_form: logratio      # logratio (validated training-free) | logodds (gamma * (logit p_i - max_j logit p_j))
   reward_fn_key: data_source    # task type -> per-task validation metrics
   max_prompt_length: 8192       # input budget (question + all peer solutions + context); rows whose guided prompt exceeds it lose the guidance (counted at load)
   max_response_length: 768
@@ -40,6 +42,7 @@ actor_rollout_ref:
     enable_activation_offload: False
     use_remove_padding: True             # flash-attn varlen: no padding compute
     attn_implementation: flash_attention_2   # sdpa if flash-attn is unavailable (then set use_remove_padding False)
+    attn_bias: False                     # apply the attention tilt (data.attn_gamma) in the actor / ref forward through the additive mask; needs sdpa + use_remove_padding False
     lora_rank: 0                         # full-parameter training only (the internalisation objective); no LoRA on this stack
     use_liger: False
     use_fused_kernels: False
@@ -126,6 +129,7 @@ actor_rollout_ref:
     enable_chunked_prefill: True
     do_sample: True
     n: 8                                  # samples per prompt (the GRPO group)
+    attn_bias: False                      # apply the attention tilt inside vLLM (patched Triton attention kernels, feedback_state.vllm_attn_bias)
     engine_kwargs:
       vllm:
         swap_space: null
