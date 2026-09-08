@@ -806,3 +806,30 @@ Cost: tilt-arm step 547 s (gen 148, old log-probs 66, ref 64, update 269) becaus
 4,608 + 4,096 tokens (~5.8x the real tokens); dp_actor now trims each micro-batch to its real span (4.5x faster update,
 |Δ log p| mean 0.009 vs the padded forward).  Control arm (rmpad + flash) 190-250 s/step on 4 GPUs.
 Lesson: monitor scripts must run inside the conda env (a silent `python: not found` hid the dynamics for 6 h).
+
+### 21.2 Full-stream comparison, thinking off (2026-09-08): ours vs the no-memory control
+
+Identical schedule (40 steps, then a full epoch from that checkpoint with the reference reset, KL 0.01, n = 8, 768-token answers).
+in-dist / OOD (every 4th): frozen peers+tilt 67.1 / 73.9, peers 64.8 / 69.5, alone 60.6 / 68.5;
+ours (run3b, step 276) 75.9 / 75.0, 75.1 / 72.3, 73.4 / 70.5, swapped 73.7 / 67.1;
+control (ctrl3b, step 276) 74.9 / 75.1, 74.4 / 72.9, 71.4 / 73.0, swapped 70.5 / 67.9.
+Verdict: the tilt is a test-time channel every model reads (+0.5 to +4.4 over the same prompt; swapped record -2.2 to -7.9 on all three);
+training under the tilt adds ~1 point in-dist deployed (1.5 SE) and nothing on OOD. Training gains are peer reading and own ability
+(ours better alone in-dist 73.4 vs 71.4; control better alone OOD 73.0 vs 70.5). Validation: ours 71.3 -> 77.7 peak -> 76.6; control 66.6 -> 76.2.
+Next: gamma sweep + log-odds form on both checkpoints (evaluation only); self-record term; a record-aware training signal
+(events where the record and the majority disagree). Notion project: Research Studio / Kalman Mem.
+
+### 21.3 Third arm: question-only training (2026-09-09)
+
+Same schedule and settings as run 3b and the control, with the question alone in every training prompt (`full_solo.parquet`,
+17,709 events, no peer block; validation on 512 held-out events under the question-only prompt). Launcher
+`training/scripts/launchers/launch_solo.sh`; runs `solo3_q` (40 steps) then `solo3b_q` (277 steps, reference reset, seed 2);
+about 40 s per step. Final checkpoint (step 276), thinking off, in-dist / OOD: peers + tilt 73.0 / 74.8, peers 72.5 / 71.3,
+alone 71.5 / 72.7, swapped tilt 69.5 / 67.6. Validation alone 61.7 -> 66.8 (step 40) -> 74.0 peak (step 240) -> 72.5.
+
+Reading. (1) Own ability: 71.5 in-dist and 72.7 OOD, level with the control (71.4 / 73.0) and below ours in-dist (73.4):
+peer prompts in training cost nothing in own ability. (2) Reading peers is learned: this model gains +1.0 from six solutions
+in-dist (ours +1.7, control +3.0) and loses 1.4 from them on OOD; deployed it reaches 73.0 in-dist against 75.9 / 74.9 for
+the peer-trained arms. (3) The tilt is read by a model that never saw a peer in training: +0.4 in-dist, +3.5 OOD over the same
+prompt; the swapped record costs 3.5 / 7.2. The method was renamed from "Kalman record" to "Bayesian linear record" on
+2026-09-08 (the write is the Kalman measurement update of a static state, i.e. RLS; "Kalman" is kept for the gain only).

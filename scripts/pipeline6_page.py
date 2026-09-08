@@ -23,7 +23,8 @@ STREAMS = [("indist", "in-dist"), ("ood", "OOD")]
 ARMS = [("pilot_tilt", "trained under the tilt (γ = 3), KL 0.001", "the method"), ("pilot_peers", "trained with peers, no tilt, KL 0.001; its tests were cut short", "control")]
 NOT_RUN = {("pilot_peers", "*"), ("base6_think", "tilt"), ("base6_think", "tilt_swapped")}   # evaluations deliberately not run (stopped to free the GPUs)
 ARMS_NOTHINK = [("run3b_tilt", "trained under the tilt, thinking off, 768-token answers, KL 0.01: 40 steps (run 3), then the full epoch from that checkpoint with a new seed (run 3b)", "the method"),
-                ("ctrl3b_peers", "same schedule and settings, question + six peer answers, no memory anywhere (40 steps, then the full epoch from that checkpoint)", "control")]
+                ("ctrl3b_peers", "same schedule and settings, question + six peer answers, no memory anywhere (40 steps, then the full epoch from that checkpoint)", "control"),
+                ("solo3b_q", "same schedule and settings, the question alone in every training prompt, no peers, no memory (40 steps, then the full epoch from that checkpoint)", "question-only arm")]
 PILOT_STEPS = 40
 VAL_WEIGHTS = {"rag": 231, "math": 162, "code": 119}   # the 512 validation events by task
 
@@ -83,7 +84,7 @@ def svg_pipeline() -> str:
     s.append(box(250, 36, 190, 60, "graded", "F1 ≥ 0.5 / exact / tests"))
     s.append(box(480, 36, 190, 60, "six-peer streams", "train 17,709 · in-dist 4,319 · OOD 17,403"))
     s.append(box(710, 36, 200, 60, "frozen-judge features", "question + each peer answer"))
-    s.append(box(950, 36, 210, 60, "Kalman record  p_i", "read before write, along the stream"))
+    s.append(box(950, 36, 210, 60, "Bayesian record  p_i", "read before write, along the stream"))
     s.append(arrow(210, 66, 250, 66)); s.append(arrow(440, 66, 480, 66)); s.append(arrow(670, 66, 710, 66)); s.append(arrow(910, 66, 950, 66))
     s.append('<text x="20" y="152" class="dcol">2 · the memory steers the attention, not the text</text>')
     s.append(box(20, 166, 300, 70, "question + all six solutions", "plain prompt: no reliability text at all"))
@@ -211,9 +212,10 @@ def main() -> None:
             out.append(row([label if not out else "", cl] + [cell(v) for v in vals]))
         return out
     comp = [row(["model", "input", "in-dist (4,319)", "OOD (every 4th, 4,351)"], True)]
-    comp += comp_rows("Base central model, not trained", base_dir="base6_nothink", conds=(("tilt", "peers + memory (training-free)"), ("peers", "question + peers"), ("solo", "question only")))
-    comp += comp_rows("Ours: trained under the memory tilt (run 3b, step 276)", exp="run3b_tilt")
+    comp += comp_rows("Base central model", base_dir="base6_nothink", conds=(("tilt", "peers + memory"), ("peers", "question + peers"), ("solo", "question only")))
+    comp += comp_rows("Ours: trained under the memory tilt", exp="run3b_tilt")
     comp += comp_rows("Control: trained on question + peers, no memory", exp="ctrl3b_peers")
+    comp += comp_rows("Question-only arm: trained on the question alone", exp="solo3b_q")
     repro = html.escape(REPRO)
     page = f'''<title>Six-Peer Training Pipeline</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
@@ -222,7 +224,7 @@ def main() -> None:
 <header>
 <div class="eyebrow">helman-mem · six-peer pipeline · the memory steers the attention · updated {stamp}</div>
 <h1>Six-Peer Training Pipeline</h1>
-<p class="thesis">The central model (Qwen3-4B) answers with six peer solutions in front of it. The memory never enters the prompt as text: its estimate of each peer's reliability at this question, a Kalman record over the frozen judge's features, is added to the attention scores on that peer's tokens in every layer and head, inside vLLM for rollouts and inside the trainer's forward for the update. Nothing is filtered or ranked away; correctness is revealed only after the answer. This page records the data, the mechanism, the engine work that made it fast, the pilot regime, and the results as they arrive.</p>
+<p class="thesis">The central model (Qwen3-4B) answers with six peer solutions in front of it. The memory never enters the prompt as text: its estimate of each peer's reliability at this question, a Bayesian linear record (the exact posterior of a linear-Gaussian model of correctness) over the frozen judge's features, is added to the attention scores on that peer's tokens in every layer and head, inside vLLM for rollouts and inside the trainer's forward for the update. Nothing is filtered or ranked away; correctness is revealed only after the answer. This page records the data, the mechanism, the engine work that made it fast, the pilot regime, and the results as they arrive.</p>
 </header>
 
 <section>
@@ -259,7 +261,7 @@ def main() -> None:
 <li><b>Data.</b> The whole six-peer training stream (17,701 events after the prompt-length filter), the six peer answers in the prompt for 75% of the events and the question alone for 25%; labels only after the answer; shuffled batches (the record is order-free, so each prompt's tilt still comes from its own read-before-write prefix).</li>
 <li><b>Group of 8, thinking off.</b> Eight sampled answers per event under the same prompt and the same tilt, 768-token budget, verifier reward, GRPO with clip 0.2, learning rate 1e-6, KL 0.01 to the reference, full parameters, 64 events per step, eight GPUs, about 100 s per step.</li>
 <li><b>Schedule.</b> 40 steps from the frozen model, then the full epoch (277 steps) restarted from that checkpoint with the reference reset to it and a new shuffle seed. Validation every 20 steps on 512 held-out in-distribution events, checkpoints every 40.</li>
-<li><b>Ours vs the control.</b> Ours trains with the tilt (γ = 3) in rollouts, log-probs and the update; the control follows the identical schedule with the same prompts and no memory anywhere.</li>
+<li><b>Three arms.</b> Ours trains with the tilt (γ = 3) in rollouts, log-probs and the update; the control follows the identical schedule with the same prompts and no memory anywhere; the question-only arm follows the identical schedule with the question alone in every prompt (no peers, no memory), which separates plain RL on the tasks from learning to read peers.</li>
 </ul>
 </section>
 
@@ -271,7 +273,8 @@ def main() -> None:
 <section>
 <h2>Results</h2>
 <div class="tbl"><table>{''.join(comp)}</table></div>
-<p class="sub">Accuracy in percent, thinking off, 768-token answers, greedy decoding with vLLM. In-distribution: the whole six-peer test stream (4,319 events: GSM8K, SQuAD, APPS). OOD: every 4th event of the OOD stream (4,351 events: yes/no, multiple-choice and short-answer questions never seen in training). "Peers + memory" is the deployed setting: the six peer answers in the prompt and the record's tilt on the attention. The base rows are the frozen Qwen3-4B. The control is trained with exactly the same schedule, data and settings as ours but never sees the memory.</p>
+<p class="sub">Accuracy in percent, thinking off, 768-token answers, greedy decoding with vLLM. In-distribution: the whole six-peer test stream (4,319 events: GSM8K, SQuAD, APPS). OOD: every 4th event of the OOD stream (4,351 events: yes/no, multiple-choice and short-answer questions never seen in training). "Peers + memory" is the deployed setting: the six peer answers in the prompt and the record's tilt on the attention. The base rows are the frozen Qwen3-4B. The control is trained with exactly the same schedule, data and settings as ours but never sees the memory; the question-only arm never sees a peer either. Swapped record (peers + memory with the highest estimate on the least trusted peer), in-dist / OOD: frozen 60.2 / 64.7, ours 73.7 / 67.1, control 70.5 / 67.9, question-only arm 69.5 / 67.6.</p>
+<p><b>Reading.</b> The memory is a test-time channel every model reads: over the same prompt it adds +2.2 / +4.4 (in-dist / OOD) on the frozen model, +0.9 / +2.7 on ours, +0.5 / +2.2 on the control and +0.4 / +3.5 on the question-only arm, and the swapped record costs every model 2 to 8 points. Training under the tilt does not beat training without it (75.9 vs 74.9 in-dist, about 1.5 standard errors; 75.0 vs 75.1 OOD). The question-only arm shows that peer prompts in training cost no own ability (71.5 alone, level with the control, below ours at 73.4) and that learning to read peers is worth 2 to 3 points deployed in-dist (73.0 against 75.9 / 74.9); a model that never saw a peer gains only 1 point from six solutions in-dist and loses 1.4 from them on OOD.</p>
 </section>
 
 <section>
