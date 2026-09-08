@@ -20,9 +20,10 @@ PEERS = [("peer_0", "gemma-3-4b-it", "Google, 4B"), ("peer_1", "Phi-4-mini-instr
 TRAIN_ACC = {"gsm8k": [69, 61, 60, 88, 93, 91], "squad": [13, 79, 66, 63, 12, 23], "apps": [29, 9, 16, 20, 30, 22]}
 CONDS = [("tilt", "peers + memory tilt"), ("peers", "peers, no tilt"), ("solo", "alone"), ("tilt_swapped", "peers + swapped tilt")]
 STREAMS = [("indist", "in-dist"), ("ood", "OOD")]
-ARMS = [("pilot_tilt", "trained under the tilt (γ = 3), KL 0.001", "the method"), ("pilot_peers", "trained with peers, no tilt, KL 0.001", "control"),
-        ("run2_tilt", "trained under the tilt, KL 0.01, checkpoints every 10 steps", "the method, run 2")]
-ARMS_NOTHINK = [("run3_tilt", "trained under the tilt, thinking off, 768-token answers, KL 0.01, full stream", "the method, run 3")]
+ARMS = [("pilot_tilt", "trained under the tilt (γ = 3), KL 0.001", "the method"), ("pilot_peers", "trained with peers, no tilt, KL 0.001; its tests were cut short", "control")]
+NOT_RUN = {("pilot_peers", "*"), ("base6_think", "tilt"), ("base6_think", "tilt_swapped")}   # evaluations deliberately not run (stopped to free the GPUs)
+ARMS_NOTHINK = [("run3b_tilt", "trained under the tilt, thinking off, 768-token answers, KL 0.01: 40 steps (run 3), then the full epoch from that checkpoint with a new seed (run 3b)", "the method"),
+                ("ctrl3b_peers", "same schedule and settings, question + six peer answers, no memory anywhere (40 steps, then the full epoch from that checkpoint)", "control")]
 PILOT_STEPS = 40
 VAL_WEIGHTS = {"rag": 231, "math": 162, "code": 119}   # the 512 validation events by task
 
@@ -87,12 +88,12 @@ def svg_pipeline() -> str:
     s.append('<text x="20" y="152" class="dcol">2 · the memory steers the attention, not the text</text>')
     s.append(box(20, 166, 300, 70, "question + all six solutions", "plain prompt: no reliability text at all"))
     s.append(box(360, 166, 400, 70, "tilt on peer i's tokens: + γ · log(p_i / max_j p_j)", "every layer and head · vLLM kernels / HF mask", "dbox strong"))
-    s.append(box(800, 166, 360, 70, "central model answers, thinking on", "group of 8 samples; 25% of events question-only"))
+    s.append(box(800, 166, 360, 70, "central model answers, thinking off", "group of 8 samples; 25% of events question-only"))
     s.append(arrow(1055, 96, 600, 166)); s.append(arrow(320, 201, 360, 201)); s.append(arrow(760, 201, 800, 201))
     s.append('<text x="20" y="292" class="dcol">3 · learning and evaluation</text>')
     s.append(box(20, 306, 260, 70, "labels after the answer", "verifier reward; GRPO; KL 0.001"))
     s.append(box(320, 306, 260, 70, "record updated", "peers' verified labels of the event"))
-    s.append(box(620, 306, 540, 70, "tests on both streams, thinking on", "peers + tilt · peers · alone · swapped tilt"))
+    s.append(box(620, 306, 540, 70, "tests on both streams, thinking off", "peers + tilt · peers · alone · swapped tilt"))
     s.append(arrow(980, 236, 150, 306)); s.append(arrow(280, 341, 320, 341)); s.append(arrow(450, 306, 1055, 96, "darrow thin")); s.append(arrow(580, 341, 620, 341))
     s.append('<text x="590" y="412" text-anchor="middle" class="dsub">softmax(s + b) = Norm(A ⊙ c), c_i = (p_i / max p)^γ: the favourite peer is untouched, the others are damped; γ = 0 is the base model</text>')
     s.append("</svg>")
@@ -174,32 +175,14 @@ def main() -> None:
         check_html = "<p class='pend'>kernel check pending</p>"
     # ---- results: base model and arms, thinking on
     head = ["model", "training"] + [f"{sl} · {cl}" for _, sl in STREAMS for _, cl in CONDS]
-    res = [row(head, True)]
-    cells = ["Qwen3-4B, frozen", "—"]
-    for s, _ in STREAMS:
-        for c, _ in CONDS:
-            v = eval_acc(ROOT / f"outputs/gen/q3_4b/base6_think/{s}6_{c}")
-            cells.append(f1(v, 2) if v is not None else "<span class='pend'>pending</span>")
-    res.append(row(cells))
     curves = {}
-    for exp, desc, role in ARMS:
-        steps, pts = val_curve(exp)
-        curves[exp] = pts
-        status = f"{steps} / {PILOT_STEPS} steps" if steps else "<span class='pend'>queued</span>"
-        cells = [f"{desc} <span class='sub'>({role})</span>", status]
-        ck = last_ck(exp)
-        for s, _ in STREAMS:
-            for c, _ in CONDS:
-                v = eval_acc(ck / f"eval_{s}6_{c}") if ck else None
-                cells.append(f1(v, 2) if v is not None else "<span class='pend'>pending</span>")
-        res.append(row(cells))
     def results_table(arms, base_dir, steps_total):
         rows_ = [row(head, True)]
         cells_ = ["Qwen3-4B, frozen", "—"]
         for s_, _ in STREAMS:
             for c_, _ in CONDS:
                 v_ = eval_acc(ROOT / f"outputs/gen/q3_4b/{base_dir}/{s_}6_{c_}")
-                cells_.append(f1(v_, 2) if v_ is not None else "<span class='pend'>pending</span>")
+                cells_.append(f1(v_, 2) if v_ is not None else ("<span class='sub'>not run</span>" if (base_dir, c_) in NOT_RUN else "<span class='pend'>pending</span>"))
         rows_.append(row(cells_))
         for exp_, desc_, role_ in arms:
             steps_, pts_ = val_curve(exp_)
@@ -210,11 +193,27 @@ def main() -> None:
             for s_, _ in STREAMS:
                 for c_, _ in CONDS:
                     v_ = eval_acc(ck_ / f"eval_{s_}6_{c_}") if ck_ else None
-                    cells_.append(f1(v_, 2) if v_ is not None else "<span class='pend'>pending</span>")
+                    cells_.append(f1(v_, 2) if v_ is not None else ("<span class='sub'>not run</span>" if (exp_, "*") in NOT_RUN else "<span class='pend'>pending</span>"))
             rows_.append(row(cells_))
         return rows_
-    res_nothink = results_table(ARMS_NOTHINK, "base6_nothink", 277)
-    curve_txt = "; ".join(f"{exp}: " + ", ".join(f"step {s} → {v:.1f}" for s, v in pts) for exp, pts in curves.items() if pts)
+
+    def cell(v):
+        return f1(v, 1) if v is not None else "<span class='pend'>pending</span>"
+
+    def comp_rows(label, base_dir=None, exp=None, conds=(("tilt", "peers + memory"), ("peers", "peers, no memory"), ("solo", "question only"))):
+        out = []
+        ck = last_ck(exp) if exp else None
+        for c, cl in conds:
+            vals = []
+            for s_, _ in STREAMS:
+                d = (ROOT / f"outputs/gen/q3_4b/{base_dir}/{s_}6_{c}") if base_dir else ((ck / f"eval_{s_}6_{c}") if ck else None)
+                vals.append(eval_acc(d) if d else None)
+            out.append(row([label if not out else "", cl] + [cell(v) for v in vals]))
+        return out
+    comp = [row(["model", "input", "in-dist (4,319)", "OOD (every 4th, 4,351)"], True)]
+    comp += comp_rows("Base central model, not trained", base_dir="base6_nothink", conds=(("tilt", "peers + memory (training-free)"), ("peers", "question + peers"), ("solo", "question only")))
+    comp += comp_rows("Ours: trained under the memory tilt (run 3b, step 276)", exp="run3b_tilt")
+    comp += comp_rows("Control: trained on question + peers, no memory", exp="ctrl3b_peers")
     repro = html.escape(REPRO)
     page = f'''<title>Six-Peer Training Pipeline</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
@@ -255,34 +254,24 @@ def main() -> None:
 </section>
 
 <section>
-<h2>Pilot regime</h2>
+<h2>Training regime</h2>
 <ul>
-<li><b>Data.</b> Every 7th event of the six-peer training stream (2,530 events spread over the whole stream, so the record has evidence throughout), the peers in the prompt for 75% of the events and the question alone for 25%; labels only after the answer.</li>
-<li><b>Group of 8, thinking on.</b> Eight sampled answers per event under the same prompt and the same tilt, 4,096-token budget, verifier reward, GRPO with clip 0.2, learning rate 1e-6, KL 0.001 to the frozen (tilted) model, full parameters, {PILOT_STEPS} steps of 64 events, eight GPUs.</li>
-<li><b>Two arms.</b> The method (tilt γ = 3 in rollouts, log-probs and the update) and the control (same data and prompt, no tilt). The control isolates what the tilt adds beyond learning to read peers.</li>
+<li><b>Data.</b> The whole six-peer training stream (17,701 events after the prompt-length filter), the six peer answers in the prompt for 75% of the events and the question alone for 25%; labels only after the answer; shuffled batches (the record is order-free, so each prompt's tilt still comes from its own read-before-write prefix).</li>
+<li><b>Group of 8, thinking off.</b> Eight sampled answers per event under the same prompt and the same tilt, 768-token budget, verifier reward, GRPO with clip 0.2, learning rate 1e-6, KL 0.01 to the reference, full parameters, 64 events per step, eight GPUs, about 100 s per step.</li>
+<li><b>Schedule.</b> 40 steps from the frozen model, then the full epoch (277 steps) restarted from that checkpoint with the reference reset to it and a new shuffle seed. Validation every 20 steps on 512 held-out in-distribution events, checkpoints every 40.</li>
+<li><b>Ours vs the control.</b> Ours trains with the tilt (γ = 3) in rollouts, log-probs and the update; the control follows the identical schedule with the same prompts and no memory anywhere.</li>
 </ul>
-<div class="callout"><b>Run 2 (after the pilot).</b> Same data and mechanism; KL coefficient 0.01 instead of 0.001 (both pilot arms drifted to a KL of 0.03 to 0.19 after step 18 and the tilt arm's validation peak at steps 20 to 30 did not survive to the saved step), checkpoints every 10 steps with selection by validation, validation every 20 steps, and the trainer's padded forward trimmed to each micro-batch's real tokens (about 4.5 times faster on the update, same log-probs to bf16 noise).</div>
-<div class="callout"><b>Why a pilot.</b> A full epoch costs about 11 hours per arm; the pilot answers in a few hours whether training under the tilt moves the deployed accuracy, before any longer run.</div>
 </section>
 
 <section>
 <h2>Evaluation protocol</h2>
-<p>Each checkpoint is evaluated on the six-peer test streams (in-distribution 4,319 events; OOD 17,403 events, all tasks unseen in training), thinking on, greedy, whole streams, in four conditions: peers + tilt (the deployed setting), peers without the tilt, alone, and peers + the swapped tilt (record permuted by rank, the highest estimate on the least trusted peer). The frozen model is evaluated under the same conditions as the reference row.</p>
-<ul>
-<li><b>Value of the tilt at test time</b> = peers + tilt − peers without the tilt, for the same model.</li>
-<li><b>Value of training under the tilt</b> = the tilt arm − the control arm, under peers + tilt.</li>
-<li><b>Direction matters</b> = peers + tilt − peers + swapped tilt.</li>
-<li><b>Own ability</b> = alone accuracy against the frozen model.</li>
-</ul>
+<p>The final checkpoint of each run and the frozen model are evaluated on the two test streams, thinking off, greedy, in three input settings: the question with the six peer answers and the memory's tilt (deployed), the same prompt without the tilt, and the question alone. The record used at test time is built along the test stream, read before write, exactly as in training.</p>
 </section>
 
 <section>
-<h2>Status and results</h2>
-<div class="tbl"><table>{''.join(res)}</table></div>
-<p class="sub">Accuracy in percent, thinking on: in-distribution whole stream (4,319 events), OOD every 4th event (4,351). Frozen model from <code>outputs/gen/q3_4b/base6_think/</code>; arms from <code>outputs/rl/&lt;arm&gt;/hf/global_step_*/eval_*/</code>. {('Validation along training (512 in-distribution events, peers prompt, greedy): ' + curve_txt) if curve_txt else ''}</p>
-<h3>Thinking off (run 3)</h3>
-<div class="tbl"><table>{''.join(res_nothink)}</table></div>
-<p class="sub">Same streams and conditions with thinking off and 768-token answers; frozen model from <code>outputs/gen/q3_4b/base6_nothink/</code>. With thinking on, three quarters of the code answers ran out of the 4,096-token budget while still thinking; thinking off lets the code answers finish and makes a step about 1.5 minutes.</p>
+<h2>Results</h2>
+<div class="tbl"><table>{''.join(comp)}</table></div>
+<p class="sub">Accuracy in percent, thinking off, 768-token answers, greedy decoding with vLLM. In-distribution: the whole six-peer test stream (4,319 events: GSM8K, SQuAD, APPS). OOD: every 4th event of the OOD stream (4,351 events: yes/no, multiple-choice and short-answer questions never seen in training). "Peers + memory" is the deployed setting: the six peer answers in the prompt and the record's tilt on the attention. The base rows are the frozen Qwen3-4B. The control is trained with exactly the same schedule, data and settings as ours but never sees the memory.</p>
 </section>
 
 <section>
@@ -292,7 +281,7 @@ def main() -> None:
 </div>
 '''
     OUT.write_text(page)
-    print(f"wrote {OUT} ({len(page)} bytes); record rows {len(rrow) - 1}, check {'yes' if chk else 'no'}, arms {[(e, len(curves[e])) for e, _, _ in ARMS]}")
+    print(f"wrote {OUT} ({len(page)} bytes); record rows {len(rrow) - 1}, check {'yes' if chk else 'no'}, pending cells {page.count('pending')}")
 
 
 if __name__ == "__main__":
