@@ -833,3 +833,23 @@ in-dist (ours +1.7, control +3.0) and loses 1.4 from them on OOD; deployed it re
 the peer-trained arms. (3) The tilt is read by a model that never saw a peer in training: +0.4 in-dist, +3.5 OOD over the same
 prompt; the swapped record costs 3.5 / 7.2. The method was renamed from "Kalman record" to "Bayesian linear record" on
 2026-09-08 (the write is the Kalman measurement update of a static state, i.e. RLS; "Kalman" is kept for the gain only).
+
+### 21.4 Numerical stability of the record's covariance (2026-09-09)
+
+With rho = 1 the record keeps P = Lambda^{-1} explicitly and updates it by the Sherman-Morrison short
+form `P <- P - k x^T P`, which is symmetric only at the exact gain, so asymmetry could in principle
+accumulate over the ~106,000 rank-one writes of one pass over the six-peer stream. Measured
+(`scripts/check_kalman_numerics.py`, D = 1793, float64, against the Joseph form and against
+Lambda inverted exactly at checkpoints):
+
+| writes  | asymmetry | min eigenvalue | rel. err. of P | rel. err. of m |
+|---------|-----------|----------------|----------------|----------------|
+| 20,000  | 7.2e-16   | 4.10e-06       | 2.5e-14        | 3.0e-14        |
+| 60,000  | 6.7e-16   | 1.39e-06       | 4.8e-14        | 5.2e-14        |
+| 106,254 | 6.3e-16   | 7.86e-07       | 6.3e-14        | 6.9e-14        |
+
+Asymmetry stays at machine epsilon and drifts slightly DOWN, not up; the state stays positive
+definite; the error against the exact inverse grows sublinearly and reaches only 1e-13 after a full
+pass. The Joseph form agrees to two digits and buys nothing. No change to the implementation is
+needed, and no re-symmetrisation is required. The shrinking smallest eigenvalue is the record
+accumulating evidence, not a numerical defect.
