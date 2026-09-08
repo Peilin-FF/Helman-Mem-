@@ -27,18 +27,23 @@ from feedback_state.tasks import (
     task_type_of,
 )
 
+# reminder against over-long reasoning (thinking mode): part of every central-model system prompt
+BRIEF = "Do not reason more than the question needs: think briefly, then give the final answer."
+
 SYSTEM = (
     "You are the central model of a multi-agent system. Several peer models answered the same question. "
     "A reliability memory has tracked, from verified feedback on earlier questions, how often each peer was "
     "correct on similar questions; its estimate for each peer answer is given together with the number of "
     "similar past cases it rests on and the peer's verified record on this kind of task. Treat the peer answers "
-    "as evidence weighted by their reliability, verify them yourself, and produce your own final answer."
+    "as evidence weighted by their reliability, verify them yourself, and produce your own final answer. "
+    + BRIEF
 )
 SYSTEM_PEERS = (
     "You are the central model of a multi-agent system. Several peer models answered the same question. "
-    "Treat their answers as evidence, verify them yourself, and produce your own final answer."
+    "Treat their answers as evidence, verify them yourself, and produce your own final answer. "
+    + BRIEF
 )
-SYSTEM_SOLO = "Answer the question."
+SYSTEM_SOLO = "Answer the question. " + BRIEF
 
 INSTRUCTIONS = {
     "math": "Solve the problem. Reason briefly, then end with a line of the form 'Final answer: <number>'.",
