@@ -3,10 +3,10 @@
 # reference reset and seed 2); then the four test conditions with thinking on for this model and the frozen model
 set -u
 [ -d training ] || cd /mnt/data/peilin/sigma-mem
-export PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 VLLM_ENABLE_V1_MULTIPROCESSING=0
+export PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 VLLM_ENABLE_V1_MULTIPROCESSING=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # 12.8k-token sequences: logits [1, 12.8k, 152k] in fp32 are 7.8 GB, so one sequence per micro-batch
 D=outputs/rl/data/q3_4b_6peer; P=outputs/gen/q3_4b; B=outputs/gen/q3_4b/base6_think8k; L=logs; mkdir -p $L $B
 RESP=8192
-COMMON="data.max_prompt_length=4608 data.enable_thinking=True data.max_response_length=$RESP actor_rollout_ref.rollout.n=8 actor_rollout_ref.actor.use_dynamic_bsz=False actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 actor_rollout_ref.actor.use_kl_loss=True actor_rollout_ref.actor.kl_loss_coef=0.01 memory.guided_rollouts=0 trainer.save_freq=40 trainer.test_freq=20 trainer.total_epochs=1 trainer.resume_mode=disable data.shuffle=True"
+COMMON="data.max_prompt_length=4608 data.enable_thinking=True data.max_response_length=$RESP actor_rollout_ref.rollout.n=8 actor_rollout_ref.actor.use_dynamic_bsz=False actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 actor_rollout_ref.actor.use_kl_loss=True actor_rollout_ref.actor.kl_loss_coef=0.01 memory.guided_rollouts=0 trainer.save_freq=40 trainer.test_freq=20 trainer.total_epochs=1 trainer.resume_mode=disable data.shuffle=True"
 TILT="data.attn_gamma=3.0 actor_rollout_ref.model.attn_bias=True actor_rollout_ref.rollout.attn_bias=True actor_rollout_ref.model.use_remove_padding=False actor_rollout_ref.model.attn_implementation=sdpa"
 EV="python -m tests.experiments.common.evaluate_memory_generator --central_model /mnt/data/peilin/HF_MODEL/Qwen3-4B --engine vllm --gpu_memory_utilization 0.85 --thinking on --max_new_tokens $RESP"
 last_ck () { ls -d outputs/rl/$1/hf/global_step_* | awk -F_ '{print $NF, $0}' | sort -n | tail -1 | cut -d" " -f2; }
@@ -40,7 +40,7 @@ CK0=outputs/rl/think_tilt/hf/global_step_40; ls $CK0/config.json
 echo "=== think phase 2 (from step 40, seed 2, full epoch) on GPUs 0-7: $(date)"
 GPUS=0,1,2,3,4,5,6,7 EXP=thinkb_tilt MODEL=$CK0 TRAIN=$D/full_think.parquet VAL=$D/val_think.parquet bash training/scripts/train_grpo.sh $COMMON $TILT +data.seed=2 > $L/thinkb_tilt.train.out 2>&1
 echo "=== phase 2 finished (exit $?): $(date)"
-CK=$(last_ck thinkb_tilt); echo "think checkpoint $CK"
+CK=$(last_ck thinkb_tilt); echo "think checkpoint $CK"; [ -n "$CK" ] || { echo "no checkpoint: abort"; exit 1; }
 echo "=== tests: thinking-mode arm: $(date)"; tests $CK
 echo "=== tests: frozen model, thinking on, 8k, reminder prompts: $(date)"; tests base
 for f in $CK/eval_*/eval_metrics.json $B/*/eval_metrics.json; do python -c "import json; m=json.load(open('$f')); print('$f'.replace('/eval_metrics.json',''), round(100*m['accuracy'],2), {k: round(100*v,1) for k,v in m['by_task'].items()})"; done
