@@ -60,8 +60,11 @@ class MassProbe:
         self.out_post = np.zeros((n_layers, 0))
         self.total_last = np.zeros(n_layers)
         self.total_post = np.zeros(n_layers)
+        self.keep_rows = False                      # token-resolution dump of the last query row, per layer
+        self.rows: list = []
 
     def reset(self, spans, q_last, q_post):
+        self.rows = [None] * self.n_layers
         self.spans, self.q_last, self.q_post = spans, q_last, q_post
         P = len(spans)
         self.out_last = np.zeros((self.n_layers, P)); self.out_post = np.zeros((self.n_layers, P))
@@ -74,6 +77,8 @@ class MassProbe:
                 raise RuntimeError("attention weights not returned: the model must run with attn_implementation='eager'")
             w = w[0].float()                                  # [H, Q, K]
             last = w[:, self.q_last, :].mean(0)               # [K]
+            if self.keep_rows:
+                self.rows[layer_idx] = last.cpu().numpy().tolist()
             a, b = self.q_post
             post = w[:, a:b, :].mean(0).mean(0) if b > a else last
             for p, (s, e) in enumerate(self.spans):
@@ -107,6 +112,7 @@ def main() -> None:
     ap.add_argument("--flat", type=float, default=0.1)
     ap.add_argument("--out", default="outputs/address/attention_mass")
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--dump_ids", default="", help="comma-separated prompt ids to dump at token resolution (always included)")
     args = ap.parse_args()
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -118,7 +124,9 @@ def main() -> None:
     cand = [r for r in rows if (max(r["memory_prob"]) - min(r["memory_prob"])) > args.flat
             and 0 < sum(int(c) for c in r["peer_correct"]) < len(r["peer_correct"])]
     rng = random.Random(args.seed)
-    sample = rng.sample(cand, min(args.n, len(cand)))
+    dump_ids = {d for d in args.dump_ids.split(",") if d}
+    forced = [r for r in rows if str(r["id"]) in dump_ids]
+    sample = forced + [r for r in rng.sample(cand, min(args.n, len(cand))) if str(r["id"]) not in dump_ids]
     print(f"[{args.name}/{args.stream}] {len(cand)} eligible prompts, {len(sample)} sampled", flush=True)
 
     model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16, attn_implementation="eager",
@@ -155,8 +163,14 @@ def main() -> None:
                     steer.bias = torch.tensor(b, dtype=torch.float32)[None, :]
                 else:
                     steer.bias = None
+                probe.keep_rows = str(r["id"]) in dump_ids
                 probe.reset(tspans, q_last, q_post)
                 model(input_ids=x, use_cache=False)
+                if probe.keep_rows:
+                    Path(args.out).mkdir(parents=True, exist_ok=True)
+                    json.dump({"model": args.name, "stream": args.stream, "id": r["id"], "gamma": g, "spans": tspans,
+                               "probs": probs, "correct": correct, "n_tokens": L, "row_last": probe.rows},
+                              open(Path(args.out) / f"dump_{args.name}_{args.stream}_{str(r['id']).replace(':', '_')}_g{int(g)}.json", "w"))
                 per_gamma[str(g)] = {"last": probe.out_last.tolist(), "post": probe.out_post.tolist(),
                                      "total_last": probe.total_last.tolist(), "total_post": probe.total_post.tolist()}
             results.append({"id": r["id"], "task": r.get("task_type"), "n_tokens": L, "probs": probs, "correct": correct,
