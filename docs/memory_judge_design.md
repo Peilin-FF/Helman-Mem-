@@ -853,3 +853,24 @@ definite; the error against the exact inverse grows sublinearly and reaches only
 pass. The Joseph form agrees to two digits and buys nothing. No change to the implementation is
 needed, and no re-symmetrisation is required. The shrinking smallest eigenvalue is the record
 accumulating evidence, not a numerical defect.
+
+### 21.5 Thinking-mode run, stopped early (2026-09-09 to 2026-09-10)
+
+Tilt arm with Qwen3 thinking ON, 8,192-token answers, prompts rebuilt so every central-model system
+prompt ends with "Do not reason more than the question needs: think briefly, then give the final
+answer." Otherwise identical to run 3/3b (gamma 3, KL 0.01, group of 8, 64 events per step, 8 GPUs);
+one sequence per micro-batch, because at 12.8k tokens the fp32 logits of a micro-batch of four
+exceed 80 GB in the log-prob pass.
+
+Phase 1 (40 steps from the frozen model) worked: validation on the 512 held-out in-distribution
+events rose 69.5 -> 73.6 overall (rag 72.7 -> 79.7, code 29.4 -> 33.6, math flat at 94.4).
+Phase 2 then plateaued for 200 steps -- eleven validations spanning 72.7 to 75.2 with no slope. A
+code spike to 38.7 at step 160 fell back to 34.5 at step 180. Training health was fine throughout
+(reward ~0.78, entropy ~0.23, KL ~0.005, ~590 s/step); truncation at the budget stayed near 5% and
+never trended up, so the reminder plus the doubled budget did solve the pilot's problem of code
+answers exhausting 4,096 tokens while still thinking.
+
+Stopped by the user at phase-2 step 201 without running the end-of-run tests, so this arm has no
+four-condition numbers. Checkpoints at phase-2 steps 40/80/120/160/200 are on disk. The finding that
+carries over is the shape: with thinking on, as with thinking off, essentially all of the gain
+arrives in the first 40 steps and the full epoch adds nothing.
