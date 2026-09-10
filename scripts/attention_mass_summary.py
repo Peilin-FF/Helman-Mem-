@@ -23,13 +23,17 @@ def nanmean(xs) -> float:
     return float(np.mean(xs)) if xs else float("nan")
 
 
-def metrics(res: list[dict], gamma: str, q: str, layer_sel) -> dict:
+def metrics(res: list[dict], gamma: str, q: str, layer_sel, density: bool = False) -> dict:
+    """density=True divides each block's mass by its token count, removing the block-length confound."""
     cr, cc, fav, cshare, pshare, ent, n = [], [], [], [], [], [], 0
     for r in res:
         m = np.asarray(r["mass"][gamma][q])            # [layers, peers]
         tot = np.asarray(r["mass"][gamma]["total_" + q])
         m, tot = m[layer_sel], tot[layer_sel]
         peer = m.mean(0)                                # mean over the chosen layers -> [peers]
+        if density:
+            lens = np.asarray([max(e - s, 1) for s, e in r["spans"]], float)
+            peer = peer / lens
         if peer.sum() <= 0:
             continue
         probs, correct = np.asarray(r["probs"]), np.asarray(r["correct"], float)
@@ -63,7 +67,8 @@ def main() -> None:
     summary = {}
     for stream in streams:
         for q, qname in (("last", "query = last prompt token"), ("post", "query = tokens after the peers")):
-            for lname, lsel in (("all layers", slice(None)), ("late third", None)):
+            for lname, lsel, dens in (("all layers", slice(None), False), ("late third", None, False),
+                                      ("all layers, PER-TOKEN density", slice(None), True)):
                 print(f"\n=== {stream} | {qname} | {lname} ===")
                 print(f"{'model':<14}{'gamma':>6}{'n':>5}{'corr(record)':>15}{'corr(correct)':>15}{'favourite':>11}{'correct share':>15}{'peer share':>12}{'entropy':>9}")
                 for m in order:
@@ -73,7 +78,7 @@ def main() -> None:
                     nl = d["n_layers"]
                     sel = lsel if lsel is not None else slice(2 * nl // 3, nl)
                     for g in d["results"][0]["mass"].keys() if d["results"] else []:
-                        r = metrics(d["results"], g, q, sel)
+                        r = metrics(d["results"], g, q, sel, density=dens)
                         summary[f"{stream}|{q}|{lname}|{m}|gamma{g}"] = r
                         print(f"{m:<14}{float(g):>6.0f}{r['n']:>5}{r['corr_record']:>+10.3f} ±{r['se_corr_record']:.3f}"
                               f"{r['corr_correct']:>+10.3f} ±{r['se_corr_correct']:.3f}{r['favourite']:>11.2f}{r['correct_share']:>15.2f}"

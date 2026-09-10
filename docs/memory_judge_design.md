@@ -948,3 +948,58 @@ more"; it is a better conversion of the same tilt into accuracy.
 So the honest claim is narrow and supported: **training under the tilt measurably changes how the model
 uses the tilt, by about +0.9 points of extra lift where the record is most confident, but it does not
 raise deployed accuracy because it also costs the model some unaided peer-reading ability.**
+
+### 21.8 Attention on the peer blocks: the tilt is read identically by every model (2026-09-11)
+
+Hypothesis tested (the user's): the tilt re-weights the peers' tokens, which could teach the central
+model to tell reliable peers from unreliable ones on its own, and that would be why training under it
+helps. If true, at gamma = 0 the tilt-trained model should attend to the record's favourite (or to the
+correct peers) more than the frozen model or the no-memory control do.
+
+Measurement (`scripts/attention_mass.py`, figures `scripts/attention_mass_plots.py`): one eager
+forward per prompt, a hook per layer reduces the softmaxed weights to the mass on each peer block for
+the last prompt token (the position that emits the first answer token), at gamma 0 and 3, for the four
+thinking-off models, 300 prompts per stream with a non-flat record and disagreeing peers. Block mass
+scales with block length, so the numbers below are per-token densities (the raw-mass table, in
+`outputs/address/attention_mass/summary.json`, has the same model-to-model pattern).
+
+Spearman between the per-token attention on each peer and the record's p_i / the peer's correctness;
+"favourite" = attention on the record's favourite over the mean peer (1 = no preference);
+"correct share" = share of peer attention on correct peers over the fraction of peers that are correct.
+
+| stream | model | gamma | corr(record) | corr(correct) | favourite | correct share |
+|--------|-------|-------|--------------|---------------|-----------|---------------|
+| indist | frozen        | 0 | +0.05 | +0.01 | 1.01 | 1.00 |
+| indist | ours          | 0 | +0.05 | +0.02 | 1.02 | 1.00 |
+| indist | control       | 0 | +0.05 | +0.02 | 1.01 | 1.00 |
+| indist | question-only | 0 | +0.08 | +0.04 | 1.03 | 1.01 |
+| indist | frozen        | 3 | +0.84 | +0.60 | 2.14 | 1.56 |
+| indist | ours          | 3 | +0.86 | +0.62 | 2.12 | 1.56 |
+| indist | control       | 3 | +0.85 | +0.61 | 2.13 | 1.56 |
+| OOD    | frozen        | 0 | +0.10 | +0.09 | 1.04 | 1.03 |
+| OOD    | ours          | 0 | +0.09 | +0.08 | 1.06 | 1.04 |
+| OOD    | control       | 0 | +0.10 | +0.09 | 1.05 | 1.04 |
+| OOD    | frozen        | 3 | +0.79 | +0.52 | 2.19 | 1.60 |
+| OOD    | ours          | 3 | +0.79 | +0.52 | 2.22 | 1.61 |
+| OOD    | control       | 3 | +0.80 | +0.52 | 2.21 | 1.61 |
+
+Standard errors are 0.01-0.03 on the correlations. Findings.
+1. With the tilt off, no model discriminates the peers at all: per token, attention is uniform over the
+   six blocks (favourite 1.01-1.06, correct share 1.00-1.04, correlations at zero), and the four models
+   are identical to within 0.03. Training under the tilt taught the model nothing about which peer to
+   attend to. The hypothesis is refuted at the level of attention allocation.
+2. With the tilt on, the favourite receives 2.1-2.2x the average peer's attention per token, attention
+   correlates +0.8 with the record and +0.5-0.6 with actual correctness, and this is the same for all
+   four models to within 0.02: the tilt is a mechanical, model-independent re-weighting, which is why
+   it works as a test-time channel on every model.
+3. The +0.9 extra lift that training under the tilt gives on high-spread events (21.7) is therefore
+   not an attention-allocation effect at the prompt positions. It must live downstream of attention
+   (how the attended content is resolved) or at the answer positions during decoding, which this
+   measurement does not cover. That is the next thing to measure if the effect matters.
+4. Depth: the preference for the favourite under the tilt is flat across layers (figure B); without
+   the tilt every model attends slightly less to whichever peer the record ranks first in the first
+   third of the stack, an artefact of block length, gone in the per-token view.
+
+Figures in outputs/address/attention_mass/: figA (layers x reliability rank per model and gamma),
+figB (share on the favourite by layer), figC (one event, peers ordered by the record, correctness
+marked), figD (token-resolution map of the last prompt token for one event).
