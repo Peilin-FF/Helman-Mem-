@@ -874,3 +874,31 @@ Stopped by the user at phase-2 step 201 without running the end-of-run tests, so
 four-condition numbers. Checkpoints at phase-2 steps 40/80/120/160/200 are on disk. The finding that
 carries over is the shape: with thinking on, as with thinking off, essentially all of the gain
 arrives in the first 40 steps and the full epoch adds nothing.
+
+### 21.6 Full OOD stream, all four thinking-off models (2026-09-10)
+
+The OOD numbers of 21.2/21.3 used every 4th event (4,351), which also gave the record only a quarter of
+the stream's feedback, since it is built read-before-write along the test stream. Re-run on the whole
+OOD stream (17,403 events; `training/scripts/launchers/launch_oodfull.sh`, 16 evaluations, 8 at a time,
+~13 min per round). Accuracy in percent, standard error about 0.35.
+
+| model | peers + memory | peers | question only | swapped record |
+|-------|----------------|-------|---------------|----------------|
+| Frozen Qwen3-4B        | 74.04 | 69.16 | 67.80 | 64.16 |
+| Ours (tilt arm)        | 75.23 | 72.48 | 70.71 | 66.65 |
+| Control (no memory)    | 75.47 | 73.27 | 72.67 | 67.74 |
+| Question-only arm      | 75.10 | 71.23 | 72.86 | 67.75 |
+
+Findings.
+1. The subsample was representative: every full-stream figure is within 0.7 of its every-4th counterpart.
+   Quadrupling the record's feedback did NOT widen the tilt's advantage (frozen +4.4 -> +4.9, ours
+   +2.7 -> +2.8, control +2.2 -> +2.2, question-only +3.5 -> +3.9). The record saturates early.
+2. The tilt is read by every model, and the swapped record costs 7.4 to 9.9 points everywhere.
+3. The whole OOD effect lives in the short-answer tasks. boolqa and mcqa sit at 83-86 in every condition
+   for every model; shortqa runs from 31.3 (frozen, swapped) to 58.9 (control, deployed).
+4. With n = 17,403 the three trained arms are statistically indistinguishable deployed (75.10, 75.23,
+   75.47; SE of a difference about 0.5), which confirms 21.2 on four times the data: training under the
+   tilt does not beat training without it.
+5. New, and only visible at this sample size: on OOD the memory is worth about four times what the RL
+   training is. The frozen model deployed reaches 74.04 against 75.10-75.47 for the trained arms, so
+   training adds about 1.3 points while the tilt adds 4.9.

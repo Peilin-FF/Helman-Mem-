@@ -191,7 +191,7 @@ def main() -> None:
             status_ = f"{steps_} / {steps_total} steps" if steps_ else "<span class='pend'>queued</span>"
             cells_ = [f"{desc_} <span class='sub'>({role_})</span>", status_]
             ck_ = last_ck(exp_)
-            for s_, _ in STREAMS:
+            for s_ in ("indist", "oodfull"):
                 for c_, _ in CONDS:
                     v_ = eval_acc(ck_ / f"eval_{s_}6_{c_}") if ck_ else None
                     cells_.append(f1(v_, 2) if v_ is not None else ("<span class='sub'>not run</span>" if (exp_, "*") in NOT_RUN else "<span class='pend'>pending</span>"))
@@ -206,12 +206,12 @@ def main() -> None:
         ck = last_ck(exp) if exp else None
         for c, cl in conds:
             vals = []
-            for s_, _ in STREAMS:
+            for s_ in ("indist", "oodfull"):
                 d = (ROOT / f"outputs/gen/q3_4b/{base_dir}/{s_}6_{c}") if base_dir else ((ck / f"eval_{s_}6_{c}") if ck else None)
                 vals.append(eval_acc(d) if d else None)
             out.append(row([label if not out else "", cl] + [cell(v) for v in vals]))
         return out
-    comp = [row(["model", "input", "in-dist (4,319)", "OOD (every 4th, 4,351)"], True)]
+    comp = [row(["model", "input", "in-dist (4,319)", "OOD (all 17,403)"], True)]
     comp += comp_rows("Base central model", base_dir="base6_nothink", conds=(("tilt", "peers + memory"), ("peers", "question + peers"), ("solo", "question only")))
     comp += comp_rows("Ours: trained under the memory tilt", exp="run3b_tilt")
     comp += comp_rows("Control: trained on question + peers, no memory", exp="ctrl3b_peers")
@@ -273,8 +273,8 @@ def main() -> None:
 <section>
 <h2>Results</h2>
 <div class="tbl"><table>{''.join(comp)}</table></div>
-<p class="sub">Accuracy in percent, thinking off, 768-token answers, greedy decoding with vLLM. In-distribution: the whole six-peer test stream (4,319 events: GSM8K, SQuAD, APPS). OOD: every 4th event of the OOD stream (4,351 events: yes/no, multiple-choice and short-answer questions never seen in training). "Peers + memory" is the deployed setting: the six peer answers in the prompt and the record's tilt on the attention. The base rows are the frozen Qwen3-4B. The control is trained with exactly the same schedule, data and settings as ours but never sees the memory; the question-only arm never sees a peer either. Swapped record (peers + memory with the highest estimate on the least trusted peer), in-dist / OOD: frozen 60.2 / 64.7, ours 73.7 / 67.1, control 70.5 / 67.9, question-only arm 69.5 / 67.6.</p>
-<p><b>Reading.</b> The memory is a test-time channel every model reads: over the same prompt it adds +2.2 / +4.4 (in-dist / OOD) on the frozen model, +0.9 / +2.7 on ours, +0.5 / +2.2 on the control and +0.4 / +3.5 on the question-only arm, and the swapped record costs every model 2 to 8 points. Training under the tilt does not beat training without it (75.9 vs 74.9 in-dist, about 1.5 standard errors; 75.0 vs 75.1 OOD). The question-only arm shows that peer prompts in training cost no own ability (71.5 alone, level with the control, below ours at 73.4) and that learning to read peers is worth 2 to 3 points deployed in-dist (73.0 against 75.9 / 74.9); a model that never saw a peer gains only 1 point from six solutions in-dist and loses 1.4 from them on OOD.</p>
+<p class="sub">Accuracy in percent, thinking off, 768-token answers, greedy decoding with vLLM. In-distribution: the whole six-peer test stream (4,319 events: GSM8K, SQuAD, APPS). OOD: the whole OOD stream (17,403 events: yes/no, multiple-choice and short-answer questions never seen in training), so the record accumulates the full stream's feedback rather than a quarter of it. Standard error is about 0.7 in-distribution and 0.35 on OOD. "Peers + memory" is the deployed setting: the six peer answers in the prompt and the record's tilt on the attention. The base rows are the frozen Qwen3-4B. The control is trained with exactly the same schedule, data and settings as ours but never sees the memory; the question-only arm never sees a peer either. Swapped record (peers + memory with the highest estimate on the least trusted peer), in-dist / full OOD: frozen 60.2 / 64.2, ours 73.7 / 66.7, control 70.5 / 67.7, question-only arm 69.5 / 67.8.</p>
+<p><b>Reading.</b> The memory is a test-time channel every model reads: over the same prompt it adds +2.2 / +4.9 (in-dist / OOD) on the frozen model, +0.9 / +2.8 on ours, +0.5 / +2.2 on the control and +0.4 / +3.9 on the question-only arm, and the swapped record costs every model 2 to 10 points. On the full OOD stream the effect is concentrated in the short-answer tasks: yes/no and multiple-choice barely move between conditions (84-86 throughout), while short-answer runs from 31.3 (frozen, swapped record) to 58.9 (control, deployed). On OOD the memory is worth about four times what the RL training is: the frozen model deployed reaches 74.0 against 75.1-75.5 for the three trained arms, so training adds about 1.3 points and the tilt adds 4.9. Training under the tilt does not beat training without it (75.9 vs 74.9 in-dist, about 1.5 standard errors; 75.0 vs 75.1 OOD). The question-only arm shows that peer prompts in training cost no own ability (71.5 alone, level with the control, below ours at 73.4) and that learning to read peers is worth 2 to 3 points deployed in-dist (73.0 against 75.9 / 74.9); a model that never saw a peer gains only 1 point from six solutions in-dist and loses 1.4 from them on OOD.</p>
 </section>
 
 <section>
