@@ -8,7 +8,7 @@ COMMON="data.max_prompt_length=4608 data.enable_thinking=False data.max_response
 EV="python -m tests.experiments.common.evaluate_memory_generator --central_model /mnt/data/peilin/HF_MODEL/Qwen3-4B --engine vllm --gpu_memory_utilization 0.85 --thinking off --max_new_tokens 768"
 last_ck () { ls -d outputs/rl/$1/hf/global_step_* | awk -F_ '{print $NF, $0}' | sort -n | tail -1 | cut -d" " -f2; }
 ev () {
-  local extra=""; [ $3 = ood ] && extra="--every 4"
+  local extra=""   # OOD is tested on the whole stream (17,403 events), never subsampled
   CUDA_VISIBLE_DEVICES=$1 $EV --checkpoint $2 --prompts $P/prompts_${3}6_probe.jsonl --records data/${3}6/test.jsonl --mode $4 $5 $extra --output $2/eval_${3}6_$6 > $L/ev_solo_${3}_$6.out 2>&1
 }
 tests () {

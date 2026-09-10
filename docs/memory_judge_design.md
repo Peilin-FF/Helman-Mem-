@@ -902,3 +902,10 @@ Findings.
 5. New, and only visible at this sample size: on OOD the memory is worth about four times what the RL
    training is. The frozen model deployed reaches 74.04 against 75.10-75.47 for the trained arms, so
    training adds about 1.3 points while the tilt adds 4.9.
+
+**Note (2026-09-10).** The every-4th OOD evaluations that sections 21.1-21.3 quote were deleted at the
+user's request once the full-stream results of 21.6 existed: OOD is now always the whole 17,403-event
+stream. The launchers no longer subsample (`--every 4` removed from launch_run3b.sh, launch_ctrl.sh,
+launch_solo.sh), `scripts/pipeline6_page.py` reads `eval_oodfull6_<cond>`, and its dead every-4th
+results table was removed. The OOD figures in 21.1-21.3 are kept as the historical record of what was
+measured at the time; the numbers to quote are those of 21.6, which differ from them by less than 0.7.

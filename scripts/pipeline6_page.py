@@ -19,13 +19,6 @@ PEERS = [("peer_0", "gemma-3-4b-it", "Google, 4B"), ("peer_1", "Phi-4-mini-instr
          ("peer_3", "Meta-Llama-3.1-8B-Instruct", "Meta, 8B"), ("peer_4", "DeepSeek-Coder-V2-Lite-Instruct", "DeepSeek, 16B MoE (code specialist)"), ("peer_5", "DeepSeek-R1-Distill-Qwen-7B", "DeepSeek, 7B (reasoning; answer after its think block)")]
 TRAIN_ACC = {"gsm8k": [69, 61, 60, 88, 93, 91], "squad": [13, 79, 66, 63, 12, 23], "apps": [29, 9, 16, 20, 30, 22]}
 CONDS = [("tilt", "peers + memory tilt"), ("peers", "peers, no tilt"), ("solo", "alone"), ("tilt_swapped", "peers + swapped tilt")]
-STREAMS = [("indist", "in-dist"), ("ood", "OOD")]
-ARMS = [("pilot_tilt", "trained under the tilt (γ = 3), KL 0.001", "the method"), ("pilot_peers", "trained with peers, no tilt, KL 0.001; its tests were cut short", "control")]
-NOT_RUN = {("pilot_peers", "*"), ("base6_think", "tilt"), ("base6_think", "tilt_swapped")}   # evaluations deliberately not run (stopped to free the GPUs)
-ARMS_NOTHINK = [("run3b_tilt", "trained under the tilt, thinking off, 768-token answers, KL 0.01: 40 steps (run 3), then the full epoch from that checkpoint with a new seed (run 3b)", "the method"),
-                ("ctrl3b_peers", "same schedule and settings, question + six peer answers, no memory anywhere (40 steps, then the full epoch from that checkpoint)", "control"),
-                ("solo3b_q", "same schedule and settings, the question alone in every training prompt, no peers, no memory (40 steps, then the full epoch from that checkpoint)", "question-only arm")]
-PILOT_STEPS = 40
 VAL_WEIGHTS = {"rag": 231, "math": 162, "code": 119}   # the 512 validation events by task
 
 
@@ -92,7 +85,7 @@ def svg_pipeline() -> str:
     s.append(box(800, 166, 360, 70, "central model answers, thinking off", "group of 8 samples; 25% of events question-only"))
     s.append(arrow(1055, 96, 600, 166)); s.append(arrow(320, 201, 360, 201)); s.append(arrow(760, 201, 800, 201))
     s.append('<text x="20" y="292" class="dcol">3 · learning and evaluation</text>')
-    s.append(box(20, 306, 260, 70, "labels after the answer", "verifier reward; GRPO; KL 0.001"))
+    s.append(box(20, 306, 260, 70, "labels after the answer", "verifier reward; GRPO; KL 0.01"))
     s.append(box(320, 306, 260, 70, "record updated", "peers' verified labels of the event"))
     s.append(box(620, 306, 540, 70, "tests on both streams, thinking off", "peers + tilt · peers · alone · swapped tilt"))
     s.append(arrow(980, 236, 150, 306)); s.append(arrow(280, 341, 320, 341)); s.append(arrow(450, 306, 1055, 96, "darrow thin")); s.append(arrow(580, 341, 620, 341))
@@ -174,30 +167,6 @@ def main() -> None:
         check_html = f"<div class='tbl'><table>{''.join(crow)}</table></div><p class='sub'>Mean absolute difference of the log-probability of vLLM's own greedy tokens ({chk['n']} six-peer prompts with a non-flat record, 48 tokens each) when HF eager attention with the mask hook re-scores them with and without the tilt. Equality up to bf16 noise (about 0.01) in the matching condition and a clear gap in the other is the pass criterion; both passes ran in one engine, so the prefix cache was exercised across tilts.</p>"
     else:
         check_html = "<p class='pend'>kernel check pending</p>"
-    # ---- results: base model and arms, thinking on
-    head = ["model", "training"] + [f"{sl} · {cl}" for _, sl in STREAMS for _, cl in CONDS]
-    curves = {}
-    def results_table(arms, base_dir, steps_total):
-        rows_ = [row(head, True)]
-        cells_ = ["Qwen3-4B, frozen", "—"]
-        for s_, _ in STREAMS:
-            for c_, _ in CONDS:
-                v_ = eval_acc(ROOT / f"outputs/gen/q3_4b/{base_dir}/{s_}6_{c_}")
-                cells_.append(f1(v_, 2) if v_ is not None else ("<span class='sub'>not run</span>" if (base_dir, c_) in NOT_RUN else "<span class='pend'>pending</span>"))
-        rows_.append(row(cells_))
-        for exp_, desc_, role_ in arms:
-            steps_, pts_ = val_curve(exp_)
-            curves[exp_] = pts_
-            status_ = f"{steps_} / {steps_total} steps" if steps_ else "<span class='pend'>queued</span>"
-            cells_ = [f"{desc_} <span class='sub'>({role_})</span>", status_]
-            ck_ = last_ck(exp_)
-            for s_ in ("indist", "oodfull"):
-                for c_, _ in CONDS:
-                    v_ = eval_acc(ck_ / f"eval_{s_}6_{c_}") if ck_ else None
-                    cells_.append(f1(v_, 2) if v_ is not None else ("<span class='sub'>not run</span>" if (exp_, "*") in NOT_RUN else "<span class='pend'>pending</span>"))
-            rows_.append(row(cells_))
-        return rows_
-
     def cell(v):
         return f1(v, 1) if v is not None else "<span class='pend'>pending</span>"
 

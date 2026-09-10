@@ -8,7 +8,7 @@ TILT="data.attn_gamma=3.0 actor_rollout_ref.model.attn_bias=True actor_rollout_r
 EV="python -m tests.experiments.common.evaluate_memory_generator --central_model /mnt/data/peilin/HF_MODEL/Qwen3-4B --engine vllm --gpu_memory_utilization 0.85 --thinking off --max_new_tokens 768"
 last_ck () { ls -d outputs/rl/$1/hf/global_step_* | sort -t_ -k3 -n | tail -1; }
 ev () {   # gpu, checkpoint-or-base, stream, mode, extra args, tag
-  local extra=""; [ $3 = ood ] && extra="--every 4"
+  local extra=""   # OOD is tested on the whole stream (17,403 events), never subsampled
   local ckarg=""; local outdir=$B/${3}6_$6; local name=base
   if [ "$2" != base ]; then ckarg="--checkpoint $2"; outdir=$2/eval_${3}6_$6; name=$(basename $(dirname $(dirname $2))); fi
   CUDA_VISIBLE_DEVICES=$1 $EV $ckarg --prompts $P/prompts_${3}6_probe.jsonl --records data/${3}6/test.jsonl --mode $4 $5 $extra --output $outdir > /mnt/data/peilin/ev3b_${name}_${3}_$6.out 2>&1
