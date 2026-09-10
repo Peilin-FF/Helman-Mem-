@@ -909,3 +909,42 @@ stream. The launchers no longer subsample (`--every 4` removed from launch_run3b
 launch_solo.sh), `scripts/pipeline6_page.py` reads `eval_oodfull6_<cond>`, and its dead every-4th
 results table was removed. The OOD figures in 21.1-21.3 are kept as the historical record of what was
 measured at the time; the numbers to quote are those of 21.6, which differ from them by less than 0.7.
+
+### 21.7 A training effect on tilt-conversion, hidden by the aggregate (2026-09-11)
+
+Deployed accuracy says training under the tilt bought nothing (in-dist 75.9 vs the control's 74.9,
+about 1.4 SE; full OOD 75.23 vs 75.47). That comparison mixes events where the record said something
+with events where it said nothing. `scripts/tilt_training_effect.py` separates them.
+
+The tilt is identically zero when the record is flat (spread <= 0.1), so on those events every model
+sees a bit-identical prompt: they are a placebo bin. The quantity of interest is each model's **lift**,
+acc(peers + tilt) - acc(peers, no tilt) on the same events, and then whether ours converts more of the
+same record than the control does. Both differences are paired event by event, so the errors are on the
+per-event difference, not on two independent binomials (an unpaired error is ~7x too wide here).
+
+Full OOD stream, ours minus control, difference of lifts:
+
+| bin (record spread) | n | delta lift | se | |
+|---------------------|---|-----------|----|-|
+| flat, tilt = 0 (placebo) | 1,702  | -0.18 | 0.18 | noise |
+| 0.10 - 0.20              | 3,011  | -0.43 | 0.44 | noise |
+| 0.20 - 0.30              | 2,326  | +0.69 | 0.70 | noise |
+| > 0.30                   | 10,364 | **+0.93** | 0.29 | 3.2 sigma |
+| tilt active (> 0.10)     | 15,701 | +0.63 | 0.24 | 2.6 sigma |
+| all events               | 17,403 | +0.55 | 0.21 | 2.6 sigma |
+
+Reading. (1) The placebo bin is clean: where the tilt is exactly zero the two models differ by nothing.
+(2) The effect grows with the record's spread and is strongest, and individually significant even after
+correcting for the twelve bins tested, exactly where the tilt is largest. (3) The mechanism is visible
+in the components: on spread > 0.30 ours scores 78.1 with the tilt and 74.2 without, the control 78.4
+and 75.3. Ours is *worse* at reading peers unaided and *better* at converting the record. Training under
+the tilt did not make the model better overall, it made it tilt-dependent, and that dependency is what
+the aggregate cancels out. (4) In-distribution the same pattern appears with the same signs (+0.39 on
+tilt-active events, 0.00 on the placebo bin) but the stream is four times smaller and nothing clears
+noise. (5) A separate lean diagnostic (accuracy split by whether the record's favourite peer was in fact
+right) does NOT show ours leaning harder than the control, so this is not simply "ours obeys the memory
+more"; it is a better conversion of the same tilt into accuracy.
+
+So the honest claim is narrow and supported: **training under the tilt measurably changes how the model
+uses the tilt, by about +0.9 points of extra lift where the record is most confident, but it does not
+raise deployed accuracy because it also costs the model some unaided peer-reading ability.**
