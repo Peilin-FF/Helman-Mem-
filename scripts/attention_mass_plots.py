@@ -126,20 +126,27 @@ def fig_c(data, stream, q, out, which: int = 0):
 
 
 def fig_d(dump_files, out):
-    """Token-resolution map from attention_mass.py --dump_ids output."""
+    """Token-resolution map from attention_mass.py --dump_ids output: one row per (model, gamma)."""
     dumps = [json.load(open(f)) for f in dump_files]
     if not dumps:
         return
-    fig, axes = plt.subplots(len(dumps), 1, figsize=(14, 2.4 * len(dumps)), squeeze=False)
-    for ax, d in zip(axes[:, 0], dumps):
+    dumps.sort(key=lambda d: (ORDER.index(d["model"]) if d["model"] in ORDER else 99, d["gamma"]))
+    fig, axes = plt.subplots(len(dumps), 1, figsize=(14, 2.5 * len(dumps)), squeeze=False)
+    vmax = np.percentile(np.concatenate([np.asarray(d["row_last"]).ravel() for d in dumps]), 99.5)
+    for k, (ax, d) in enumerate(zip(axes[:, 0], dumps)):
         rows = np.asarray(d["row_last"])            # [L, K]
-        im = ax.imshow(rows, aspect="auto", cmap="inferno", vmin=0, vmax=np.percentile(rows, 99.5), interpolation="nearest")
-        for k, (s, e) in enumerate(d["spans"]):
+        im = ax.imshow(rows, aspect="auto", cmap="inferno", vmin=0, vmax=vmax, interpolation="nearest")
+        for p, (s, e) in enumerate(d["spans"]):
             ax.axvline(s - 0.5, color="cyan", lw=0.6); ax.axvline(e - 0.5, color="cyan", lw=0.6)
-            ax.text((s + e) / 2, -1.5, f"peer {k+1}\np={d['probs'][k]:.2f} {'✓' if d['correct'][k] else '✗'}", ha="center", va="bottom", fontsize=7, color="black")
-        ax.set_ylabel("layer"); ax.set_title(f"{d['model']}, γ = {d['gamma']:.0f}: attention of the last prompt token over every prompt token", fontsize=9, pad=28)
-    axes[-1, 0].set_xlabel("prompt token")
-    fig.colorbar(im, ax=axes.ravel().tolist(), fraction=0.02, pad=0.01, label="attention")
+            if k == 0:
+                ax.text((s + e) / 2, -2.5, f"peer {p+1}   p = {d['probs'][p]:.2f} {'right' if d['correct'][p] else 'wrong'}",
+                        ha="center", va="bottom", fontsize=8, color="black")
+        ax.set_ylabel(f"{d['model']}\nγ = {d['gamma']:.0f}\n\nlayer", fontsize=9)
+        if k < len(dumps) - 1:
+            ax.set_xticks([])
+    axes[-1, 0].set_xlabel("prompt token (the cyan lines bound the six peer blocks; tokens before them are the system text and question, after them the instruction)")
+    fig.suptitle(f"Attention of the last prompt token over every prompt token, event {dumps[0]['id']} ({dumps[0]['stream']}), all layers", fontsize=11, y=0.995)
+    fig.colorbar(im, ax=axes.ravel().tolist(), fraction=0.02, pad=0.01, label="attention (shared scale, clipped at the 99.5th percentile)")
     fig.savefig(out, dpi=150, bbox_inches="tight"); plt.close(fig)
 
 
