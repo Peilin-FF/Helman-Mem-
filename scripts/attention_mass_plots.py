@@ -27,7 +27,7 @@ ORDER = ["frozen", "ours", "control", "question-only"]
 def load(d: Path) -> dict:
     data = {}
     for f in sorted(glob.glob(str(d / "*_*.json"))):
-        if f.endswith("summary.json"):
+        if f.endswith("summary.json") or Path(f).name.startswith("dump_"):
             continue
         j = json.load(open(f))
         data[(j["model"], j["stream"])] = j
