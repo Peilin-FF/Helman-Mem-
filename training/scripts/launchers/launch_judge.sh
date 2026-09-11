@@ -1,5 +1,5 @@
-# Training the judgement (docs section 22). Same schedule as run 3b on the 4B (40 steps from the frozen model,
-# then the full epoch from that checkpoint with the reference reset and seed 2), 8 GPUs.
+# Training the judgement (docs section 22). One continuous epoch on the 4B (277 steps of 64 events from the frozen
+# model, KL 0.01 to the frozen model throughout; no 40-step phase and no reference reset), 8 GPUs.
 #   A2  method A, gamma = 0: the reply opens with a 'Trust: a > b > ...' ranking of the peers, rewarded
 #       0.5(1 + Spearman) against the record's estimate on non-flat records (lambda 0.5) plus the verifier reward;
 #       the record is a TARGET only (strict distillation; measures how much of it content recovers)
@@ -52,14 +52,12 @@ for f in ['$D/full_peers_evidence.parquet', '$D/val_peers_evidence.parquet']:
     df = pd.read_parquet(f); n = int(df['prompt'].astype(str).str.contains('Evidence \\\\(automatic').sum()); print(f, len(df), 'rows;', n, 'with an evidence block')
 "
 }
-train_arm () {   # name, extra overrides, train parquet, val parquet
-  echo "=== $1 phase 1 (40 steps, seed 1): $(date)"
-  GPUS=0,1,2,3,4,5,6,7 EXP=${1}_p1 TRAIN=$3 VAL=$4 bash training/scripts/train_grpo.sh $COMMON $2 trainer.total_training_steps=40 > $L/${1}_p1.train.out 2>&1
-  echo "=== phase 1 finished (exit $?): $(date)"
-  local CK0=outputs/rl/${1}_p1/hf/global_step_40; ls $CK0/config.json || { echo "no phase-1 checkpoint for $1"; return 1; }
-  echo "=== $1 phase 2 (from step 40, seed 2, full epoch): $(date)"
-  GPUS=0,1,2,3,4,5,6,7 EXP=$1 MODEL=$CK0 TRAIN=$3 VAL=$4 bash training/scripts/train_grpo.sh $COMMON $2 +data.seed=2 > $L/$1.train.out 2>&1
-  echo "=== phase 2 finished (exit $?): $(date)"
+train_arm () {   # name, extra overrides, train parquet, val parquet: ONE continuous epoch (277 steps of 64 events) from the
+                 # frozen model, reference fixed at the frozen model, no restart at step 40 (user, 2026-09-11)
+  echo "=== $1 (one epoch, seed 1): $(date)"
+  GPUS=0,1,2,3,4,5,6,7 EXP=$1 TRAIN=$3 VAL=$4 bash training/scripts/train_grpo.sh $COMMON $2 > $L/$1.train.out 2>&1
+  echo "=== $1 finished (exit $?): $(date)"
+  ls outputs/rl/$1/hf/global_step_*/config.json > /dev/null 2>&1 || { echo "no checkpoint for $1"; return 1; }
 }
 what=${1:-all}
 if [ $what = A2 ] || [ $what = all ]; then
