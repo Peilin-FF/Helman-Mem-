@@ -1003,3 +1003,33 @@ Standard errors are 0.01-0.03 on the correlations. Findings.
 Figures in outputs/address/attention_mass/: figA (layers x reliability rank per model and gamma),
 figB (share on the favourite by layer), figC (one event, peers ordered by the record, correctness
 marked), figD (token-resolution map of the last prompt token for one event).
+
+## 22. Next direction: train the judgement itself (decided 2026-09-11)
+
+What the tilt experiments established (21.2-21.8): the memory is a test-time channel every model
+reads identically; training under it makes the model tilt-dependent (better conversion of the same
+record, worse unaided peer reading, net zero deployed); attention over the peers is uniform for every
+model with the tilt off. Nothing we trained ever built epistemic ability, because nothing we rewarded
+required it: the reward was final correctness, which is attainable while ignoring the peers, and with
+the tilt on the record did the discrimination.
+
+The destination (the user's framing): the model itself possessing the ability to judge, from
+unlabeled evidence, which information is trustworthy and which to discard; small agents with limited
+reasoning but strong epistemics; memory no longer an external harness. Two components with different
+physics must be kept apart:
+  per-event judgement   from the content of this event's answers alone; can be trained into weights;
+  cross-event reputation  "this peer has been right on this kind of question before"; not present in
+                          any single prompt; needs state across events (a matrix, or a fast weight
+                          updated at test time - the record is the closed-form linear case of the
+                          latter). Its value is the 3-5 points OOD the tilt adds on top of any judgement.
+
+Recipes, cheapest first, each with its test:
+  1. Anneal the tilt: gamma 3 -> 0 over the epoch (scheduled teacher forcing against tilt-dependency).
+     One run on the existing pipeline. Test: accuracy at gamma 0 vs the control; attention at gamma 0.
+  2. Reward the judgement: the model emits a per-peer trust verdict before answering; the verdict is
+     rewarded against the verified peer labels we hold, jointly with the answer; no labels at test.
+     Test: AUC of the model's own verdicts on OOD vs the record's 0.92; accuracy at gamma 0.
+     Baseline to compute first: AUC of the frozen judge's stored label-free Yes/No log-odds (margins).
+  3. Distil the record: auxiliary target = the record's p_i predicted from the prompt during training.
+  4. Evidence seeking: tools on the peers' answers (run code, check a step), reward correct verdicts.
+Decision: run 1 after the 8B control finishes; build 2 as the main bet.
