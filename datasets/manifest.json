@@ -1,0 +1,92 @@
+{
+ "version": 3,
+ "date": "2026-09-11",
+ "files": [
+  {
+   "archive": "mixed_train_big6.train.jsonl.gz",
+   "unpacks_to": "data/mixed_train_big6/train.jsonl",
+   "bytes_gz": 27002376,
+   "sha256_gz": "9c47cf0bdaac2dc60aec42a45a143f1f2fd6bd0dc69e02930b34ceb70eb00f5c",
+   "rows": 17709,
+   "sources": {
+    "apps": 1736,
+    "gsm8k": 7473,
+    "squad": 8500
+   },
+   "task_types": {
+    "code": 1736,
+    "math": 7473,
+    "rag": 8500
+   },
+   "peers": {
+    "peer_0": "google/gemma-3-4b-it",
+    "peer_1": "microsoft/Phi-4-mini-instruct",
+    "peer_2": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "peer_3": "meta-llama/Llama-3.1-8B-Instruct",
+    "peer_4": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
+    "peer_5": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+   },
+   "description": "training stream: GSM8K, SQuAD and APPS, six peers (fits the record's addresses)"
+  },
+  {
+   "archive": "indist6.test.jsonl.gz",
+   "unpacks_to": "data/indist6/test.jsonl",
+   "bytes_gz": 94212140,
+   "sha256_gz": "5f75884c25f03352d9d82d54fa420ac06633126baebde0744adfc48525828534",
+   "rows": 4319,
+   "sources": {
+    "apps_test": 1000,
+    "gsm8k_test": 1319,
+    "squad_dev": 2000
+   },
+   "task_types": {
+    "code": 1000,
+    "math": 1319,
+    "rag": 2000
+   },
+   "peers": {
+    "peer_0": "google/gemma-3-4b-it",
+    "peer_1": "microsoft/Phi-4-mini-instruct",
+    "peer_2": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "peer_3": "meta-llama/Llama-3.1-8B-Instruct",
+    "peer_4": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
+    "peer_5": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+   },
+   "description": "in-distribution test stream: GSM8K test, SQuAD dev and APPS test (with the hidden tests), six peers"
+  },
+  {
+   "archive": "ood6.test.jsonl.gz",
+   "unpacks_to": "data/ood6/test.jsonl",
+   "bytes_gz": 5317719,
+   "sha256_gz": "c15430cc450879478cc4c486b969624a6d6a8a6a71aa8d17590839ecd90445c1",
+   "rows": 17403,
+   "sources": {
+    "bbh": 6511,
+    "mmlu": 1531,
+    "openbookqa": 500,
+    "piqa": 1838,
+    "sciq": 1000,
+    "superglue_cb": 56,
+    "superglue_copa": 100,
+    "superglue_multirc": 4848,
+    "superglue_rte": 277,
+    "superglue_wic": 638,
+    "superglue_wsc": 104
+   },
+   "task_types": {
+    "boolqa": 5590,
+    "mcqa": 5302,
+    "shortqa": 6511
+   },
+   "peers": {
+    "peer_0": "google/gemma-3-4b-it",
+    "peer_1": "microsoft/Phi-4-mini-instruct",
+    "peer_2": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "peer_3": "meta-llama/Llama-3.1-8B-Instruct",
+    "peer_4": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
+    "peer_5": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+   },
+   "description": "OOD test stream: PIQA, MMLU, OpenBookQA, SciQ, BBH and SuperGLUE, six peers"
+  }
+ ]
+}

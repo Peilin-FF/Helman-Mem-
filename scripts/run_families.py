@@ -95,8 +95,12 @@ def main() -> None:
     L = Path("logs"); L.mkdir(exist_ok=True)
     print(f"[{stamp()}] {what}: models {models}, steps {steps}, GPUs {gpus}, streams train={train} test={tests}", flush=True)
 
+    root = Path(cfg.get("models_root", "."))
     for base in models:
-        path = cfg["models"][base]
+        path = Path(cfg["models"][base])
+        path = path if path.is_absolute() else root / path
+        if not (path / "config.json").exists():
+            sys.exit(f"model directory {path} has no config.json (models_root / models in the YAML)")
         tag = base + (suffix if args.smoke else "")
         print(f"===== {tag}: {path}  {stamp()}", flush=True)
         if "features" in steps:

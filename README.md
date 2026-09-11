@@ -25,6 +25,7 @@ This repository contains the official implementation, training and evaluation co
 
 
 ## 📰 News
+- **[2026.09.11]**: 📦 Dataset version 3: the six-peer streams behind the reliability-memory experiments (`mixed_train_big6`, `indist6`, `ood6`) are in this repository under [`datasets/`](datasets/README.md) (`bash datasets/unpack.sh`).
 - **[2026.08.01]**: 🤗 We are excited to release the Sigma-Mem dataset. Check it out on [Hugging Face](https://huggingface.co/datasets/Sssunset/Sigma-Mem-Data).
 - **[2025.08.01]**: 🤗 We are excited to release the Sigma-Mem trained parameters. Check them out on [Hugging Face](https://huggingface.co/Sssunset/Sigma-Mem).
 - **[2025.9.27]**: 🔥 We have released **Σ-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems**. Check out the [paper](https://arxiv.org/pdf/2607.27958).
@@ -173,6 +174,9 @@ counterfactual groups, the event number below applies to each of the four CF str
 | `counterfactual_4peer` | 2,685 | 4 | CF streams extended with Llama-3.2-3B-Instruct |
 | `counterfactual_5peer` | 2,685 | 5 | CF streams further extended with BitCPM-CANN-3B |
 | `ood` | 17,403 | 3 | OOD evaluation stream over six benchmarks |
+| `mixed_train_big6` | 17,709 | 6 | Six-peer training stream from GSM8K, SQuAD, and APPS (version 3, in `datasets/`) |
+| `indist6` | 4,319 | 6 | Six-peer in-distribution test stream: GSM8K test, SQuAD dev, APPS test (version 3, in `datasets/`) |
+| `ood6` | 17,403 | 6 | Six-peer OOD stream over the same six benchmarks (version 3, in `datasets/`) |
 
 After downloading, the files used by the default configs and evaluation commands are:
 
@@ -184,6 +188,13 @@ data/
   counterfactual_5peer/cf_{0,50,70,90}.jsonl
   ood/test.jsonl
 ```
+
+The six-peer streams (version 3, 2026-09) ship in this repository: `bash datasets/unpack.sh` restores
+`data/mixed_train_big6/train.jsonl`, `data/indist6/test.jsonl` and `data/ood6/test.jsonl` from `datasets/*.jsonl.gz`
+(see `datasets/README.md`). They keep `peer_0`–`peer_2` and add `peer_3` `meta-llama/Llama-3.1-8B-Instruct`,
+`peer_4` `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` and `peer_5` `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B`
+(the answer after its think block). They are the data behind `docs/memory_judge_design.md` sections 19–23 and
+`README_families.md`; the record is run along `indist6` and `ood6` read-before-write, `mixed_train_big6` fits the addresses.
 
 ## 🚀 Evaluation
 

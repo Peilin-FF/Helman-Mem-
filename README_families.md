@@ -11,7 +11,21 @@ python scripts/families_table.py     # the result table (also written to outputs
 Start with `bash run_families.sh --smoke --models llama31` (4 minutes, 48 events, every step) to see the pipeline run
 before spending GPU-hours. All parameters live in `training/configs/families.yaml`; `--models`, `--steps`, `--gpus`
 override it for one run. Long runs: `nohup bash run_families.sh > logs/run_families.out 2>&1 &` (or tmux).
-The script must run on the server as an account that can read `/mnt/data/peilin` (models, streams, conda env `sigma`).
+
+## Setup on your own machine
+
+```bash
+git clone https://github.com/Peilin-FF/Helman-Mem-.git sigma-mem && cd sigma-mem
+conda create -n sigma python=3.12 && conda activate sigma
+pip install -r requirements_qwen3.txt          # torch 2.6.0 (CUDA 12.4), transformers 4.56.2, vLLM 0.8.5 (exact: the memory's attention
+                                               # kernels are patched from vLLM 0.8.5's source); requirements_families_freeze.txt is the exact env
+bash datasets/unpack.sh                        # the six-peer streams ship in the repo (datasets/*.jsonl.gz) -> data/
+```
+
+Then point `models_root` in `training/configs/families.yaml` at the directory that holds the downloaded models
+(`Meta-Llama-3.1-8B-Instruct`, `Ministral-8B-Instruct-2410`, `Qwen2.5-7B-Instruct`, `phi-4`, one sub-directory each;
+or write absolute paths per model), run the smoke command above, then `bash run_families.sh`. Eight A100-80GB (or
+similar) GPUs; the driver uses every GPU listed under `gpus`. `SIGMA_ENV=<name>` if the conda env is not called `sigma`.
 
 ## The pipeline
 
