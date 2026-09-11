@@ -159,7 +159,7 @@ class SigmaRewardManager:
                 agree = verdict_agreement(vrank, vprobs) if active else 0.0
                 reward += self.verdict_lambda * agree if active else 0.0
                 extra["verdict_active"].append(float(active)); extra["verdict_parsed"].append(float(vrank is not None))
-                extra["verdict_agreement"].append(float(agree) if active else float("nan"))
+                extra["verdict_agreement"].append(float(agree))   # 0 on flat records, so the mean stays a number
             reward_tensor[i, max(length - 1, 0)] = reward
             if printed[source] < self.num_examine:
                 printed[source] += 1
