@@ -27,7 +27,7 @@ from transformers import AutoTokenizer
 from feedback_state.data import JsonlDataset
 from feedback_state.verdict import add_verdict_instruction, parse_verdict, strip_verdict
 from feedback_state.lora import apply_lora, load_lora_state_dict, set_lora_active
-from feedback_state.memory_generator import grade, render_prompt
+from feedback_state.memory_generator import grade, has_chat_template, render_prompt
 
 
 def parse_args():
@@ -84,6 +84,12 @@ def main() -> None:
     if args.verdict and args.mode != "solo":
         messages = [add_verdict_instruction(m) for m in messages]
     prompts = [render_prompt(tok, m, thinking=args.thinking == "on") for m in messages]
+    # the central model can be any causal LM: the record lives in the prompt files (memory_prob per peer, built from the
+    # frozen Qwen3-4B judge) and the tilt only needs the peer blocks' token positions under this model's own tokenizer
+    n_tok = [len(tok(p, add_special_tokens=False)["input_ids"]) for p in prompts[: min(len(prompts), 200)]]
+    print(f"[gen-eval] central model {args.central_model}: {type(tok).__name__}, "
+          f"{'chat template' if has_chat_template(tok) else 'NO chat template -> plain layout (base model)'}, "
+          f"bos={tok.bos_token!r} eos={tok.eos_token!r}; prompt tokens (first {len(n_tok)}): min {min(n_tok)} median {int(np.median(n_tok))} max {max(n_tok)}", flush=True)
     ids_list = biases = None
     if args.attn_gamma > 0:   # the tilt: per prompt, the token positions of each peer block and its additive score
         from feedback_state.attn_bias import prompt_token_bias
@@ -107,7 +113,7 @@ def main() -> None:
     if args.engine == "vllm":
         if args.checkpoint is not None and hf_dir is None:
             raise SystemExit("--engine vllm needs a plain HF checkpoint directory (or no checkpoint for the frozen model); LoRA payloads need --engine hf")
-        outputs = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args, ids_list=ids_list, biases=biases)
+        outputs = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args, tok, ids_list=ids_list, biases=biases)
         print(f"[gen-eval] vllm decoded {len(prompts)} prompts ({time.time() - t0:.0f}s)", flush=True)
         write_results(args, rows, records, outputs, t0)
         return
@@ -150,9 +156,15 @@ def main() -> None:
     write_results(args, rows, records, outputs, t0)
 
 
-def generate_vllm(model_path: str, prompts: list[str], args, ids_list=None, biases=None) -> list[str]:
+def generate_vllm(model_path: str, prompts: list[str], args, tok, ids_list=None, biases=None) -> list[str]:
     """Greedy decoding of already-rendered prompts with vLLM (same prompts, same stop condition as the HF path).
-    With ``biases`` (one float32 vector per prompt over its tokens ``ids_list``) the attention tilt runs inside the engine."""
+    With ``biases`` (one float32 vector per prompt over its tokens ``ids_list``) the attention tilt runs inside the engine.
+
+    Every condition hands the engine the same token ids, tokenised here without added special tokens: the rendered
+    template already carries BOS where the family uses one (Llama, Mistral), so the engine's own tokenisation would
+    add a second BOS to the untilted conditions only.  Sliding windows are disabled (every model here has a window at
+    least as long as the context we use, so this changes nothing numerically) because the bias kernels are plain causal.
+    """
     import os
 
     os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")   # in-process engine: the parent already holds a CUDA context
@@ -161,13 +173,20 @@ def generate_vllm(model_path: str, prompts: list[str], args, ids_list=None, bias
         from feedback_state import vllm_attn_bias
 
         vllm_attn_bias.install()
+    from transformers import AutoConfig
     from vllm import LLM, SamplingParams
 
-    max_prompt = max(len(p) for p in prompts) // 2 + 64   # rough character->token bound only for max_model_len
+    if ids_list is None:
+        ids_list = [tok(p, add_special_tokens=False)["input_ids"] for p in prompts]
+    longest = max(len(ids) for ids in ids_list)
+    model_max = int(getattr(AutoConfig.from_pretrained(model_path, local_files_only=True), "max_position_embeddings", 32768) or 32768)
+    max_len = min(32768, model_max, max(4096, longest + args.max_new_tokens + 64))
+    if longest + args.max_new_tokens > max_len:
+        print(f"[gen-eval] WARNING: longest prompt {longest} + {args.max_new_tokens} new tokens exceeds the model's context {max_len}", flush=True)
     llm = LLM(model=model_path, tokenizer=args.central_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization,
-              max_model_len=min(32768, max(4096, max_prompt + args.max_new_tokens + 256)), enable_prefix_caching=True, trust_remote_code=False, seed=0)
+              max_model_len=max_len, enable_prefix_caching=True, trust_remote_code=False, seed=0, disable_sliding_window=True)
     params = SamplingParams(temperature=0.0, max_tokens=args.max_new_tokens)
-    inputs = prompts if ids_list is None else [{"prompt_token_ids": ids} for ids in ids_list]
+    inputs = [{"prompt_token_ids": ids} for ids in ids_list]
     if biases is not None:
         for ids, b in zip(ids_list, biases):
             vllm_attn_bias.register(ids, b)

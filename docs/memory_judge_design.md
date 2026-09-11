@@ -1076,3 +1076,42 @@ right despite a mis-written step). In-distribution the evidence covers 83% of pe
 stream almost nothing is checkable label-free (1.3%, BBH arithmetic only), so an evidence arm cannot help
 OOD without new check types (option-consistency for multiple choice, passage checks for MultiRC).
 
+
+## 23. Other central-model families under the same memory (2026-09-11)
+
+Question (user): does the memory help central models other than Qwen3-4B? Models on the server:
+Meta-Llama-3-8B (base), Meta-Llama-3.1-8B-Instruct, Ministral-8B-Instruct-2410, Qwen2.5-7B-Instruct, phi-4 (14B).
+Comparison per model: peers + memory (the tilt, gamma 3) / peers, no memory / question only, on the in-distribution
+stream (4,319) and the WHOLE OOD stream (17,403), thinking off, 768-token answers, greedy, vLLM; the frozen Qwen3-4B
+row (outputs/gen/q3_4b/base6_nothink) is the reference. The swapped record is the optional control (SWAP=1).
+
+What is model-specific and what is not:
+- The record: unchanged. It is built from the frozen Qwen3-4B judge's features and lives in the prompt files as
+  memory_prob per peer (read before write along the stream); nothing is recomputed per central model.
+- The tilt: b_i = gamma log(p_i / max p) added to the pre-softmax score of every query onto peer i's tokens, in every
+  layer and head. softmax(s + b) = Norm(A * c) holds per head for ANY softmax attention (MHA or GQA, RoPE or not,
+  any head count or size), so it applies to all five: Llama-3/3.1 (GQA 32/8, RoPE), Ministral (GQA 32/8, RoPE,
+  sliding window 32k), Qwen2.5 (GQA 28/4), phi-4 (GQA 40/10). Not covered: linear-attention / SSM layers (no
+  softmax, the tilt has no meaning there), ALiBi and iRoPE (the bias kernels assert).
+- The engine patch (feedback_state/vllm_attn_bias.py) is model-agnostic: it works on KV slots inside vLLM's Triton
+  kernels. The only per-model work is locating the peer blocks' token positions under that model's tokenizer and
+  chat template (feedback_state/attn_bias.py: character spans -> offsets -> per-token bias).
+- Sliding window (Ministral, 32k): disabled in the engine (LLM(..., disable_sliding_window=True)), numerically a
+  no-op because our contexts (<= 4k tokens) are shorter than the window; needed because the bias kernels are plain causal.
+- Tokenisation: every condition now hands vLLM the same token ids, tokenised by us with add_special_tokens=False
+  (the rendered template already carries BOS where the family uses one). Before this change the untilted conditions
+  let the engine tokenise the string, which would have given Llama and Mistral a second BOS in those conditions only.
+- A base model without a chat template (Meta-Llama-3-8B) gets a plain layout, BOS + system + user + "Answer:"
+  (memory_generator.render_prompt); expect weak instruction following. The 3.1 Instruct is the meaningful Llama row.
+
+CPU check (scripts/family_prompt_check.py, first 100 in-dist events, gamma 3): every tokenizer finds all six peer
+blocks; tilted-block coverage 99.0-99.1% for all five (Qwen3-4B: 99.1%); 96/100 prompts tilted (record spread > 0.1);
+prompt tokens median 890-960, max 3.8k; BOS first for Llama and Ministral, none for Qwen2.5 / phi-4 (their templates
+carry none). PROMPT_CHECK_OK.
+
+Running it: `GPUS=0,1,2,3 bash training/scripts/launchers/launch_families.sh smoke` (first 96 in-dist events, four
+conditions including swapped, every model, then `scripts/families_table.py --smoke` with the sanity checks: prompts
+tilted, bias backend taken, generations differing tilt vs peers and tilt vs swapped); `... full [tag ...]` (24
+evaluations spread over the given GPUs as per-GPU chains, OOD first; outputs/gen/families/<tag>/full_<stream>6_<cond>/;
+finished ones are skipped on re-run); `python scripts/families_table.py [--by_task]` for the table
+(outputs/gen/families/table.md). GPU smoke test: pending the next GPU window (the judgement job holds the eight GPUs).

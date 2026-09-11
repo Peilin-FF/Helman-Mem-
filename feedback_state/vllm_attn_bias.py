@@ -234,7 +234,8 @@ def _attention_forward(self, layer, query, key, value, kv_cache, attn_metadata, 
     if attn_metadata is None:   # profiling run
         return output
     assert attn_metadata.use_cascade is False
-    assert self.alibi_slopes is None and self.sliding_window[0] <= 0 and not self.use_irope, "bias kernels: plain causal attention only"
+    assert self.alibi_slopes is None and self.sliding_window[0] <= 0 and not self.use_irope, \
+        "bias kernels: plain causal attention only (build the LLM with disable_sliding_window=True for windowed families such as Mistral; ALiBi and iRoPE are not covered)"
     assert "fp8" not in self.kv_cache_dtype, "bias kernels: kv_cache_dtype auto only"
     num_actual_tokens = attn_metadata.num_actual_tokens
     key_cache, value_cache = PagedAttention.split_kv_cache(kv_cache, self.num_kv_heads, self.head_size)

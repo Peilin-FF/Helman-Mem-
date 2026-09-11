@@ -106,8 +106,21 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, p
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
+def has_chat_template(tokenizer) -> bool:
+    return bool(getattr(tokenizer, "chat_template", None))
+
+
 def render_prompt(tokenizer, messages: list[dict], *, thinking: bool = False) -> str:
-    """Chat template with the generation prompt; Qwen3's thinking mode is off unless ``thinking`` is set."""
+    """Chat template with the generation prompt; Qwen3's thinking mode is off unless ``thinking`` is set.
+
+    Other families' templates ignore the ``enable_thinking`` variable.  A tokenizer without a chat template (a base
+    model such as Meta-Llama-3-8B) gets a plain layout: BOS, the system text, the user turn, then ``Answer:``; the
+    peer blocks are the same text, so the tilt's character spans are unchanged.
+    """
+    if not has_chat_template(tokenizer):
+        system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+        user = "\n\n".join(m["content"] for m in messages if m.get("role") == "user")
+        return f"{tokenizer.bos_token or ''}{system}\n\n{user}\n\nAnswer:"
     try:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=bool(thinking))
     except TypeError:
