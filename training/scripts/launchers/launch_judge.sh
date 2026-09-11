@@ -44,6 +44,9 @@ train_arm () {   # name, extra overrides, train parquet, val parquet: ONE contin
   ls outputs/rl/$1/hf/global_step_*/config.json > /dev/null 2>&1 || { echo "no checkpoint for $1"; return 1; }
 }
 what=${1:-all}
+if [ $what = tests ]; then   # tests only, for an arm whose training finished: launch_judge.sh tests judgeA2
+  CK=$(last_ck $2); echo "=== tests: $2 $CK: $(date)"; tests_A $CK $2; echo "=== tests done: $(date)"
+fi
 if [ $what = A2 ] || [ $what = all ]; then
   train_arm judgeA2 "memory.verdict_lambda=0.5" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA2); echo "=== tests: judgeA2 $CK: $(date)"; tests_A $CK judgeA2; }
 fi

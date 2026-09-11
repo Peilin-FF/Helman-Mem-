@@ -6,8 +6,7 @@
 #   tilt          peers + memory: the six peer answers in the prompt and the record's tilt (gamma 3) on the attention
 #   peers         the same prompt, no memory
 #   solo          the question only
-#   tilt_swapped  (SWAP=1, and always in the smoke test) the record permuted by rank: the control that shows the
-#                 direction of the tilt is what is read, not its mere presence
+# (no swapped-record control for the families: user, 2026-09-11)
 # Usage:   GPUS=0,1,2,3 bash training/scripts/launchers/launch_families.sh smoke|full [tag ...]
 #          python scripts/families_table.py [--smoke]     the comparison table, frozen Qwen3-4B as the reference row
 # Tags:    llama3     Meta-Llama-3-8B            BASE model (no chat template: plain prompt layout, weak instruction following)
@@ -15,8 +14,8 @@
 #          ministral  Ministral-8B-Instruct-2410  (sliding window 32k, disabled in the engine: our contexts are shorter)
 #          qwen25     Qwen2.5-7B-Instruct
 #          phi4       phi-4 (14B)
-# smoke:   the first N (96) in-distribution events, four conditions, every model, then the sanity table
-# full:    the whole in-distribution stream (4,319) and the WHOLE OOD stream (17,403), three conditions (+ swapped with SWAP=1)
+# smoke:   the first N (96) in-distribution events, three conditions, every model, then the sanity table
+# full:    the whole in-distribution stream (4,319) and the WHOLE OOD stream (17,403), three conditions
 # Every evaluation is one single-GPU vLLM job; the tasks are spread over $GPUS as parallel per-GPU chains, OOD first
 # (one GPU works too: GPUS=3 runs them one after another). vLLM claims UTIL (default 0.85) of the card at start; on a
 # GPU shared with another process set UTIL=0.35 (16 GB of weights for the 8B models plus KV cache; phi-4 needs 0.5).
@@ -32,9 +31,9 @@ what=${1:-smoke}; shift || true
 models=${*:-llama3 llama31 ministral qwen25 phi4}
 IFS=, read -ra G <<< "${GPUS:-0,1,2,3,4,5,6,7}"
 if [ $what = smoke ]; then
-  streams=indist; conds="tilt peers solo tilt_swapped"; extra_all="--max_examples ${N:-96}"
+  streams=indist; conds="tilt peers solo"; extra_all="--max_examples ${N:-96}"
 else
-  streams="oodfull indist"; conds="tilt peers solo"; [ "${SWAP:-0}" = 1 ] && conds="$conds tilt_swapped"; extra_all=""
+  streams="oodfull indist"; conds="tilt peers solo"; extra_all=""
 fi
 for m in $models; do
   [ -n "${MODEL[$m]:-}" ] || { echo "unknown model tag $m (${!MODEL[*]})"; exit 1; }
@@ -50,7 +49,6 @@ one () {   # gpu, model tag, stream, condition
     tilt)         mode=peers; extra="--attn_gamma 3" ;;
     peers)        mode=peers; extra="" ;;
     solo)         mode=solo;  extra="" ;;
-    tilt_swapped) mode=peers; extra="--attn_gamma 3 --swap_record" ;;
   esac
   local P=outputs/gen/$tag; [ $ADDR = q3_4b ] && P=outputs/gen/q3_4b
   local outdir=$O/$tag/${what}_${st}6_$cond$sfx log=$L/fam_${tag}_${what}_${st}_$cond$sfx.out

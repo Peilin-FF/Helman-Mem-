@@ -1,0 +1,54 @@
+# The memory on other central-model families, each with its OWN memory (README_families.md, docs section 23).
+# Start with:  bash run_families.sh            (reads this file; --models / --steps / --gpus / --smoke override it)
+#
+# Per model: the family's model is the frozen judge whose hidden states address the record (features), the record is
+# run along each test stream read-before-write (prompts), and the same model answers in three conditions (eval):
+# peers + memory (the tilt), peers without the memory, question only. Nothing Qwen is involved.
+
+gpus: [0, 1, 2, 3, 4, 5, 6, 7]     # GPUs the run may use (nvidia-smi first: the box is shared); one task per GPU at a time
+
+models:                            # tag -> HF directory (the tag names the caches and output directories)
+  llama31: /mnt/data/peilin/HF_MODEL/Meta-Llama-3.1-8B-Instruct
+  ministral: /mnt/data/peilin/HF_MODEL/Ministral-8B-Instruct-2410
+  qwen25: /mnt/data/peilin/HF_MODEL/Qwen2.5-7B-Instruct
+  phi4: /mnt/data/peilin/HF_MODEL/phi-4
+  llama3: /mnt/data/peilin/HF_MODEL/Meta-Llama-3-8B     # base model, no chat template: plain prompt layout, weak instruction following
+
+run: [llama31, ministral, qwen25, phi4, llama3]        # the models to run, in this order (one model at a time, all its tasks over the GPUs)
+steps: [features, prompts, eval, table]                # each step skips work already on disk, so a run can be resumed
+
+streams:
+  test: [ood6, indist6]            # evaluated: the WHOLE OOD stream (17,403 events) and the whole in-distribution stream (4,319); longest first
+  fit: train6                      # where the PCA addresses are fit (label-free). train6 = the 17,709-event training stream, encoded only
+                                   # for this purpose (the protocol of the Qwen3-4B rows). "self" fits each test stream on its own features
+                                   # and skips encoding train6 (about 40% less encoding). No training of any model happens anywhere.
+
+features:                          # scripts/encode_context_features.py, the family's model as the frozen judge
+  num_peers: 6
+  max_length: 8192                 # tokens per judge prompt (question + the six answers)
+  dtype: bfloat16
+  progress_every: 500
+
+memory:                            # scripts/build_generation_prompts.py: the Bayesian record along the stream
+  design: qc                       # address = [PCA(question features) | PCA(candidate features) | 1]
+  dim: 256                         # PCA components per part
+  lam: 100.0                       # prior precision
+  order: shuffled0                 # stream order of the test streams (the same order the Qwen3-4B rows used)
+
+evaluation:                        # tests/experiments/common/evaluate_memory_generator.py
+  engine: vllm
+  conditions: [tilt, peers, solo]  # tilt = peers + memory, peers = the same prompt without the memory, solo = question only
+  gamma: 3.0                       # the tilt: gamma * log(p_i / max_j p_j) on peer i's tokens
+  max_new_tokens: 768
+  thinking: "off"
+  gpu_memory_utilization: 0.85     # vLLM's share of the card; 0.35 for an 8B model on a shared GPU, 0.5 for phi-4
+
+outputs:
+  features: outputs/context_features        # <tag>_{big6,indist6,6}_ph/*/shard*.pt
+  prompts: outputs/gen                      # <tag>/prompts_{indist6,ood6}_probe.jsonl and record_{indist6,ood6}.json
+  evals: outputs/gen/families               # <tag>/full_{indist,oodfull}6_{tilt,peers,solo}/eval_metrics.json, table.md
+
+smoke:                             # --smoke: the whole pipeline on a few events under the tag <tag><suffix>, ~4 min per model
+  events: 48
+  dim: 32                          # the PCA cannot have more components than fit events
+  suffix: _smoke

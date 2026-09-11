@@ -7,7 +7,7 @@
 #   eval       launch_families.sh full <tag> (peers + memory / peers / question only, both whole streams)
 # Usage:  GPUS=0,1,2,3 bash training/scripts/launchers/launch_family_memory.sh smoke|features|prompts|eval|all <tag>
 #         tags: llama3 llama31 ministral qwen25 phi4 (feedback_state/feature_streams.py MODELS)
-#         smoke = the whole pipeline on the first 48 events of train6 and indist6 under the tag <tag>_smoke (~10 min on 4 GPUs)
+#         smoke = the whole pipeline on the first 48 events of train6 and indist6 under the tag <tag>_smoke (~4 min on 4 GPUs)
 # Cost (full): each event needs one question pass and six judge prompts that each carry all six answers, so roughly
 # 20k tokens per event on the training and in-distribution streams; expect ~15-20 GPU-hours per 8B family for the three
 # streams (phi-4 about twice that). Shards already on disk are skipped, so a partial run can be resumed.
@@ -38,7 +38,7 @@ encode_stream () {   # stream, number of shards: one shard per GPU, in parallel
 }
 features () {
   if [ $what = smoke ]; then
-    echo "=== features (smoke, $N events of train6 and indist6) on GPUs ${G[0]} ${G[1 % n]}: $(date)"
+    echo "=== features (smoke, ${N:-48} events of train6 and indist6) on GPUs ${G[0]} ${G[1 % n]}: $(date)"
     encode_stream train6 1 & sleep 1; ( CUDA_VISIBLE_DEVICES=${G[1 % n]} python scripts/encode_context_features.py --input ${INPUT[indist6]} \
         --output ${CACHE[indist6]}/shard0.pt --central-model ${MODEL[$base]} --include-context --save-peer-hidden --num-peers 6 \
         --progress-every 10 --num-shards 1 --shard-index 0 $limit > $L/enc_${tag}_indist6_0.out 2>&1 && echo "done indist6 (smoke)" ) &
@@ -48,21 +48,22 @@ features () {
   fi
 }
 prompts () {   # the record along each test stream from the family's own addresses (PCA fit on train6); GPU 0 of the list
-  local O=outputs/gen/$tag; mkdir -p $O
+  local O=outputs/gen/$tag dim=256; mkdir -p $O
+  [ $what = smoke ] && dim=${DIM:-32}   # the PCA cannot have more components than fit events (48 in the smoke)
   for st in indist6 ood6; do
     [ $what = smoke ] && [ $st = ood6 ] && continue
     [ -f $O/prompts_${st}_probe.jsonl ] && { echo "skip prompts $st (exists)"; continue; }
     echo "=== prompts $st: $(date)"
-    CUDA_VISIBLE_DEVICES=${G[0]} python scripts/build_generation_prompts.py --model $tag --fit-stream train6 --stream $st --order shuffled0 \
+    CUDA_VISIBLE_DEVICES=${G[0]} python scripts/build_generation_prompts.py --model $tag --fit-stream train6 --stream $st --order shuffled0 --dim $dim \
         --out $O/prompts_${st}_probe.jsonl > $L/prompts_${tag}_$st.out 2>&1 || { echo "FAILED prompts $st (see $L/prompts_${tag}_$st.out)"; return 1; }
     python scripts/record_quality.py --prompts $O/prompts_${st}_probe.jsonl --out $O/record_${st}.json 2>&1 | grep -v "^$" | head -6
   done
 }
 evaluate () {
-  if [ $what = smoke ]; then   # the four conditions on the smoke prompts, in parallel, results under outputs/gen/families/<tag>_smoke
+  if [ $what = smoke ]; then   # the three conditions on the smoke prompts, in parallel, results under outputs/gen/families/<tag>_smoke
     local P=outputs/gen/$tag O=outputs/gen/families/$tag i=0 mode extra
-    for cond in tilt peers solo tilt_swapped; do
-      case $cond in tilt) mode=peers; extra="--attn_gamma 3";; peers) mode=peers; extra="";; solo) mode=solo; extra="";; tilt_swapped) mode=peers; extra="--attn_gamma 3 --swap_record";; esac
+    for cond in tilt peers solo; do
+      case $cond in tilt) mode=peers; extra="--attn_gamma 3";; peers) mode=peers; extra="";; solo) mode=solo; extra="";; esac
       ( CUDA_VISIBLE_DEVICES=${G[$((i % n))]} python -m tests.experiments.common.evaluate_memory_generator --central_model ${MODEL[$base]} --engine vllm \
           --gpu_memory_utilization ${UTIL:-0.85} --thinking off --max_new_tokens 768 --prompts $P/prompts_indist6_probe.jsonl --records data/indist6/test.jsonl \
           --mode $mode $extra --output $O/smoke_indist6_$cond > $L/fam_${tag}_smoke_indist_$cond.out 2>&1 && echo "done eval $cond" || echo "FAILED eval $cond (see $L/fam_${tag}_smoke_indist_$cond.out)" ) &

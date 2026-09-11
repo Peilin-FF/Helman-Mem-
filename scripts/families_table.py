@@ -6,8 +6,8 @@
 Each family is tested with its OWN memory (the record's address from that family's model; launch_family_memory.sh);
 directories with the suffix _q3addr hold the comparison where the same central model reads the Qwen3-4B-addressed
 record instead.  Reference row: the frozen Qwen3-4B with its own record (outputs/gen/q3_4b/base6_nothink/<stream>6_<cond>/).
-Conditions: tilt = peers + memory, peers = the same prompt without the memory, solo = the question only, tilt_swapped =
-the record permuted by rank.  The record's own quality (AUC against the peers' verified labels, favourite right on mixed
+Conditions: tilt = peers + memory, peers = the same prompt without the memory, solo = the question only (no swapped-record
+control for the families: user, 2026-09-11).  The record's own quality (AUC against the peers' verified labels, favourite right on mixed
 events) comes from outputs/gen/<tag>/record_<stream>.json when scripts/record_quality.py has been run.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 NAMES = {"q3_4b": "Qwen3-4B (frozen)", "llama3": "Meta-Llama-3-8B (base, plain layout)", "llama31": "Meta-Llama-3.1-8B-Instruct",
          "ministral": "Ministral-8B-Instruct-2410", "qwen25": "Qwen2.5-7B-Instruct", "phi4": "phi-4 (14B)"}
-CONDS = ("tilt", "peers", "solo", "tilt_swapped")
+CONDS = ("tilt", "peers", "solo")
 ADDRS = (("", "own record"), ("_q3addr", "Qwen3-4B record"))
 FAM = Path("outputs/gen/families")
 REF = Path("outputs/gen/q3_4b/base6_nothink")
@@ -58,8 +58,8 @@ def metrics(tag: str, what: str, st: str, cond: str, sfx: str) -> dict | None:
 
 
 def full_table(tags: list[str]) -> str:
-    lines = ["| central model · record | own record AUC / fav (in, OOD) | in-dist: peers + memory | peers | question only | swapped | OOD: peers + memory | peers | question only | swapped | tilt − peers (in / OOD) |",
-             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    lines = ["| central model · record | own record AUC / fav (in, OOD) | in-dist: peers + memory | peers | question only | OOD: peers + memory | peers | question only | tilt − peers (in / OOD) |",
+             "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for tag in tags:
         for sfx, _ in ADDRS:
             row = {(st, c): metrics(tag, "full", st, c, sfx) for st in ("indist", "oodfull") for c in CONDS}
@@ -86,16 +86,16 @@ def by_task_table(tags: list[str]) -> str:
                 tasks = sorted({t for m in ms.values() if m for t in m["by_task"]})
                 out.append(f"{name(tag, sfx)}, {st}: " + "; ".join(
                     f"{t}: " + "/".join(f"{100 * ms[c]['by_task'][t]:.1f}" if ms[c] and t in ms[c]["by_task"] else "-" for c in CONDS) for t in tasks)
-                    + "   (tilt/peers/solo/swapped)")
+                    + "   (tilt/peers/solo)")
     return "\n".join(out)
 
 
 def smoke_table(tags: list[str]) -> str:
-    """Per model and record: accuracy in the four conditions on the smoke slice, and the checks that the tilt reached the
-    engine: tilted prompts (from the evaluator's log), the bias (Triton) backend, generations differing tilt vs peers and
-    tilt vs swapped, and the record's quality on the slice when it is the family's own."""
-    lines = ["| model · record | n | tilt | peers | solo | swapped | prompts tilted | bias backend | gens differ tilt vs peers | tilt vs swapped | own record AUC / fav (slice) | tokenizer / template |",
-             "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|"]
+    """Per model and record: accuracy in the three conditions on the smoke slice, and the checks that the tilt reached the
+    engine: tilted prompts (from the evaluator's log), the bias (Triton) backend, generations differing tilt vs peers,
+    and the record's quality on the slice when it is the family's own."""
+    lines = ["| model · record | n | peers + memory | peers | question only | prompts tilted | bias backend | gens differ tilt vs peers | own record AUC / fav (slice) | tokenizer / template |",
+             "|---|---:|---:|---:|---:|---:|---|---:|---|---|"]
     for tag in tags:
         for sfx, _ in ADDRS:
             ms = {c: metrics(tag, "smoke", "indist", c, sfx) for c in CONDS}
@@ -120,8 +120,8 @@ def smoke_table(tags: list[str]) -> str:
                 k = min(len(ga), len(gb))
                 return f"{sum(x != y for x, y in zip(ga[:k], gb[:k]))}/{k}"
             rq = "-" if sfx else record_quality(tag, "indist6")
-            lines.append(f"| {name(tag, sfx)} | {n} | {pct(ms['tilt'])} | {pct(ms['peers'])} | {pct(ms['solo'])} | {pct(ms['tilt_swapped'])} | {tilted} | {backend} | "
-                         f"{differ('tilt', 'peers')} | {differ('tilt', 'tilt_swapped')} | {rq} | {note} |")
+            lines.append(f"| {name(tag, sfx)} | {n} | {pct(ms['tilt'])} | {pct(ms['peers'])} | {pct(ms['solo'])} | {tilted} | {backend} | "
+                         f"{differ('tilt', 'peers')} | {rq} | {note} |")
     return "\n".join(lines)
 
 
