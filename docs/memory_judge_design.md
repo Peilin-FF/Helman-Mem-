@@ -1049,9 +1049,16 @@ correctness, favourite hit rate, Spearman with the record), `launch_judge.sh` (A
 tests incl. peers without the instruction, attention at gamma 0/3). Data: full_peers_verdict.parquet /
 val_peers_verdict.parquet.
 
-Method B stage 0, evidence computed 2026-09-11 (`scripts/evidence_checks.py`, outputs/evidence/*.json;
-label-free: sample I/O from the statement, arithmetic steps re-executed, answer span in the passage).
-Informativeness against the verified labels (never shown to the model):
+Method B stage 0 (label-free evidence lines computed by us and handed over in the prompt: sample I/O from the
+statement run in the sandbox, arithmetic steps re-executed, answer span in the passage) was measured on
+2026-09-11 and then removed from the plan the same evening (user): the checks were ours, not the model's,
+so the arm would have tested whether the model can use execution results it never asked for, which is
+not the ability the direction is about. Method B is stage 1 directly (the model writes the check, a
+sandbox runs it; the two-pass rollout is not built yet). The stage-0 code (`feedback_state/evidence.py`,
+`scripts/evidence_checks.py`, the `--evidence` options of build_rl_data / evaluate_memory_generator, the
+B0 arm of launch_judge.sh) was removed; the computed lines stay in outputs/evidence/*.json. What the
+measurement showed, the informativeness of label-free checks against the verified labels, is the case
+for stage 1 and is kept here:
 
 | stream  | check | peer answers checked | check passes -> right | check fails -> right | coverage |
 |---------|-------|---------------------:|----------------------:|---------------------:|---------:|
@@ -1066,6 +1073,6 @@ Informativeness against the verified labels (never shown to the model):
 Reading: a failed sample test or an absent span is close to decisive (3-21% right), a pass is a strong but
 not decisive sign (57-89%); arithmetic failures are the weakest (46-57% right, since an answer can be
 right despite a mis-written step). In-distribution the evidence covers 83% of peer answers; on the OOD
-stream almost nothing is checkable label-free (1.3%, BBH arithmetic only), so stage 0 cannot help OOD
-without new check types (option-consistency for multiple choice, passage checks for MultiRC). On hold.
+stream almost nothing is checkable label-free (1.3%, BBH arithmetic only), so an evidence arm cannot help
+OOD without new check types (option-consistency for multiple choice, passage checks for MultiRC).
 

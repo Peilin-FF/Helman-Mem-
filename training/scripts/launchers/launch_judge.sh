@@ -3,11 +3,11 @@
 #   A2  method A, gamma = 0: the reply opens with a 'Trust: a > b > ...' ranking of the peers, rewarded
 #       0.5(1 + Spearman) against the record's estimate on non-flat records (lambda 0.5) plus the verifier reward;
 #       the record is a TARGET only (strict distillation; measures how much of it content recovers)
-#   B0  method B stage 0, gamma = 0: label-free evidence lines (outputs/evidence/*.json: sample tests, arithmetic
-#       steps, span in passage) added to the prompt after the peers; no verdict line
 #   A1  method A with gamma = 3 in training: the record as target and input (upper bound)
-# Tests per arm on the in-distribution stream and the FULL OOD stream, then the attention measurement (A arms).
-# Usage: bash launch_judge.sh [A2|B0|A1|all]     (all = A2, B0, A1 in that order)
+# (method B stage 0, evidence lines computed by us and handed over in the prompt, was removed on 2026-09-11: the
+#  model has to seek the evidence itself, which is stage 1, a two-pass rollout that is not built yet)
+# Tests per arm on the in-distribution stream and the FULL OOD stream, then the attention measurement.
+# Usage: bash launch_judge.sh [A2|A1|all]     (all = A2 then A1)
 set -u
 [ -d training ] || cd /mnt/data/peilin/sigma-mem
 export PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 VLLM_ENABLE_V1_MULTIPROCESSING=0
@@ -36,22 +36,6 @@ tests_A () {   # checkpoint, name: verdict line in every peers condition, plus p
   ( ev 0 $1 indist peers "" peers_noverdict ) & ( ev 1 $1 oodfull peers "" peers_noverdict ) & ( attention $1 $2 ) &
   wait
 }
-tests_B () {   # checkpoint, name: the same label-free evidence lines handed over at test time
-  ( ev 0 $1 indist peers "--evidence outputs/evidence/indist6.json" evid ) & ( ev 1 $1 oodfull peers "--evidence outputs/evidence/ood6.json" evid ) &
-  ( ev 2 $1 indist peers "" peers ) & ( ev 3 $1 oodfull peers "" peers ) &
-  ( ev 4 $1 indist solo "" solo ) & ( ev 5 $1 oodfull solo "" solo ) &
-  ( ev 6 $1 indist peers "--evidence outputs/evidence/indist6.json --attn_gamma 3" evid_tilt ) & ( ev 7 $1 oodfull peers "--evidence outputs/evidence/ood6.json --attn_gamma 3" evid_tilt ) &
-  wait
-}
-build_evidence_data () {
-  [ -f $D/full_peers_evidence.parquet ] || python -m training.sigma_rl.build_rl_data --prompts $P/prompts_train6_fixed.jsonl --records data/mixed_train_big6/train.jsonl --out $D/full_peers_evidence.parquet --guided none --prompt_source peers --solo_fraction 0.25 --evidence outputs/evidence/train6.json 2>&1 | grep -i "build-rl-data\|error"
-  [ -f $D/val_peers_evidence.parquet ] || python -m training.sigma_rl.build_rl_data --prompts $P/prompts_indist6_shuffled0.jsonl --records data/indist6/test.jsonl --out $D/val_peers_evidence.parquet --guided none --prompt_source peers --every 8 --limit 512 --evidence outputs/evidence/indist6.json 2>&1 | grep -i "build-rl-data\|error"
-  python -c "
-import pandas as pd
-for f in ['$D/full_peers_evidence.parquet', '$D/val_peers_evidence.parquet']:
-    df = pd.read_parquet(f); n = int(df['prompt'].astype(str).str.contains('Evidence \\\\(automatic').sum()); print(f, len(df), 'rows;', n, 'with an evidence block')
-"
-}
 train_arm () {   # name, extra overrides, train parquet, val parquet: ONE continuous epoch (277 steps of 64 events) from the
                  # frozen model, reference fixed at the frozen model, no restart at step 40 (user, 2026-09-11)
   echo "=== $1 (one epoch, seed 1): $(date)"
@@ -63,14 +47,10 @@ what=${1:-all}
 if [ $what = A2 ] || [ $what = all ]; then
   train_arm judgeA2 "memory.verdict_lambda=0.5" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA2); echo "=== tests: judgeA2 $CK: $(date)"; tests_A $CK judgeA2; }
 fi
-if [ $what = B0 ] || [ $what = all ]; then
-  build_evidence_data
-  train_arm judgeB0 "memory.verdict_lambda=0.0" $D/full_peers_evidence.parquet $D/val_peers_evidence.parquet && { CK=$(last_ck judgeB0); echo "=== tests: judgeB0 $CK: $(date)"; tests_B $CK judgeB0; }
-fi
 if [ $what = A1 ] || [ $what = all ]; then
   train_arm judgeA1 "memory.verdict_lambda=0.5 $TILT" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA1); echo "=== tests: judgeA1 $CK: $(date)"; tests_A $CK judgeA1; }
 fi
-for f in outputs/rl/judgeA2/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeB0/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeA1/hf/global_step_*/eval_*/eval_metrics.json; do
+for f in outputs/rl/judgeA2/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeA1/hf/global_step_*/eval_*/eval_metrics.json; do
   [ -f "$f" ] && python -c "
 import json; m=json.load(open('$f')); v=m.get('verdict',{})
 print('%-60s %6.2f  %s  verdict: auc=%s fav=%s rho_rec=%s' % ('$f'.replace('/eval_metrics.json','').replace('outputs/rl/',''), 100*m['accuracy'], {k: round(100*x,1) for k,x in m['by_task'].items()}, v.get('auc_vs_correct'), v.get('favourite_right'), v.get('spearman_with_record')))"

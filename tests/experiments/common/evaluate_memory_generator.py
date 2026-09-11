@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import time
 from pathlib import Path
 
@@ -27,7 +26,6 @@ from transformers import AutoTokenizer
 
 from feedback_state.data import JsonlDataset
 from feedback_state.verdict import add_verdict_instruction, parse_verdict, strip_verdict
-from feedback_state.evidence import add_evidence_block
 from feedback_state.lora import apply_lora, load_lora_state_dict, set_lora_active
 from feedback_state.memory_generator import grade, render_prompt
 
@@ -46,7 +44,6 @@ def parse_args():
     p.add_argument("--every", type=int, default=1, help="keep every k-th event of the stream (positions and memory states unchanged; even subsample)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--windows", type=int, default=10)
-    p.add_argument("--evidence", type=Path, default=None, help="method B stage 0: JSON from scripts/evidence_checks.py; adds an Evidence block to peers prompts")
     p.add_argument("--verdict", action="store_true", help="method A: ask for and score a 'Trust: ...' line before the answer (peers modes)")
     p.add_argument("--thinking", choices=["on", "off"], default="off", help="on = Qwen3 thinking mode (raise --max_new_tokens; the answer after </think> is graded)")
     p.add_argument("--engine", choices=["hf", "vllm"], default="hf", help="vllm = decode with vLLM (greedy, continuous batching; ~30x faster than HF generate); hf = transformers generate")
@@ -84,15 +81,6 @@ def main() -> None:
     if args.max_examples:
         rows = rows[: args.max_examples]
     messages = [r[f"messages_{args.mode}"] for r in rows]
-    if args.evidence is not None and args.mode != "solo":
-        ev_all = json.load(open(args.evidence))["lines"]
-        patched = []
-        for r, m in zip(rows, messages):
-            ev = ev_all.get(str(r["id"]), {}); keys = sorted(ev)
-            lines = [re.sub(r"^Peer \d+:", f"Peer {j + 1}:", ev[keys[int(p_)]]) for j, p_ in enumerate(r["peer_order"])] if keys else []
-            patched.append(add_evidence_block(m, lines))
-        messages = patched
-        print(f"[gen-eval] evidence block added to {sum(1 for m in messages if 'Evidence (automatic' in m[-1]['content'])}/{len(messages)} prompts", flush=True)
     if args.verdict and args.mode != "solo":
         messages = [add_verdict_instruction(m) for m in messages]
     prompts = [render_prompt(tok, m, thinking=args.thinking == "on") for m in messages]

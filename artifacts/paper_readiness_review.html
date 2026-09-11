@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">RESEARCH REVIEW · 10 SEPTEMBER 2026<\/div><h1>Σ-Mem: what is the strongest paper here?<\/h1><p class=\"lede\">The strongest current result is that historical reliability can improve how an LLM uses peer answers at inference. The evidence for an additional benefit from training with that memory is much weaker.<\/p><div class=\"callout rec\"><div class=\"callout-h\">My assessment<\/div><p>This is a substantial research project with useful positive results and unusually informative controls. I would not yet present the current combination of Bayesian linear memory, attention reweighting, and GRPO as a convincing top-conference algorithmic contribution. The main blockers are <b>novelty, attribution, and evaluation design<\/b>. A focused paper about when historical reliability helps collaborative generation is more defensible.<\/p><\/div><p>Scope: the original symmetric Σ-Mem and the latest Bayesian linear record / six-peer attention experiments. The recommendation emphasizes the latest work. Venue fit is my judgment; no particular venue or paper direction has been confirmed.<\/p><div class=\"toc\"><a href=\"#evidence\">Existing evidence<\/a><a href=\"#objections\">Reviewer objections<\/a><a href=\"#novelty\">Closest work<\/a><a href=\"#direction\">Paper direction<\/a><a href=\"#experiments\">Decisive experiments<\/a><a href=\"#writing\">Writing structure<\/a><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"evidence\">What your saved results actually establish<\/h2><p>The following numbers come directly from saved <code>eval_metrics.json<\/code> files, not reconstructed from narrative notes. They use Qwen3-4B, six peers, thinking disabled, and a 768-token central response budget. Trained rows use the final step-276 checkpoints. Values are accuracy percentages; differences are percentage points.<\/p><p><b>In-distribution: 4,319 examples.<\/b><\/p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Training",
+      "Model alone",
+      "Peer answers",
+      "Peers + memory attention",
+      "Peers + reversed memory",
+      "Attention gain over peers"
+    ],
+    "rows": [
+      [
+        "Frozen model",
+        "60.55",
+        "64.76",
+        "67.19",
+        "59.97",
+        "+2.43"
+      ],
+      [
+        "Trained on solo questions",
+        "71.52",
+        "72.54",
+        "72.98",
+        "69.48",
+        "+0.44"
+      ],
+      [
+        "Trained with peers, no memory",
+        "71.38",
+        "74.37",
+        "74.88",
+        "70.46",
+        "+0.51"
+      ],
+      [
+        "Trained with peers and memory attention",
+        "73.42",
+        "75.06",
+        "75.94",
+        "73.72",
+        "+0.88"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p><b>OOD: 4,351 examples, every fourth event of the 17,403-event stream.<\/b> These generation results are a subset evaluation. Earlier three-peer full-stream results appear separately below.<\/p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Training",
+      "Model alone",
+      "Peer answers",
+      "Peers + memory attention",
+      "Peers + reversed memory",
+      "Attention gain over peers"
+    ],
+    "rows": [
+      [
+        "Frozen model",
+        "68.47",
+        "69.59",
+        "73.78",
+        "64.61",
+        "+4.18"
+      ],
+      [
+        "Trained on solo questions",
+        "72.74",
+        "71.32",
+        "74.83",
+        "67.62",
+        "+3.52"
+      ],
+      [
+        "Trained with peers, no memory",
+        "73.04",
+        "72.90",
+        "75.06",
+        "67.94",
+        "+2.16"
+      ],
+      [
+        "Trained with peers and memory attention",
+        "70.51",
+        "72.26",
+        "74.97",
+        "67.07",
+        "+2.71"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"grid col-2\"><div class=\"card\"><h3>Inference effect: supported in these runs<\/h3><p>For the frozen model, attention weighting adds <b>2.43 points in-distribution and 4.18 OOD<\/b> over the identical peer prompt without weighting. The peer-trained control also benefits: <b>+0.51 and +2.16<\/b>. Even the solo-trained model benefits at inference.<\/p><p>This shows a useful intervention that does not require training the model with memory. Reversing reliability changes behavior substantially, which supports sensitivity to the historical signal.<\/p><\/div><div class=\"card\"><h3>Training effect: not established broadly<\/h3><p>With memory attention enabled for both checkpoints, memory training adds <b>1.07 points in-distribution<\/b> over peer training without memory, but gives <b>−0.09 OOD<\/b>. Evaluated alone, it gives <b>+2.04 in-distribution and −2.53 OOD<\/b>.<\/p><p>The existing point estimates do not support consistent transfer or a general internalization benefit. Replication is needed before interpreting the small differences.<\/p><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<details><summary>Exact sources for the tables<\/summary><p><a href=\"../outputs/gen/q3_4b/base6_nothink/indist6_solo/eval_metrics.json\">Frozen model · indist · solo<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/indist6_peers/eval_metrics.json\">Frozen model · indist · peers<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/indist6_tilt/eval_metrics.json\">Frozen model · indist · tilt<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/indist6_tilt_swapped/eval_metrics.json\">Frozen model · indist · tilt_swapped<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/ood6_solo/eval_metrics.json\">Frozen model · ood · solo<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/ood6_peers/eval_metrics.json\">Frozen model · ood · peers<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/ood6_tilt/eval_metrics.json\">Frozen model · ood · tilt<\/a> · <a href=\"../outputs/gen/q3_4b/base6_nothink/ood6_tilt_swapped/eval_metrics.json\">Frozen model · ood · tilt_swapped<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_indist6_solo/eval_metrics.json\">Trained on solo questions · indist · solo<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_indist6_peers/eval_metrics.json\">Trained on solo questions · indist · peers<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_indist6_tilt/eval_metrics.json\">Trained on solo questions · indist · tilt<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_indist6_tilt_swapped/eval_metrics.json\">Trained on solo questions · indist · tilt_swapped<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_ood6_solo/eval_metrics.json\">Trained on solo questions · ood · solo<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_ood6_peers/eval_metrics.json\">Trained on solo questions · ood · peers<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_ood6_tilt/eval_metrics.json\">Trained on solo questions · ood · tilt<\/a> · <a href=\"../outputs/rl/solo3b_q/hf/global_step_276/eval_ood6_tilt_swapped/eval_metrics.json\">Trained on solo questions · ood · tilt_swapped<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_indist6_solo/eval_metrics.json\">Trained with peers, no memory · indist · solo<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_indist6_peers/eval_metrics.json\">Trained with peers, no memory · indist · peers<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_indist6_tilt/eval_metrics.json\">Trained with peers, no memory · indist · tilt<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_indist6_tilt_swapped/eval_metrics.json\">Trained with peers, no memory · indist · tilt_swapped<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_ood6_solo/eval_metrics.json\">Trained with peers, no memory · ood · solo<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_ood6_peers/eval_metrics.json\">Trained with peers, no memory · ood · peers<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_ood6_tilt/eval_metrics.json\">Trained with peers, no memory · ood · tilt<\/a> · <a href=\"../outputs/rl/ctrl3b_peers/hf/global_step_276/eval_ood6_tilt_swapped/eval_metrics.json\">Trained with peers, no memory · ood · tilt_swapped<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_indist6_solo/eval_metrics.json\">Trained with peers and memory attention · indist · solo<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_indist6_peers/eval_metrics.json\">Trained with peers and memory attention · indist · peers<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_indist6_tilt/eval_metrics.json\">Trained with peers and memory attention · indist · tilt<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_indist6_tilt_swapped/eval_metrics.json\">Trained with peers and memory attention · indist · tilt_swapped<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_ood6_solo/eval_metrics.json\">Trained with peers and memory attention · ood · solo<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_ood6_peers/eval_metrics.json\">Trained with peers and memory attention · ood · peers<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_ood6_tilt/eval_metrics.json\">Trained with peers and memory attention · ood · tilt<\/a> · <a href=\"../outputs/rl/run3b_tilt/hf/global_step_276/eval_ood6_tilt_swapped/eval_metrics.json\">Trained with peers and memory attention · ood · tilt_swapped<\/a><\/p><p>Condition names follow the saved run directories and <a href=\"../training/scripts/launchers/launch_run3b.sh\">evaluation launcher<\/a>. The metric files record model, checkpoint, prompt file, budget and engine, but omit attention strength and swap status; add those fields when preparing a reproducible paper release.<\/p><\/details>"
+  },
+  {
+    "type": "html",
+    "html": "<h3>The record itself predicts useful information<\/h3><p>Saved six-peer diagnostics show substantial improvement over a running per-peer, per-task success rate. On events with both correct and incorrect peers, the record’s favorite is correct <b>90.54% in-distribution versus 85.98%<\/b> for that baseline, and <b>82.69% OOD versus 73.82%<\/b>. Pooled candidate-level AUC is approximately 0.924 on both streams. These are useful prediction results; they do not establish calibration or generated-answer accuracy. Sources: <a href=\"../outputs/gen/q3_4b/probe5/record_prompts_indist6_shuffled0.json\">in-distribution diagnostic<\/a> and <a href=\"../outputs/gen/q3_4b/probe5/record_prompts_ood6_shuffled0.json\">full OOD diagnostic<\/a>.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<details><summary>Earlier results help rule out an overly broad training story<\/summary><p>In the earlier three-peer, question-only final evaluation, the memory-note GRPO model scored 67.05 / 68.61 on in-distribution / full OOD; the peers-only control scored 67.79 / 69.55; plain GRPO scored 70.36 / 73.81. These differ from the latest six-peer setup and must stay in a separate comparison. They make the no-memory training controls essential. Sources: <a href=\"../outputs/rl/q3_4b_grpo_memory/hf/global_step_276/eval_indist_solo_vllm/eval_metrics.json\">q3_4b_grpo_memory · indist<\/a> · <a href=\"../outputs/rl/q3_4b_grpo_memory/hf/global_step_276/eval_ood_solo_vllm/eval_metrics.json\">q3_4b_grpo_memory · ood<\/a> · <a href=\"../outputs/rl/q3_4b_grpo_peers/hf/global_step_276/eval_indist_solo_vllm/eval_metrics.json\">q3_4b_grpo_peers · indist<\/a> · <a href=\"../outputs/rl/q3_4b_grpo_peers/hf/global_step_276/eval_ood_solo_vllm/eval_metrics.json\">q3_4b_grpo_peers · ood<\/a> · <a href=\"../outputs/rl/q3_4b_grpo_plain/hf/global_step_276/eval_indist_solo_vllm/eval_metrics.json\">q3_4b_grpo_plain · indist<\/a> · <a href=\"../outputs/rl/q3_4b_grpo_plain/hf/global_step_276/eval_ood_solo_vllm/eval_metrics.json\">q3_4b_grpo_plain · ood<\/a>.<\/p><\/details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"objections\">The objections I would expect from a strong reviewer<\/h2><div class=\"review blocking\"><div class=\"avatar\">1<\/div><div class=\"bubble\"><div class=\"who\">What is new beyond existing credibility weighting?<\/div><p>Bayesian linear regression / recursive least squares is established. Credibility-based attention modification is also established. The contribution must be the <b>online estimation and use of task-conditioned reliability under a clearly specified feedback regime<\/b>, supported by comparisons that isolate it. A new name for the state or a standard matrix identity will not resolve this objection.<\/p><\/div><\/div><div class=\"review blocking\"><div class=\"avatar\">2<\/div><div class=\"bubble\"><div class=\"who\">Does memory learn source reliability or verify the current answer?<\/div><p>The default record uses candidate-conditioned judge features. Its “question” representation <code>sem<\/code> is pooled from prompts that contain peer responses; it is not question-only. High AUC may therefore reflect an online answer verifier as well as a record of peer competence. Compare question-only source memory, a shared candidate verifier, and their combination with identical features and labels. A response-free routing claim must use genuinely question-only inputs.<\/p><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<p class=\"note\">Representation evidence: <a href=\"../feedback_state/feature_streams.py\">feedback_state/feature_streams.py<\/a>, <a href=\"../feedback_state/addresses.py\">feedback_state/addresses.py<\/a> and <a href=\"../scripts/encode_context_features.py\">scripts/encode_context_features.py<\/a>.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"review blocking\"><div class=\"avatar\">3<\/div><div class=\"bubble\"><div class=\"who\">How independent is the evaluation?<\/div><p>The data builders take a 512-example validation subset from the same in-distribution stream later reported as a 4,319-example test set. When validation drives checkpoint or hyperparameter selection, reporting the encompassing stream is not a fully held-out estimate. Freeze a disjoint final test set and specify the development decisions already made on the current streams.<\/p><p>The main training comparisons are not replicated across independent training seeds. The latest generation OOD evaluation is a quarter-stream subset. These limitations matter particularly for the approximately one-point training difference.<\/p><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<p class=\"note\">Validation construction: <a href=\"../training/scripts/build_data.sh\">training/scripts/build_data.sh<\/a> and <a href=\"../training/scripts/launchers/launch_solo.sh\">training/scripts/launchers/launch_solo.sh<\/a>. Run histories: <a href=\"../outputs/rl/run3b_tilt/metrics.jsonl\">outputs/rl/run3b_tilt/metrics.jsonl<\/a> and <a href=\"../outputs/rl/ctrl3b_peers/metrics.jsonl\">outputs/rl/ctrl3b_peers/metrics.jsonl<\/a>.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"review blocking\"><div class=\"avatar\">4<\/div><div class=\"bubble\"><div class=\"who\">Which feedback is available, to whom, and at what cost?<\/div><p>The current record receives all peers’ correctness labels after each event. That is full feedback, even though it arrives after the decision. It is a legitimate setting, but it differs from learning from only the selected peer’s outcome. Explain an application where these labels arrive, their delay, and their cost.<\/p><p>The reduced-verifier training builder masks central rewards <em>after<\/em> loading a trajectory already constructed with every peer label. That can study scarce central-model rewards with fully observed peer feedback. It cannot support a claim that the memory itself learned with the same scarce feedback unless the trajectory is rebuilt under that mask.<\/p><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<p class=\"note\">Feedback construction: <a href=\"../scripts/build_generation_prompts.py\">prompt builder, lines 130–134<\/a> and <a href=\"../training/sigma_rl/build_rl_data.py\">RL data builder, lines 108–116<\/a>. This concern applies to that training variant, not automatically to the separate original Sigma feedback-sparsity evaluator.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"review blocking\"><div class=\"avatar\">5<\/div><div class=\"bubble\"><div class=\"who\">Do the diagnostic metrics mean what the paper says?<\/div><p>The striking “minority favorite is correct” numbers use the majority of <em>correctness labels<\/em>, not the most frequent answer. Several different wrong answers share the same label. This retrospective slice cannot demonstrate that the system overrules an observable wrong consensus with 98–99% accuracy.<\/p><p>Define agreement from canonicalized answer texts before consulting labels; then evaluate the chosen answer. Likewise, “more than half the peers are correct” differs from the accuracy of plurality voting on multi-answer tasks.<\/p><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<p class=\"note\">Definitions: <a href=\"../scripts/record_quality.py\">record_quality.py, lines 58–77<\/a> and <a href=\"../tests/experiments/common/evaluate_memory_generator.py\">generation evaluator, write_results<\/a>. Existing <a href=\"../feedback_state/answer_groups.py\">answer-group utilities<\/a> and <a href=\"../feedback_state/ood_routing.py\">voting utilities<\/a> provide a starting point for a consistent definition.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"review\"><div class=\"avatar\">6<\/div><div class=\"bubble\"><div class=\"who\">How much additional computation buys the gain?<\/div><p>Include peer generation, candidate-feature extraction, online record updates, and the attention backend. Cached features still have an acquisition cost in a deployed system. The record update can be cheap while the complete method is expensive.<\/p><p>The saved run3b logs average approximately <b>105 seconds per training step with attention steering versus 53 seconds for the peers-only control<\/b>. This is an observed implementation cost, not an intrinsic algorithmic lower bound. Match training examples and generation budgets, and separately compare quality at equal wall-clock or total-token budgets.<\/p><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<p class=\"note\">Timing source: averages of recorded <code>timing_s/step<\/code> entries in <a href=\"../outputs/rl/run3b_tilt/metrics.jsonl\">outputs/rl/run3b_tilt/metrics.jsonl<\/a> and <a href=\"../outputs/rl/ctrl3b_peers/metrics.jsonl\">outputs/rl/ctrl3b_peers/metrics.jsonl<\/a>. Peer OOD budgets are 96 tokens in <a href=\"../scripts/peer_answers.py\">scripts/peer_answers.py<\/a>; report that alongside the central model’s budget and include a stronger-peer condition.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"novelty\">Closest prior work and the distinction you need<\/h2><div class=\"grid col-2\"><div class=\"card\"><h3>CrAM is the closest attention baseline<\/h3><p><a href=\"https://arxiv.org/abs/2406.11497\">CrAM, AAAI 2025<\/a> already scales attention to external documents using credibility scores and selects influential heads. Your current mechanism uses online feedback-derived peer scores, a different normalization, and all-head application. That creates a testable distinction, not an automatic novelty claim. Compare score estimators with the reader fixed, then attention readers with the scores fixed.<\/p><\/div><div class=\"card\"><h3>Learning to consume credibility also exists<\/h3><p><a href=\"https://aclanthology.org/2024.emnlp-main.1109/\">Credibility-aware Generation, EMNLP 2024<\/a> trains models to use credibility information. Establish whether historical reliability adds something beyond credibility-conditioned generation and ordinary peer-conditioned training. Your existing train-by-inference matrix is the right starting design.<\/p><\/div><div class=\"card\"><h3>Online model selection has strong predecessors<\/h3><p><a href=\"https://proceedings.iclr.cc/paper_files/paper/2025/hash/5503a7c69d48a2f86fc00b3dc09de686-Abstract-Conference.html\">RouteLLM, ICLR 2025<\/a> learns routing from preferences. <a href=\"https://aclanthology.org/2025.findings-emnlp.1301/\">PILOT, Findings of EMNLP 2025<\/a> adapts routing through bandit feedback. Your answer-synthesis interface differs from pre-generation routing. Compare within a common information and cost budget, and avoid presenting post-decision feedback as unprecedented.<\/p><\/div><div class=\"card\"><h3>Fast learning and outcome training are foundations<\/h3><p><a href=\"https://arxiv.org/abs/2407.04620\">TTT layers<\/a> and <a href=\"https://arxiv.org/abs/2412.06464\">Gated DeltaNet<\/a> already connect recurrent state updates to learning rules. Your state operates across externally labeled events rather than self-supervised token updates. <a href=\"https://arxiv.org/abs/2203.14465\">STaR<\/a> and <a href=\"https://arxiv.org/abs/2501.12948\">DeepSeek-R1<\/a> also make reasoning training and post-generation evaluation established context. These distinctions belong explicitly in related work.<\/p><\/div><\/div><p class=\"note\">This is a targeted check of close primary sources, not an exhaustive novelty search.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<h3>Mathematical claims to tighten before writing<\/h3><p><b>Exactness:<\/b> the state is exact Bayesian linear regression for a Gaussian observation model on signed targets. That does not make its transformed output an exact, calibrated Bernoulli correctness posterior. Regression and classification use different likelihoods; see <a href=\"https://gaussianprocess.org/gpml/chapters/\">Rasmussen and Williams, chapters 2–3<\/a>.<\/p><p>A simple analytical example exposes the difference: repeatedly observe the same scalar address $x=1$ with target $s=+1$. After $n$ observations, the implementation has $\\mu_n=n/(\\lambda+n)$ and $v_n=1/(\\lambda+n)$. Consequently, its reported probability tends to $\\Phi(1)\u0007pprox0.8413$, even though every observed outcome is correct. Call this a Gaussian-surrogate score unless held-out calibration supports a probability claim.<\/p><p><b>Order and dynamics:<\/b> with no forgetting, the final sufficient statistics are invariant to event order. Online decisions use different prefixes and need not have invariant accuracy. Stationary order robustness and adaptation to changing reliability need separate evaluation.<\/p><p><b>Regret and stability:<\/b> a ridge-regression loss bound does not automatically bound peer-selection error or generated-answer regret. A bounded spectral update does not guarantee bounded changes in an LLM’s discrete answer. State assumptions and the exact predicted quantity.<\/p><p><b>“Optimal” and “information ceiling”:<\/b> conditional-independence voting guarantees require an explicit answer-error model. A fitted ridge or nearest-neighbor benchmark estimates one predictor’s performance; it is not an information-theoretic upper bound.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<p class=\"note\">Local mathematical claims and implementation: <a href=\"../docs/kalman_mem_notion.md\">docs/kalman_mem_notion.md<\/a> and <a href=\"../feedback_state/kalman_memory.py\">feedback_state/kalman_memory.py<\/a>. The scalar limit above is a derivation from the implemented equations, not a new experiment.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"direction\">The paper I would build from this project<\/h2><div class=\"callout rec\"><div class=\"callout-h\">Recommended thesis<\/div><p><b>Historical outcome feedback can provide useful credibility information beyond a model’s immediate assessment of peer answers; an explicit reliability record turns that information into improved generation.<\/b><\/p><p>The unresolved scientific question is where that historical information matters, and whether the proposed estimator and interface exploit it better than simpler alternatives. Make that question the organizing principle.<\/p><\/div><p><b>Working title:<\/b> <em>When Does Reliability Memory Help Multi-Model Reasoning?<\/em> This accommodates the positive inference results and the weak training effect. If the decisive comparisons establish a stronger mechanism, a method-oriented title such as <em>Online Reliability Memory for Credibility-Aware Generation<\/em> becomes appropriate.<\/p><div class=\"grid col-2\"><div class=\"card\"><h3>Strongest near-term direction<\/h3><p>Study online reliability-guided inference, with a controlled benchmark of peer replacement, changing competence, and incomplete feedback. Show the gap between predicting reliability and successfully using it. This is a plausible NLP empirical-method paper if the evidence generalizes across model families and strong baselines.<\/p><\/div><div class=\"card\"><h3>Higher-risk extension<\/h3><p>Develop a reader that decides both <em>which peer to trust<\/em> and <em>whether to rely on peers at all<\/em>, using uncertainty and a record of the central model’s own success. The current relative weights leave the best peer unsuppressed even when all peers are weak; the flat-record bypass also needs consideration. Treat this as an untested proposal, not an existing result or guaranteed novelty.<\/p><\/div><\/div><p>For an ML venue, the case would be stronger with a new estimation/control result or a compelling, broadly replicated finding beyond the standard components. I would deprioritize additional long GRPO runs until the inference mechanism wins the closest comparisons.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<details><summary>What about the original symmetric Σ-Mem?<\/summary><p>The <a href=\"https://arxiv.org/abs/2607.27958\">existing Σ-Mem preprint<\/a> is an antecedent that a follow-up must distinguish clearly. The local OOD analysis raises a serious recency concern: its reported Qwen3-4B full Sigma accuracy changes from 60.54% in fixed order to 56.44% after shuffling, against a 55.98% Base. An address-free EMA is reported to match the original direct M-route in fixed order, approximately 60.67% versus 60.66%.<\/p><p>This suggests that grouped streams can make recent success look like transferable task competence. It does not by itself invalidate every original experiment. If revising the original paper, make EMA, randomized streams, and explicit drift conditions central controls. If writing the follow-up, motivate the new representation and record with this failure analysis and disclose the relationship to the original method.<\/p><p>Source: <a href=\"mixed_ood_memory_analysis.html\">saved OOD analysis, headline and diagnosis cells<\/a>. These historical numbers were read from the artifact; their underlying raw runs were not independently checked in this review.<\/p><\/details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"experiments\">The smallest set of experiments that could change the verdict<\/h2><p>These are proposed research experiments. None were launched during this paper review. Prioritize outcomes that distinguish explanations; avoid adding many similar benchmark rows.<\/p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Priority",
+      "Question",
+      "Decisive comparison",
+      "What a convincing result would show"
+    ],
+    "rows": [
+      [
+        "1 · estimator",
+        "Is this more than an online verifier or a simple reputation average?",
+        "Same frozen features, past labels and attention reader: global/Beta history, EMA, per-task history, online logistic/SGD verifier, Bayesian linear record; separate question-only, candidate-only and combined features.",
+        "The record improves held-out generation and prediction beyond a competitive same-information estimator."
+      ],
+      [
+        "2 · reader",
+        "Is the attention interface necessary?",
+        "Same reliability values and current answers: no weighting, text notes, select/filter, answer voting, CrAM-style attention, current attention.",
+        "An accuracy/cost advantage attributable to the reader; not merely access to better scores."
+      ],
+      [
+        "3 · temporal information",
+        "When does history add information beyond current answer content?",
+        "Cold starts, persistent identity replacement, abrupt and gradual competence changes, stationary shuffled streams; reset, stale and aligned histories. Recompute features when answers change.",
+        "History predicts and improves decisions under a stated shift process, with measured recovery time and cumulative error."
+      ],
+      [
+        "4 · feedback",
+        "Does the advantage survive realistic supervision?",
+        "Full-peer versus selected-peer feedback; sparse, delayed and noisy labels. Build every memory trajectory using only the feedback available in that condition.",
+        "Useful performance per observed label without privileged state updates."
+      ],
+      [
+        "5 · transfer and confidence",
+        "Does the result replicate outside the developed setup?",
+        "Disjoint final test; full OOD; another central-model family; stronger and weaker peer pools; independent training seeds where training is claimed and multiple stream orders.",
+        "Paired uncertainty intervals and consistent task-level benefits; same checkpoint selection rule for every arm."
+      ],
+      [
+        "6 · internalization, only if claimed",
+        "Does training specifically improve the use of memory?",
+        "Extend the existing training × inference matrix across seeds. Evaluate all checkpoints alone, with peers, and with the same reliability reader.",
+        "An interaction attributable to memory training, plus preserved solo performance and matched training budgets."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p><b>Keep as main paper figures:<\/b> the training-by-inference matrix; cumulative accuracy and recovery around a reliability change; accuracy versus feedback budget; and a breakdown of accepting wrong advice versus rejecting correct advice. Add calibration plots if probability or uncertainty is part of the claim. Report actual answer agreement separately from hindsight correctness slices.<\/p><p><b>Decision rule:<\/b> if simple histories or the same-feature verifier match the method, present the simpler method or a careful analysis paper. If inference gains replicate but memory training remains neutral, write the inference paper. Make learning-to-use-memory the headline only after that comparison separates consistently.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"writing\">A manuscript structure that matches the evidence<\/h2><ol><li><b>Introduction:<\/b> current peer answers can be plausible yet unreliable; persistent outcome feedback is additional information. State exactly which historical information is observable.<\/li><li><b>Problem formulation:<\/b> define event order, peer identities, feature access, feedback timing, and costs. Distinguish answer synthesis, peer selection, and response-free routing.<\/li><li><b>Method:<\/b> describe the Bayesian linear record and attention interface, identifying inherited components. Include the observation likelihood, score interpretation, and update costs.<\/li><li><b>Why memory helps:<\/b> isolate content verification, source history, and the reader. Explain a measured condition under which history is useful.<\/li><li><b>Experiments:<\/b> show matched estimator/reader controls, the training-by-inference matrix, drift and feedback curves, model transfer, and complete cost accounting.<\/li><li><b>Limitations:<\/b> feedback assumptions, probability calibration, correlated peers, weak-advice failure, dependence on frozen features, and lack of a consistent memory-training gain.<\/li><\/ol><p>The main text should follow this single question, not the chronology of the project’s many attempted architectures.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<h3>An evidence-aligned abstract draft<\/h3><div class=\"card\"><p>Large language models can draw on peer responses to solve tasks, but the reliability of those responses varies across sources and questions. We study how historical outcome feedback can guide a central model’s use of peer answers. Our system maintains a Bayesian linear record of candidate correctness and uses its scores to reweight attention to peer responses, updating the record after each decision. A factorial evaluation separates the effects of peer-conditioned training and reliability-guided inference. In existing Qwen3-4B experiments with six peers, the inference intervention improves a frozen model from 64.76% to 67.19% on 4,319 in-distribution examples and from 69.59% to 73.78% on a 4,351-example OOD subset. Models trained without reliability weighting also benefit from the intervention, whereas training with it provides no consistent OOD advantage over the matched peer-trained control. These findings motivate treating reliability estimation and the model’s use of reliability as distinct components of collaborative reasoning.<\/p><\/div><p class=\"note\">This describes the current evidence. A submission abstract still needs the closest-baseline results, replication, and an independently held-out final evaluation before claiming a broadly superior method.<\/p>"
+  },
+  {
+    "type": "html",
+    "html": "<h3>What to keep, what to move out of the main claim<\/h3><div class=\"procon\"><div class=\"pros\"><ul><li>The separation between fast historical state and the central model’s parameters.<\/li><li>The natural control matrix already present in the saved results.<\/li><li>Reliability-sensitive inference and strong candidate-level prediction.<\/li><li>Failure analysis of weak advice, stream order, and inconclusive training gains.<\/li><\/ul><\/div><div class=\"cons\"><ul><li>“A new Kalman algorithm,” “automatically calibrated,” or a general selection-regret guarantee.<\/li><li>“Memory-aware training consistently improves independent reasoning.”<\/li><li>“Defeats majority consensus 99% of the time” based on correctness-label grouping.<\/li><li>Claims of broad adaptive multi-agent behavior from static answer pools alone.<\/li><\/ul><\/div><\/div>"
+  },
+  {
+    "type": "html",
+    "html": "<details><summary>Review scope and evidence provenance<\/summary><p>I inspected the source, current research notes through September 9, saved evaluation JSONs and training logs, and selected primary papers. No new training, model generation, or benchmark evaluation was launched for this paper assessment. The earlier 54 passing software tests are not evidence for novelty or experimental validity. Source code and configurations were not modified.<\/p><p>The six-peer tables were read from the exact files linked above. The earlier three-peer comparison was also checked against saved metric files. The original shuffled-order analysis remains an artifact-reported observation. I did not independently audit all dataset duplicates, feature provenance, labels, or individual generation records. Conference-readiness assessments and proposed directions are reviewer judgments, not acceptance predictions.<\/p><p>Project record: <a href=\"../docs/memory_judge_design.md\">latest research log<\/a> · <a href=\"../docs/kalman_mem_notion.md\">method notes<\/a> · <a href=\"../training/README.md\">training protocol<\/a>.<\/p><\/details>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>
