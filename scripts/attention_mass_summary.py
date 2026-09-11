@@ -60,7 +60,11 @@ def main() -> None:
     files = sorted(glob.glob(str(Path(args.dir) / "*_*.json")))
     data = {}
     for f in files:
+        if Path(f).name.startswith("dump_"):   # per-event dumps from --dump_ids share the model/stream keys but hold no summary
+            continue
         d = json.load(open(f))
+        if "results" not in d or "n_layers" not in d:
+            continue
         data[(d["model"], d["stream"])] = d
     order = [m for m in args.order.split(",")]
     streams = sorted({s for _, s in data})

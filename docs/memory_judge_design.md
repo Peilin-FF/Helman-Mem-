@@ -1077,6 +1077,56 @@ stream almost nothing is checkable label-free (1.3%, BBH arithmetic only), so an
 OOD without new check types (option-consistency for multiple choice, passage checks for MultiRC).
 
 
+### 22.1 A2 result (2026-09-11 23:11): the record distils into a verdict, not yet into accuracy
+
+A2: one continuous epoch (276 steps of 64 events, group 8, KL 0.01 to the frozen model, no reset) from the frozen
+Qwen3-4B; the reply opens with `Trust: a > b > ...`; reward = verifier + 0.5 * 0.5(1 + Spearman(rank, record p)) on
+non-flat records; gamma 0 in training. Tests at step 276 on the whole streams (in-dist 4,319 / full OOD 17,403).
+
+| condition (in-dist / OOD)            | A2          | control (no memory) | ours (tilt-trained) | frozen      |
+|--------------------------------------|-------------|---------------------|---------------------|-------------|
+| peers, gamma 0, with the Trust line  | 72.6 / 69.4 | -                   | -                   | -           |
+| peers, gamma 0, no Trust instruction | 72.5 / 71.2 | 74.4 / 73.3         | 75.1 / 72.5         | 64.8 / 69.2 |
+| peers + tilt gamma 3 (+ Trust line)  | 72.9 / 73.4 | 74.9 / 75.5         | 75.9 / 75.2         | 67.2 / 74.0 |
+| swapped record (+ Trust line)        | 69.8 / 61.4 | 70.5 / 67.7         | 73.7 / 66.7         | 60.2 / 64.2 |
+| question only                        | 71.0 / 69.9 | 71.4 / 72.7         | 73.4 / 70.7         | 60.5 / 67.8 |
+
+The verdict, label-free, on the events where the peers disagree (AUC of the rank score against correctness / favourite right):
+
+| judgement at gamma 0                   | in-dist (3,116)   | OOD (10,545)      |
+|----------------------------------------|-------------------|-------------------|
+| frozen judge's Yes/No log-odds (floor) | 0.629 / 52.8%     | 0.633 / 59.5%     |
+| A2's Trust line                        | **0.845 / 92.0%** | **0.710 / 69.8%** |
+| the record (the distillation target)   | 0.92 / 90.5%      | 0.92 / 82.7%      |
+| A2 under the tilt, gamma 3             | 0.843 / 92.7%     | 0.728 / 76.5%     |
+| A2 under the swapped record            | 0.658 / 68.8%     | 0.579 / 56.0%     |
+
+Spearman of the Trust line with correctness 0.66 / 0.43, with the record 0.69 / 0.43 (gamma 0); parsed 100% / 99.2%.
+Training: validation agreement with the record flattened from step 140 (final reading +0.75, math +0.66, code +0.22);
+validation accuracy at step 276 reading 80.5, math 91.4, code 32.8.
+
+Attention at gamma 0 (per-token density over the six peer blocks, query = last prompt token, all layers, 300 events;
+scripts/attention_mass.py + attention_mass_summary.py): A2's favourite gets 1.12x in-dist / 1.08x OOD, corr(record)
++0.29 / +0.20, corr(correct) +0.22 / +0.17, against 1.01-1.05x, <= +0.10 and <= +0.09 for the frozen model, ours, the
+control and the question-only arm (which sit within 0.03 of each other). Under gamma 3 every model is at 2.1-2.2x.
+
+Reading. (1) Distillation trains a judgement: with no labels and no record at test time the model ranks the peers at
+AUC 0.845 in-distribution, at the record's own favourite-right level (92.0 vs 90.5%), and 0.71 on the OOD stream, a
+third of the way from the frozen judge (0.63) to the record (0.92). In-distribution the record's content is largely
+peer-by-task reliability that the answers themselves reveal; on OOD the cross-event reputation the record carries is
+not recoverable from one epoch of content, hence the gap. (2) It is visible inside the model: A2 is the first arm whose
+attention at gamma 0 is not uniform over the peers; it leans toward the record's favourite and toward the correct
+peers (1.12x, corr +0.29 against +0.05), an internal label-free tilt about a tenth the size of the engine's. (3) It
+did not become accuracy: at gamma 0, 72.5 / 71.2 (no Trust instruction) against the control's 74.4 / 73.3, own
+ability 71.0 / 69.9 against 71.4 / 72.7; the Trust line itself costs nothing in-distribution and 1.8 points on OOD
+(the short-answer tasks, 45.7 vs 49.5). The tilt still adds +4.0 on OOD on top of the learned judgement (73.4), so the
+record's information is not inside the model yet. Caveats: A2 ran one continuous epoch (276 steps) where the control
+ran 40 + 277 with a reset, and the verdict term takes a third of the reward range (lambda 0.5), which dilutes the
+answer signal. Next: A1 (gamma 3 in training, running from 23:11) tells whether the record as input makes the
+distillation more complete; then the verdict rewarded against the labels instead of the record (the plan's main bet;
+one flag: verdict_agreement(rank, labels)), and stage 1 of method B. Files: outputs/rl/judgeA2/hf/global_step_276/
+eval_*, outputs/address/attention_mass/judgeA2_*.json.
+
 ## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:
