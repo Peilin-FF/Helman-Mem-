@@ -1049,3 +1049,23 @@ correctness, favourite hit rate, Spearman with the record), `launch_judge.sh` (A
 tests incl. peers without the instruction, attention at gamma 0/3). Data: full_peers_verdict.parquet /
 val_peers_verdict.parquet.
 
+Method B stage 0, evidence computed 2026-09-11 (`scripts/evidence_checks.py`, outputs/evidence/*.json;
+label-free: sample I/O from the statement, arithmetic steps re-executed, answer span in the passage).
+Informativeness against the verified labels (never shown to the model):
+
+| stream  | check | peer answers checked | check passes -> right | check fails -> right | coverage |
+|---------|-------|---------------------:|----------------------:|---------------------:|---------:|
+| train   | code  |  7,416 | 72.7% | 3.0%  | 81.1% of all peer answers |
+| train   | math  | 27,737 | 77.4% | 56.6% |  |
+| train   | reading | 50,996 | 85.0% | 16.7% |  |
+| in-dist | code  |  4,638 | 56.5% | 10.6% | 83.3% |
+| in-dist | math  |  4,955 | 72.2% | 45.9% |  |
+| in-dist | reading | 12,000 | 89.3% | 21.1% |  |
+| OOD     | arithmetic only | 1,309 | 25.3% | 4.5% | 1.3% |
+
+Reading: a failed sample test or an absent span is close to decisive (3-21% right), a pass is a strong but
+not decisive sign (57-89%); arithmetic failures are the weakest (46-57% right, since an answer can be
+right despite a mis-written step). In-distribution the evidence covers 83% of peer answers; on the OOD
+stream almost nothing is checkable label-free (1.3%, BBH arithmetic only), so stage 0 cannot help OOD
+without new check types (option-consistency for multiple choice, passage checks for MultiRC). On hold.
+
