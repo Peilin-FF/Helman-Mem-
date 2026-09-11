@@ -9,8 +9,7 @@
 # (no swapped-record control for the families: user, 2026-09-11)
 # Usage:   GPUS=0,1,2,3 bash training/scripts/launchers/launch_families.sh smoke|full [tag ...]
 #          python scripts/families_table.py [--smoke]     the comparison table, frozen Qwen3-4B as the reference row
-# Tags:    llama3     Meta-Llama-3-8B            BASE model (no chat template: plain prompt layout, weak instruction following)
-#          llama31    Meta-Llama-3.1-8B-Instruct  the instruct Llama already on the server
+# Tags:    llama31    Meta-Llama-3.1-8B-Instruct  (the base Meta-Llama-3-8B was dropped 2026-09-11: no chat template, cannot follow the format)
 #          ministral  Ministral-8B-Instruct-2410  (sliding window 32k, disabled in the engine: our contexts are shorter)
 #          qwen25     Qwen2.5-7B-Instruct
 #          phi4       phi-4 (14B)
@@ -28,7 +27,7 @@ ADDR=${ADDR:-own}; sfx=""; [ $ADDR = q3_4b ] && sfx=_q3addr
 H=/mnt/data/peilin/HF_MODEL
 declare -A MODEL=([llama3]=$H/Meta-Llama-3-8B [llama31]=$H/Meta-Llama-3.1-8B-Instruct [ministral]=$H/Ministral-8B-Instruct-2410 [qwen25]=$H/Qwen2.5-7B-Instruct [phi4]=$H/phi-4)
 what=${1:-smoke}; shift || true
-models=${*:-llama3 llama31 ministral qwen25 phi4}
+models=${*:-llama31 ministral qwen25 phi4}
 IFS=, read -ra G <<< "${GPUS:-0,1,2,3,4,5,6,7}"
 if [ $what = smoke ]; then
   streams=indist; conds="tilt peers solo"; extra_all="--max_examples ${N:-96}"

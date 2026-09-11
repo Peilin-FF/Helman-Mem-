@@ -1,8 +1,7 @@
 # The memory on other central-model families
 
 Does the Bayesian reliability memory help a central model that is not Qwen3-4B? This runs the whole pipeline for
-Meta-Llama-3.1-8B-Instruct, Ministral-8B-Instruct-2410, Qwen2.5-7B-Instruct, phi-4 and (as a base-model control)
-Meta-Llama-3-8B, **each with its own memory**, and compares three ways of answering on two whole test streams.
+Meta-Llama-3.1-8B-Instruct, Ministral-8B-Instruct-2410, Qwen2.5-7B-Instruct and phi-4, **each with its own memory**, and compares three ways of answering on two whole test streams.
 
 ```
 bash run_families.sh                 # everything in training/configs/families.yaml, 8 GPUs, resumable; ~1 h per 8B model, ~2 h for phi-4
@@ -112,7 +111,6 @@ script fills from `outputs/gen/families/<tag>/full_*/eval_metrics.json` and `out
 | Ministral-8B-Instruct-2410 · own record | … | … | … | … | … | … | … | … |
 | Qwen2.5-7B-Instruct · own record | … | … | … | … | … | … | … | … |
 | phi-4 (14B) · own record | … | … | … | … | … | … | … | … |
-| Meta-Llama-3-8B (base, plain layout) · own record | … | … | … | … | … | … | … | … |
 
 Columns: the record's quality on each stream (AUC of its per-peer estimate against the peers' verified labels, and how
 often its favourite is right on events where the peers disagree); accuracy in percent for the three conditions on the
@@ -133,9 +131,8 @@ in-distribution stream (4,319 events, standard error ≈ 0.7) and the whole OOD 
 | smoke | `--smoke`: 48 events of train6 and indist6 under the tag `<tag>_smoke`, every step, ~4 min per model; `python scripts/families_table.py --smoke` shows accuracy on the slice plus the sanity checks (prompts tilted, bias kernels taken, generations changed by the tilt) |
 
 Model tags: `llama31` Meta-Llama-3.1-8B-Instruct · `ministral` Ministral-8B-Instruct-2410 · `qwen25` Qwen2.5-7B-Instruct ·
-`phi4` phi-4 (14B) · `llama3` Meta-Llama-3-8B (a base model without a chat template: the prompt is laid out as BOS +
-system text + user text + `Answer:`; its numbers will be low for that reason alone, 3.1-Instruct is the Llama row that
-means something).
+`phi4` phi-4 (14B). The base Meta-Llama-3-8B was tried in the smoke run and dropped: without a chat template it cannot
+follow the answer format (12.5% on the question alone), so it says nothing about the memory.
 
 Smoke run of 2026-09-11 (48 events, every family, the whole pipeline; numbers mean nothing at this size, the checks do):
 
@@ -144,7 +141,7 @@ Smoke run of 2026-09-11 (48 events, every family, the whole pipeline; numbers me
 | Meta-Llama-3.1-8B-Instruct | 72.9 | 70.8 | 58.3 | 44/48 | yes | 38/48 |
 | Ministral-8B-Instruct-2410 | 66.7 | 64.6 | 50.0 | 44/48 | yes | 18/48 |
 | phi-4 | 70.8 | 68.8 | 64.6 | 45/48 | yes | 44/48 |
-| Qwen2.5-7B-Instruct, Meta-Llama-3-8B | passed the same checks | | | | | |
+| Qwen2.5-7B-Instruct | 70.8 | 66.7 | 64.6 | 43/48 | yes | 20/48 |
 
 ## Notes and troubleshooting
 

@@ -6,7 +6,7 @@
 #              test stream read-before-write (cold start, shuffled0 order = the probe files), then scripts/record_quality.py
 #   eval       launch_families.sh full <tag> (peers + memory / peers / question only, both whole streams)
 # Usage:  GPUS=0,1,2,3 bash training/scripts/launchers/launch_family_memory.sh smoke|features|prompts|eval|all <tag>
-#         tags: llama3 llama31 ministral qwen25 phi4 (feedback_state/feature_streams.py MODELS)
+#         tags: llama31 ministral qwen25 phi4 (feedback_state/feature_streams.py MODELS; the base llama3 was dropped)
 #         smoke = the whole pipeline on the first 48 events of train6 and indist6 under the tag <tag>_smoke (~4 min on 4 GPUs)
 # Cost (full): each event needs one question pass and six judge prompts that each carry all six answers, so roughly
 # 20k tokens per event on the training and in-distribution streams; expect ~15-20 GPU-hours per 8B family for the three

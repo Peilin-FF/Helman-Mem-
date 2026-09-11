@@ -12,9 +12,8 @@ models:                            # tag -> HF directory (the tag names the cach
   ministral: /mnt/data/peilin/HF_MODEL/Ministral-8B-Instruct-2410
   qwen25: /mnt/data/peilin/HF_MODEL/Qwen2.5-7B-Instruct
   phi4: /mnt/data/peilin/HF_MODEL/phi-4
-  llama3: /mnt/data/peilin/HF_MODEL/Meta-Llama-3-8B     # base model, no chat template: plain prompt layout, weak instruction following
 
-run: [llama31, ministral, qwen25, phi4, llama3]        # the models to run, in this order (one model at a time, all its tasks over the GPUs)
+run: [llama31, ministral, qwen25, phi4]                # the models to run, in this order (one model at a time, all its tasks over the GPUs)
 steps: [features, prompts, eval, table]                # each step skips work already on disk, so a run can be resumed
 
 streams:
