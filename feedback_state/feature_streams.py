@@ -39,7 +39,11 @@ STREAMS = {
     "ood6": ("ood6/test.jsonl", "{m}_6_ph/ood"),
 }
 PEERS_PER_STREAM = {"train5": 5, "indist5": 5, "ood5": 5, "train6": 6, "indist6": 6, "ood6": 6}
-MODELS = {"q3_0_6b": "Qwen3-0.6B", "q3_4b": "Qwen3-4B", "q3_8b": "Qwen3-8B", "q35_4b": "Qwen3.5-4B", "q35_9b": "Qwen3.5-9B"}
+MODELS = {"q3_0_6b": "Qwen3-0.6B", "q3_4b": "Qwen3-4B", "q3_8b": "Qwen3-8B", "q35_4b": "Qwen3.5-4B", "q35_9b": "Qwen3.5-9B",
+          # other families (docs section 23): each family's memory is built from that family's OWN features (the address
+          # never comes from a Qwen judge when the central model is not Qwen); tags are the cache prefixes {m}_big6_ph etc.
+          "llama3": "Meta-Llama-3-8B", "llama31": "Meta-Llama-3.1-8B-Instruct", "ministral": "Ministral-8B-Instruct-2410",
+          "qwen25": "Qwen2.5-7B-Instruct", "phi4": "phi-4"}
 
 
 @dataclass

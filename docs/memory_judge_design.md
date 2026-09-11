@@ -1077,7 +1077,7 @@ stream almost nothing is checkable label-free (1.3%, BBH arithmetic only), so an
 OOD without new check types (option-consistency for multiple choice, passage checks for MultiRC).
 
 
-## 23. Other central-model families under the same memory (2026-09-11)
+## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:
 Meta-Llama-3-8B (base), Meta-Llama-3.1-8B-Instruct, Ministral-8B-Instruct-2410, Qwen2.5-7B-Instruct, phi-4 (14B).
@@ -1085,17 +1085,32 @@ Comparison per model: peers + memory (the tilt, gamma 3) / peers, no memory / qu
 stream (4,319) and the WHOLE OOD stream (17,403), thinking off, 768-token answers, greedy, vLLM; the frozen Qwen3-4B
 row (outputs/gen/q3_4b/base6_nothink) is the reference. The swapped record is the optional control (SWAP=1).
 
-What is model-specific and what is not:
-- The record: unchanged. It is built from the frozen Qwen3-4B judge's features and lives in the prompt files as
-  memory_prob per peer (read before write along the stream); nothing is recomputed per central model.
+**Rule (user, 2026-09-11 22:xx): a family is tested with its OWN memory.** When the central model is Llama, the
+record's address comes from Llama too (its own hidden states of the question and of each peer answer under the
+plain-text Yes/No judge prompt), never from the Qwen3-4B judge. So per family the whole pipeline is rebuilt with that
+model as the frozen judge: features (`scripts/encode_context_features.py`, caches outputs/context_features/<tag>_{big6,
+indist6,6}_ph), PCA-256 addresses fit on train6, the Bayesian record run along each test stream read-before-write
+(`scripts/build_generation_prompts.py --order shuffled0` = the probe files, under outputs/gen/<tag>/), its quality
+(`scripts/record_quality.py` -> record_<stream>.json), then the three conditions. Driver:
+`GPUS=... bash training/scripts/launchers/launch_family_memory.sh smoke|features|prompts|eval|all <tag>`; the
+evaluation step is `launch_families.sh full <tag>` (ADDR=own by default). `ADDR=q3_4b` evaluates the same central
+model on the Qwen3-4B-addressed prompt files instead (results with the suffix _q3addr): a comparison of the two
+records, not the family's result. Tags in feedback_state/feature_streams.py MODELS.
+
+Cost: every event needs one question pass and six judge prompts that each carry all six answers (about 20k tokens per
+event on train6 and indist6, less on OOD), so about 15-20 GPU-hours per 8B family for the three streams, roughly twice
+that for phi-4, plus about one GPU-hour of evaluation per family; shards on disk are skipped, so runs resume.
+Caches are about 6 GB per 8B family (peer_hidden fp16, 3 x hidden size per candidate).
+
+What is model-specific and what is not in the tilt itself:
 - The tilt: b_i = gamma log(p_i / max p) added to the pre-softmax score of every query onto peer i's tokens, in every
   layer and head. softmax(s + b) = Norm(A * c) holds per head for ANY softmax attention (MHA or GQA, RoPE or not,
   any head count or size), so it applies to all five: Llama-3/3.1 (GQA 32/8, RoPE), Ministral (GQA 32/8, RoPE,
   sliding window 32k), Qwen2.5 (GQA 28/4), phi-4 (GQA 40/10). Not covered: linear-attention / SSM layers (no
   softmax, the tilt has no meaning there), ALiBi and iRoPE (the bias kernels assert).
 - The engine patch (feedback_state/vllm_attn_bias.py) is model-agnostic: it works on KV slots inside vLLM's Triton
-  kernels. The only per-model work is locating the peer blocks' token positions under that model's tokenizer and
-  chat template (feedback_state/attn_bias.py: character spans -> offsets -> per-token bias).
+  kernels. The per-model work is locating the peer blocks' token positions under that model's tokenizer and chat
+  template (feedback_state/attn_bias.py: character spans -> offsets -> per-token bias).
 - Sliding window (Ministral, 32k): disabled in the engine (LLM(..., disable_sliding_window=True)), numerically a
   no-op because our contexts (<= 4k tokens) are shorter than the window; needed because the bias kernels are plain causal.
 - Tokenisation: every condition now hands vLLM the same token ids, tokenised by us with add_special_tokens=False
@@ -1103,15 +1118,17 @@ What is model-specific and what is not:
   let the engine tokenise the string, which would have given Llama and Mistral a second BOS in those conditions only.
 - A base model without a chat template (Meta-Llama-3-8B) gets a plain layout, BOS + system + user + "Answer:"
   (memory_generator.render_prompt); expect weak instruction following. The 3.1 Instruct is the meaningful Llama row.
+- The judge prompt for the features is plain text (no chat template) and needs " Yes" / " No" to be single tokens,
+  which holds for all five tokenizers (checked in the smoke run).
 
-CPU check (scripts/family_prompt_check.py, first 100 in-dist events, gamma 3): every tokenizer finds all six peer
-blocks; tilted-block coverage 99.0-99.1% for all five (Qwen3-4B: 99.1%); 96/100 prompts tilted (record spread > 0.1);
-prompt tokens median 890-960, max 3.8k; BOS first for Llama and Ministral, none for Qwen2.5 / phi-4 (their templates
-carry none). PROMPT_CHECK_OK.
+CPU check (scripts/family_prompt_check.py, first 100 in-dist events, gamma 3, on the Qwen3-4B-addressed prompts since
+the messages are identical for every record): every tokenizer finds all six peer blocks; tilted-block coverage
+99.0-99.1% for all five (Qwen3-4B: 99.1%); 96/100 prompts tilted; prompt tokens median 890-960, max 3.8k; BOS first
+for Llama and Ministral, none for Qwen2.5 / phi-4 (their templates carry none). PROMPT_CHECK_OK.
 
-Running it: `GPUS=0,1,2,3 bash training/scripts/launchers/launch_families.sh smoke` (first 96 in-dist events, four
-conditions including swapped, every model, then `scripts/families_table.py --smoke` with the sanity checks: prompts
-tilted, bias backend taken, generations differing tilt vs peers and tilt vs swapped); `... full [tag ...]` (24
-evaluations spread over the given GPUs as per-GPU chains, OOD first; outputs/gen/families/<tag>/full_<stream>6_<cond>/;
-finished ones are skipped on re-run); `python scripts/families_table.py [--by_task]` for the table
-(outputs/gen/families/table.md). GPU smoke test: pending the next GPU window (the judgement job holds the eight GPUs).
+Running it: `GPUS=0,1,2,3 bash training/scripts/launchers/launch_family_memory.sh all llama31` (features -> prompts ->
+record quality -> evaluation), `python scripts/families_table.py [--by_task]` for the table
+(outputs/gen/families/table.md). Smoke: `launch_family_memory.sh smoke <tag>` runs the whole pipeline on the first 48
+events of train6 and indist6 under the tag <tag>_smoke (features on two GPUs, prompts, the four conditions), and
+`ADDR=q3_4b bash launch_families.sh smoke` checks only the engine path of every model on the Qwen3-4B-addressed
+prompts. GPU smoke tests: pending the next GPU window (the judgement job holds the eight GPUs).
