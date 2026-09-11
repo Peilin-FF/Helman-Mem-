@@ -53,6 +53,9 @@ fi
 if [ $what = A1 ] || [ $what = all ]; then
   train_arm judgeA1 "memory.verdict_lambda=0.5 $TILT" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA1); echo "=== tests: judgeA1 $CK: $(date)"; tests_A $CK judgeA1; }
 fi
+if [ $what = A3 ]; then   # A3: the Trust line rewarded against the peers' VERIFIED LABELS (the judgement itself), gamma 0; the record is not involved
+  train_arm judgeA3 "memory.verdict_lambda=0.5 memory.verdict_target=labels" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA3); echo "=== tests: judgeA3 $CK: $(date)"; tests_A $CK judgeA3; }
+fi
 for f in outputs/rl/judgeA2/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeA1/hf/global_step_*/eval_*/eval_metrics.json; do
   [ -f "$f" ] && python -c "
 import json; m=json.load(open('$f')); v=m.get('verdict',{})

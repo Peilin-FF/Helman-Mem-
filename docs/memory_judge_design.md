@@ -1127,6 +1127,41 @@ distillation more complete; then the verdict rewarded against the labels instead
 one flag: verdict_agreement(rank, labels)), and stage 1 of method B. Files: outputs/rl/judgeA2/hf/global_step_276/
 eval_*, outputs/address/attention_mass/judgeA2_*.json.
 
+### 22.2 A1 result (2026-09-12 07:47): the record as input teaches the model to read the tilt, not to judge
+
+A1 = A2's recipe with the tilt (gamma 3) in rollouts, log-probs and the update, so the record is target and input.
+Training died at step 265 of 276 with a transient CUDA fault on one rank ("unspecified launch failure"; the GPUs are
+healthy); the step-240 checkpoint stands (validation there: agreement with the record under the tilt reading +0.90,
+math +0.88, code +0.54; accuracy 81.4 / 92.0 / 33.6). Tests on the whole streams, in-dist / OOD:
+
+| condition                              | A1 (step 240) | A2 (step 276) | control     |
+|----------------------------------------|---------------|---------------|-------------|
+| peers, gamma 0, with the Trust line    | 72.7 / 72.1   | 72.6 / 69.4   | -           |
+| peers, gamma 0, no Trust instruction   | 72.6 / 72.6   | 72.5 / 71.2   | 74.4 / 73.3 |
+| peers + tilt gamma 3 (+ Trust line)    | 73.3 / 74.2   | 72.9 / 73.4   | 74.9 / 75.5 |
+| swapped record (+ Trust line)          | 65.7 / 66.5   | 69.8 / 61.4   | 70.5 / 67.7 |
+| question only                          | 69.7 / 71.4   | 71.0 / 69.9   | 71.4 / 72.7 |
+
+| judgement (AUC vs labels / favourite right) | A1                              | A2                              |
+|---------------------------------------------|---------------------------------|---------------------------------|
+| gamma 0 (no record at test)                 | 0.702 / 72.5%  ·  0.657 / 68.1% | 0.845 / 92.0%  ·  0.710 / 69.8% |
+| under the tilt, gamma 3                     | 0.841 / 91.1%  ·  0.747 / 81.8% | 0.843 / 92.7%  ·  0.728 / 76.5% |
+| under the swapped record                    | 0.270 / 33.0%  ·  0.413 / 44.3% | 0.658 / 68.8%  ·  0.579 / 56.0% |
+
+Spearman of A1's Trust line with the record: +0.43 / +0.30 at gamma 0, +0.89 / +0.64 under the tilt, -0.73 / -0.49
+under the swapped record. Attention at gamma 0 (per-token density): A1 favourite 1.03x / 1.06x, corr(record) +0.09 /
++0.13, i.e. uniform again like the four earlier arms (A2: 1.12x / 1.08x, +0.29 / +0.20).
+
+Reading. With the record as input during training the model learns to read the tilt rather than to judge: under the
+tilt its verdict tracks the record better than A2's and is exactly inverted under a swapped record; without the tilt
+the judgement falls back to near the frozen floor in-distribution (0.70 against A2's 0.845) and the attention is
+uniform again. Accuracy is A2 plus about one point on OOD (72.6 vs 71.2 without the instruction; 74.2 vs 73.4 with the
+tilt) and still below the control; alone 69.7 / 71.4. This is the tilt-dependence of section 21.7 in a new form.
+Decision: in judgement training the record is a target only, never an input. A3 launched 2026-09-12 08:00
+(job 20260912-*): the same Trust line rewarded against the peers' verified labels instead of the record (the plan's
+main bet; memory.verdict_target=labels, active where the peers disagree, 10,200 of the 17,709 events; lambda 0.5,
+gamma 0), tests as for A2.
+
 ## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:

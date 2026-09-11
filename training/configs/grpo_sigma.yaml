@@ -255,6 +255,8 @@ memory:
   max_guided_groups: 1000000
   verdict_lambda: 0.0         # method A (docs section 22): weight of the Trust-line reward, 0.5(1 + Spearman with the record); 0 = off
   verdict_flat: 0.1           # records with spread <= this give no verdict reward (the tilt is zero there too)
+  verdict_target: record      # what the Trust line is scored against: record (distillation, A2/A1) or labels (the peers' verified
+                              # correctness of this event, A3: the judgement itself; active only where the peers disagree)
 
 trainer:
   balance_batch: True

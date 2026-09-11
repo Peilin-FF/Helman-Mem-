@@ -91,8 +91,11 @@ class SigmaRewardManager:
     """Same contract as verl's NaiveRewardManager, graded with a thread pool (code tests run in
     sandboxed subprocesses, so threads give real parallelism)."""
 
-    def __init__(self, tokenizer, num_examine: int = 0, compute_score=None, reward_fn_key: str = "data_source", max_workers: int = 32, code_timeout: float = 10.0, verdict_lambda: float = 0.0, verdict_flat: float = 0.1) -> None:
-        self.verdict_lambda, self.verdict_flat = float(verdict_lambda), float(verdict_flat)   # method A: reward the Trust line for agreeing with the record
+    def __init__(self, tokenizer, num_examine: int = 0, compute_score=None, reward_fn_key: str = "data_source", max_workers: int = 32, code_timeout: float = 10.0, verdict_lambda: float = 0.0, verdict_flat: float = 0.1, verdict_target: str = "record") -> None:
+        self.verdict_lambda, self.verdict_flat = float(verdict_lambda), float(verdict_flat)   # method A: reward the Trust line for agreeing with the target
+        self.verdict_target = str(verdict_target)   # "record": the memory's per-peer estimate (distillation); "labels": the peers' verified correctness (the judgement itself)
+        if self.verdict_target not in ("record", "labels"):
+            raise ValueError(f"memory.verdict_target must be record or labels, got {verdict_target!r}")
         self.tokenizer = tokenizer
         self.code_timeout = float(code_timeout)
         self.num_examine = int(num_examine)
@@ -111,11 +114,12 @@ class SigmaRewardManager:
             valid_response_length = int(item.batch["attention_mask"][prompt_length:].sum())
             response_str = self.tokenizer.decode(item.batch["responses"][:valid_response_length], skip_special_tokens=True)
             info = item.non_tensor_batch.get("extra_info", None)
-            # method A (verdict): the reply may open with a 'Trust: a > b > ...' line; it is scored against the record's
-            # estimate and stripped before the answer is graded
+            # method A (verdict): the reply may open with a 'Trust: a > b > ...' line; it is scored against the target
+            # (the record's estimate, or the peers' verified labels in prompt order) and stripped before the answer is graded
             verdict_rank, verdict_probs = None, None
             if self.verdict_lambda > 0 and info is not None and info.get("prompt_source", "peers") != "solo":
-                verdict_probs = [float(x) for x in (info.get("memory_prob") or [])]
+                key = "peer_correct" if self.verdict_target == "labels" else "memory_prob"
+                verdict_probs = [float(x) for x in (info.get(key) or [])]
                 verdict_rank = parse_verdict(response_str, len(verdict_probs)) if verdict_probs else None
                 response_str = strip_verdict(response_str)
             jobs.append((i, valid_response_length, response_str, str(item.non_tensor_batch[self.reward_fn_key]),
@@ -155,7 +159,10 @@ class SigmaRewardManager:
             else:
                 reward = float(s)
             if self.verdict_lambda > 0:
-                active = bool(vprobs) and not record_is_flat(vprobs, self.verdict_flat)
+                if self.verdict_target == "labels":   # vprobs holds the labels: only events where the peers disagree carry a signal
+                    active = bool(vprobs) and 0.0 < sum(vprobs) < len(vprobs)
+                else:
+                    active = bool(vprobs) and not record_is_flat(vprobs, self.verdict_flat)
                 agree = verdict_agreement(vrank, vprobs) if active else 0.0
                 reward += self.verdict_lambda * agree if active else 0.0
                 extra["verdict_active"].append(float(active)); extra["verdict_parsed"].append(float(vrank is not None))
