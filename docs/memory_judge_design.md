@@ -1033,3 +1033,19 @@ Recipes, cheapest first, each with its test:
   3. Distil the record: auxiliary target = the record's p_i predicted from the prompt during training.
   4. Evidence seeking: tools on the peers' answers (run code, check a step), reward correct verdicts.
 Decision: run 1 after the 8B control finishes; build 2 as the main bet.
+
+Baseline measured 2026-09-11 (`scripts/judge_logodds_auc.py`): the frozen Qwen3-4B's own label-free Yes/No
+log-odds per peer, no memory, separate right from wrong peers with AUC 0.629 in-dist (3,117 disagreeing
+events) and 0.633 OOD (10,617); its favourite is right on 52.8% / 59.5% of disagreeing events; mean
+Spearman with correctness +0.14 / +0.18. The record: AUC 0.92, favourite right 90.5% / 82.7%. So the
+frozen model's content-only judgement is about a third of the way from chance to the record.
+
+Method A implementation (2026-09-11): `feedback_state/verdict.py` (instruction, parser, strip, agreement
+= 0.5(1 + Spearman) with tie-aware ranks), `training/sigma_rl/reward.py` (SigmaRewardManager adds
+lambda * agreement on non-flat records, strips the line before grading; knobs memory.verdict_lambda /
+verdict_flat), `build_rl_data.py --verdict` (appends the instruction to peers prompts; question-only
+prompts untouched), `evaluate_memory_generator.py --verdict` (asks, strips, and reports verdict AUC vs
+correctness, favourite hit rate, Spearman with the record), `launch_judge.sh` (A2 gamma 0 then A1 gamma 3,
+tests incl. peers without the instruction, attention at gamma 0/3). Data: full_peers_verdict.parquet /
+val_peers_verdict.parquet.
+

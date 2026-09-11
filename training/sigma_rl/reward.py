@@ -11,6 +11,8 @@ import json
 import os
 import sys
 from collections import defaultdict
+
+from feedback_state.verdict import parse_verdict, record_is_flat, strip_verdict, verdict_agreement
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
@@ -89,7 +91,8 @@ class SigmaRewardManager:
     """Same contract as verl's NaiveRewardManager, graded with a thread pool (code tests run in
     sandboxed subprocesses, so threads give real parallelism)."""
 
-    def __init__(self, tokenizer, num_examine: int = 0, compute_score=None, reward_fn_key: str = "data_source", max_workers: int = 32, code_timeout: float = 10.0) -> None:
+    def __init__(self, tokenizer, num_examine: int = 0, compute_score=None, reward_fn_key: str = "data_source", max_workers: int = 32, code_timeout: float = 10.0, verdict_lambda: float = 0.0, verdict_flat: float = 0.1) -> None:
+        self.verdict_lambda, self.verdict_flat = float(verdict_lambda), float(verdict_flat)   # method A: reward the Trust line for agreeing with the record
         self.tokenizer = tokenizer
         self.code_timeout = float(code_timeout)
         self.num_examine = int(num_examine)
@@ -107,8 +110,16 @@ class SigmaRewardManager:
             item = data[i]
             valid_response_length = int(item.batch["attention_mask"][prompt_length:].sum())
             response_str = self.tokenizer.decode(item.batch["responses"][:valid_response_length], skip_special_tokens=True)
+            info = item.non_tensor_batch.get("extra_info", None)
+            # method A (verdict): the reply may open with a 'Trust: a > b > ...' line; it is scored against the record's
+            # estimate and stripped before the answer is graded
+            verdict_rank, verdict_probs = None, None
+            if self.verdict_lambda > 0 and info is not None and info.get("prompt_source", "peers") != "solo":
+                verdict_probs = [float(x) for x in (info.get("memory_prob") or [])]
+                verdict_rank = parse_verdict(response_str, len(verdict_probs)) if verdict_probs else None
+                response_str = strip_verdict(response_str)
             jobs.append((i, valid_response_length, response_str, str(item.non_tensor_batch[self.reward_fn_key]),
-                         item.non_tensor_batch["reward_model"]["ground_truth"], item.non_tensor_batch.get("extra_info", None)))
+                         item.non_tensor_batch["reward_model"]["ground_truth"], info, verdict_rank, verdict_probs))
 
         # code: sandboxed execution in Ray task workers (separate single-threaded processes); other tasks: threads
         acc: dict[int, float] = {}
@@ -120,7 +131,7 @@ class SigmaRewardManager:
             use_ray = False
         if use_ray:
             refs = {}
-            for i, _, text, source, _, info in jobs:
+            for i, _, text, source, _, info, _, _ in jobs:
                 rec_json = (info or {}).get("record")
                 if source == "code" and isinstance(rec_json, str):
                     refs[i] = grade_code_remote(rec_json, text, self.code_timeout)
@@ -129,20 +140,26 @@ class SigmaRewardManager:
                     acc[i] = float(val)
 
         def run(job):
-            i, _, text, source, gt, info = job
+            i, _, text, source, gt, info, _, _ = job
             return self.compute_score(data_source=source, solution_str=text, ground_truth=gt, extra_info=info, acc=acc.get(i))
 
         with ThreadPoolExecutor(max_workers=max(1, self.max_workers)) as pool:
             scores = list(pool.map(run, jobs))
         extra = defaultdict(list)
         printed: dict[str, int] = defaultdict(int)
-        for (i, length, text, source, gt, _), s in zip(jobs, scores):
+        for (i, length, text, source, gt, _, vrank, vprobs), s in zip(jobs, scores):
             if isinstance(s, dict):
                 reward = float(s["score"])
                 for k, v in s.items():
                     extra[k].append(float(v))
             else:
                 reward = float(s)
+            if self.verdict_lambda > 0:
+                active = bool(vprobs) and not record_is_flat(vprobs, self.verdict_flat)
+                agree = verdict_agreement(vrank, vprobs) if active else 0.0
+                reward += self.verdict_lambda * agree if active else 0.0
+                extra["verdict_active"].append(float(active)); extra["verdict_parsed"].append(float(vrank is not None))
+                extra["verdict_agreement"].append(float(agree) if active else float("nan"))
             reward_tensor[i, max(length - 1, 0)] = reward
             if printed[source] < self.num_examine:
                 printed[source] += 1

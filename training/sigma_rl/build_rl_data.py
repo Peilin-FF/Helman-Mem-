@@ -37,6 +37,7 @@ from pathlib import Path
 import pandas as pd
 
 from feedback_state.attn_bias import peer_char_spans
+from feedback_state.verdict import add_verdict_instruction
 from feedback_state.data import JsonlDataset
 from feedback_state.memory_generator import build_messages, domain_note
 from feedback_state.memory_rl import choose_hint_slot, hint_messages, labeled_peer_messages, peer_texts_in_prompt_order
@@ -63,6 +64,7 @@ def parse_args():
     ap.add_argument("--prompt_source", choices=["solo", "memory", "peers"], default="solo",
                     help="the policy's own prompt: question only (solo), or every peer solution with the history (memory) / without it (peers)")
     ap.add_argument("--swap_history", action="store_true", help="control: the history permuted by rank (highest reliability on the least trusted peer)")
+    ap.add_argument("--verdict", action="store_true", help="method A: ask for a 'Trust: a > b > ...' line before the answer (peers/memory prompts)")
     ap.add_argument("--solo_fraction", type=float, default=0.0, help="fraction of events whose whole group is answered under the question-only prompt (keeps the model's own ability)")
     return ap.parse_args()
 
@@ -130,6 +132,8 @@ def main() -> None:
         else:
             domain = [domain_note(r.get("task_type_note", r["task_type"]), *d) for d in domain_counts] if domain_counts else None
             main_prompt = build_messages(rec, peer_texts, mode="memory", probs=probs, evidence=evid, domain=domain)
+        if args.verdict and source != "solo":
+            main_prompt = add_verdict_instruction(main_prompt)
         n_guided += guided is not None
         n_guided_correct += int(correct == 1)
         n_verified += verified

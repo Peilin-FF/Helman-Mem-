@@ -25,6 +25,7 @@ apply_torch_fp8_shim()
 from transformers import AutoTokenizer
 
 from feedback_state.data import JsonlDataset
+from feedback_state.verdict import add_verdict_instruction, parse_verdict, strip_verdict
 from feedback_state.lora import apply_lora, load_lora_state_dict, set_lora_active
 from feedback_state.memory_generator import grade, render_prompt
 
@@ -43,6 +44,7 @@ def parse_args():
     p.add_argument("--every", type=int, default=1, help="keep every k-th event of the stream (positions and memory states unchanged; even subsample)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--windows", type=int, default=10)
+    p.add_argument("--verdict", action="store_true", help="method A: ask for and score a 'Trust: ...' line before the answer (peers modes)")
     p.add_argument("--thinking", choices=["on", "off"], default="off", help="on = Qwen3 thinking mode (raise --max_new_tokens; the answer after </think> is graded)")
     p.add_argument("--engine", choices=["hf", "vllm"], default="hf", help="vllm = decode with vLLM (greedy, continuous batching; ~30x faster than HF generate); hf = transformers generate")
     p.add_argument("--gpu_memory_utilization", type=float, default=0.85, help="vLLM engine memory share (lower it when the GPU is shared)")
@@ -78,7 +80,10 @@ def main() -> None:
         rows = rows[:: args.every]
     if args.max_examples:
         rows = rows[: args.max_examples]
-    prompts = [render_prompt(tok, r[f"messages_{args.mode}"], thinking=args.thinking == "on") for r in rows]
+    messages = [r[f"messages_{args.mode}"] for r in rows]
+    if args.verdict and args.mode != "solo":
+        messages = [add_verdict_instruction(m) for m in messages]
+    prompts = [render_prompt(tok, m, thinking=args.thinking == "on") for m in messages]
     ids_list = biases = None
     if args.attn_gamma > 0:   # the tilt: per prompt, the token positions of each peer block and its additive score
         from feedback_state.attn_bias import prompt_token_bias
@@ -170,27 +175,59 @@ def generate_vllm(model_path: str, prompts: list[str], args, ids_list=None, bias
     return [o.outputs[0].text for o in outs]
 
 
+def verdict_metrics(vrows) -> dict:
+    """How good are the model's own Trust lines? agreement with the record (non-flat records), and against the
+    verified labels (events where the peers disagree): AUC of the rank score and the favourite's hit rate."""
+    from sklearn.metrics import roc_auc_score
+    from feedback_state.verdict import rank_scores, spearman, record_is_flat
+    parsed = [v for v in vrows if v[0] is not None]
+    out = {"n": len(vrows), "parsed_rate": len(parsed) / max(len(vrows), 1)}
+    rec = [spearman(rank_scores(rk), pr) for rk, pr, _ in parsed if pr and not record_is_flat(pr)]
+    rec = [x for x in rec if x == x]
+    out["spearman_with_record"] = float(np.mean(rec)) if rec else None
+    dis = [(rk, lab) for rk, _, lab in parsed if 0 < sum(lab) < len(lab)]
+    if dis:
+        y = [l for _, lab in dis for l in lab]; sc = [x for rk, _ in dis for x in rank_scores(rk)]
+        out["auc_vs_correct"] = float(roc_auc_score(y, sc))
+        out["favourite_right"] = float(np.mean([lab[rk[0]] for rk, lab in dis]))
+        out["spearman_with_correct"] = float(np.nanmean([spearman(rank_scores(rk), lab) for rk, lab in dis]))
+        out["n_disagreeing"] = len(dis)
+    return out
+
+
 def write_results(args, rows, records, outputs, t0) -> None:
     hits, oracle, majority, out_rows = [], [], [], []
+    vrows = []   # method A: (rank, memory_prob, peer_correct) per row with a parsed Trust line
     for r, text in zip(rows, outputs):
         rec = records[str(r["id"])]
-        ok = grade(rec, text)
+        vrank = None
+        if args.verdict and args.mode != "solo":
+            vrank = parse_verdict(text, len(r["peer_correct"]))
+            vrows.append((vrank, [float(x) for x in (r.get("memory_prob") or [])], [int(x) for x in r["peer_correct"]]))
+            text_g = strip_verdict(text)
+        else:
+            text_g = text
+        ok = grade(rec, text_g)
         hits.append(int(ok))
         pc = r["peer_correct"]
         oracle.append(int(max(pc)))
         majority.append(int(sum(pc) * 2 > len(pc)))
         out_rows.append({"pos": r["pos"], "id": r["id"], "task_type": r["task_type"], "source": r["source"], "correct": int(ok),
-                         "peer_correct": pc, "memory_prob": r.get("memory_prob"), "generation": text})
+                         "peer_correct": pc, "memory_prob": r.get("memory_prob"), "verdict": vrank, "generation": text})
     h = np.array(hits)
     metrics = {"accuracy": float(h.mean()), "num_samples": int(len(h)), "mode": args.mode, "thinking": args.thinking == "on", "max_new_tokens": args.max_new_tokens, "engine": args.engine, "checkpoint": str(args.checkpoint) if args.checkpoint else None,
                "central_model": args.central_model, "prompts": str(args.prompts),
                "generated": curve(h, args.windows), "oracle_any_peer": curve(np.array(oracle), args.windows),
                "peer_majority_correct": curve(np.array(majority), args.windows),
                "by_task": {t: float(np.mean([hh for hh, rr in zip(hits, rows) if rr["task_type"] == t])) for t in sorted({rr["task_type"] for rr in rows})}}
+    if vrows:
+        metrics["verdict"] = verdict_metrics(vrows)
     with (args.output / "generations.jsonl").open("w") as f:
         for row in out_rows:
             f.write(json.dumps(row) + "\n")
     (args.output / "eval_metrics.json").write_text(json.dumps(metrics, indent=1))
+    if "verdict" in metrics:
+        print(f"[gen-eval] verdict: {metrics['verdict']}", flush=True)
     print(f"[gen-eval] mode={args.mode} accuracy={100 * metrics['accuracy']:.2f} oracle_any_peer={100 * metrics['oracle_any_peer']['total']:.2f} "
           f"by_task={ {k: round(100 * v, 1) for k, v in metrics['by_task'].items()} } windows=" + " ".join(f"{100 * w:.1f}" for w in metrics["generated"]["windows"]) + f" ({time.time() - t0:.0f}s)")
 

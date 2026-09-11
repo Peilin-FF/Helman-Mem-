@@ -253,6 +253,8 @@ memory:
   guided_filter: none         # none = the post-hoc reward decides (ours) | verified = keep only verified-correct guided answers (labels-before baseline)
   guided_verified_only: True  # only prompts with a verifier after the answer get a guided sample (the pseudo-reward has no ground truth)
   max_guided_groups: 1000000
+  verdict_lambda: 0.0         # method A (docs section 22): weight of the Trust-line reward, 0.5(1 + Spearman with the record); 0 = off
+  verdict_flat: 0.1           # records with spread <= this give no verdict reward (the tilt is zero there too)
 
 trainer:
   balance_batch: True
