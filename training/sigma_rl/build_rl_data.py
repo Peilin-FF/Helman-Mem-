@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import re
 import random
 from pathlib import Path
 
@@ -38,6 +39,7 @@ import pandas as pd
 
 from feedback_state.attn_bias import peer_char_spans
 from feedback_state.verdict import add_verdict_instruction
+from feedback_state.evidence import add_evidence_block
 from feedback_state.data import JsonlDataset
 from feedback_state.memory_generator import build_messages, domain_note
 from feedback_state.memory_rl import choose_hint_slot, hint_messages, labeled_peer_messages, peer_texts_in_prompt_order
@@ -64,6 +66,7 @@ def parse_args():
     ap.add_argument("--prompt_source", choices=["solo", "memory", "peers"], default="solo",
                     help="the policy's own prompt: question only (solo), or every peer solution with the history (memory) / without it (peers)")
     ap.add_argument("--swap_history", action="store_true", help="control: the history permuted by rank (highest reliability on the least trusted peer)")
+    ap.add_argument("--evidence", type=Path, default=None, help="method B stage 0: JSON from scripts/evidence_checks.py; adds an Evidence block to peers/memory prompts")
     ap.add_argument("--verdict", action="store_true", help="method A: ask for a 'Trust: a > b > ...' line before the answer (peers/memory prompts)")
     ap.add_argument("--solo_fraction", type=float, default=0.0, help="fraction of events whose whole group is answered under the question-only prompt (keeps the model's own ability)")
     return ap.parse_args()
@@ -89,6 +92,7 @@ def guided_messages(r: dict, rec: dict, peer_texts: list[str], mode: str, rng: r
 
 def main() -> None:
     args = parse_args()
+    evidence = json.load(open(args.evidence))["lines"] if args.evidence else None
     rng = random.Random(args.seed)
     rows = [json.loads(l) for l in args.prompts.open()]
     records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(args.records).records}
@@ -132,6 +136,13 @@ def main() -> None:
         else:
             domain = [domain_note(r.get("task_type_note", r["task_type"]), *d) for d in domain_counts] if domain_counts else None
             main_prompt = build_messages(rec, peer_texts, mode="memory", probs=probs, evidence=evid, domain=domain)
+        if evidence is not None and source != "solo":
+            ev = evidence.get(str(r["id"]), {})
+            keys = sorted(ev)
+            lines = [ev[keys[int(p)]] for p in r["peer_order"]] if keys else []
+            # the stored lines are numbered in canonical order; renumber to prompt order
+            lines = [re.sub(r"^Peer \d+:", f"Peer {j + 1}:", ln) for j, ln in enumerate(lines)]
+            main_prompt = add_evidence_block(main_prompt, lines)
         if args.verdict and source != "solo":
             main_prompt = add_verdict_instruction(main_prompt)
         n_guided += guided is not None
