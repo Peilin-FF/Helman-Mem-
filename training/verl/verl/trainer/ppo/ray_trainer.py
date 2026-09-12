@@ -680,8 +680,6 @@ class RayPPOTrainer:
                 batch_keys=batch_keys_to_pop,
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
             )
-            if "extra_info" in test_batch.non_tensor_batch:   # sigma: evidence seeking runs the model's check on each event's record
-                test_gen_batch.non_tensor_batch["extra_info"] = test_batch.non_tensor_batch["extra_info"].copy()
 
             test_gen_batch.meta_info = {
                 "eos_token_id": self.tokenizer.eos_token_id,

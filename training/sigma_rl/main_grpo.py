@@ -82,10 +82,8 @@ class TaskRunner:
             reward_fn = OutcomeRewardManager(tokenizer, max_workers=workers)
             val_reward_fn = OutcomeRewardManager(tokenizer, max_workers=workers)
         else:
-            vk = {"verdict_lambda": float(config.memory.get("verdict_lambda", 0.0)), "verdict_flat": float(config.memory.get("verdict_flat", 0.1)),
-                  "verdict_target": str(config.memory.get("verdict_target", "record")), "check_bonus": float(config.memory.get("check_bonus", 0.0))}
-            reward_fn = SigmaRewardManager(tokenizer, num_examine=0, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers, **vk)
-            val_reward_fn = SigmaRewardManager(tokenizer, num_examine=1, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers, **vk)
+            reward_fn = SigmaRewardManager(tokenizer, num_examine=0, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers)
+            val_reward_fn = SigmaRewardManager(tokenizer, num_examine=1, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers)
         train_dataset = SigmaRLDataset(config.data.train_files, tokenizer, config.data)
         val_dataset = SigmaRLDataset(config.data.val_files, tokenizer, config.data)
         trainer = SigmaRayPPOTrainer(

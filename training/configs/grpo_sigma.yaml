@@ -130,10 +130,6 @@ actor_rollout_ref:
     do_sample: True
     n: 8                                  # samples per prompt (the GRPO group)
     attn_bias: False                      # apply the attention tilt inside vLLM (patched Triton attention kernels, feedback_state.vllm_attn_bias)
-    evidence_seek: False                  # method B stage 1: the reply may open with a check the sandbox runs (feedback_state.evidence_seek); two generation passes
-    seek_check_tokens: 160                # pass-1 budget (the check request); a reply cut here without a check continues in pass 2
-    seek_result_tokens: 352               # cap on the inserted result block (tokens); excluded from the loss
-    seek_timeout: 5.0                     # seconds per program run in the sandbox
     engine_kwargs:
       vllm:
         swap_space: null
@@ -257,11 +253,6 @@ memory:
   guided_filter: none         # none = the post-hoc reward decides (ours) | verified = keep only verified-correct guided answers (labels-before baseline)
   guided_verified_only: True  # only prompts with a verifier after the answer get a guided sample (the pseudo-reward has no ground truth)
   max_guided_groups: 1000000
-  verdict_lambda: 0.0         # method A (docs section 22): weight of the Trust-line reward, 0.5(1 + Spearman with the record); 0 = off
-  verdict_flat: 0.1           # records with spread <= this give no verdict reward (the tilt is zero there too)
-  check_bonus: 0.0            # method B stage 1: reward added when the reply carries an executed check (a Result block); bootstraps the format
-  verdict_target: record      # what the Trust line is scored against: record (distillation, A2/A1) or labels (the peers' verified
-                              # correctness of this event, A3: the judgement itself; active only where the peers disagree)
 
 trainer:
   balance_batch: True

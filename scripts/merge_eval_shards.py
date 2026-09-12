@@ -3,8 +3,7 @@
     PYTHONPATH=. python scripts/merge_eval_shards.py --out outputs/gen/families/q35_9b/full_oodfull6_tilt
 
 Reads <out>/shard*/generations.jsonl, restores the stream order, recomputes eval_metrics.json exactly as the evaluator
-does (accuracy, per-task accuracy, the accuracy curve along the stream, the oracle and majority references, the verdict
-scores), and writes <out>/generations.jsonl and <out>/eval_metrics.json.
+does (accuracy, per-task accuracy, the accuracy curve along the stream, the oracle and majority references), and writes <out>/generations.jsonl and <out>/eval_metrics.json.
 """
 from __future__ import annotations
 
@@ -43,15 +42,12 @@ def main() -> None:
                     "generated": curve(hits, args.windows), "oracle_any_peer": curve(oracle, args.windows),
                     "peer_majority_correct": curve(majority, args.windows),
                     "by_task": {t: float(np.mean([int(r["correct"]) for r in rows if r["task_type"] == t])) for t in sorted({r["task_type"] for r in rows})}})
-    if any(r.get("verdict") is not None for r in rows) or "verdict" in meta:
-        from tests.experiments.common.evaluate_memory_generator import verdict_metrics
-        metrics["verdict"] = verdict_metrics([(r.get("verdict"), [float(x) for x in (r.get("memory_prob") or [])], [int(x) for x in r["peer_correct"]]) for r in rows])
     with (args.out / "generations.jsonl").open("w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
     (args.out / "eval_metrics.json").write_text(json.dumps(metrics, indent=1))
     print(f"[merge] {args.out}: {len(shards)} shards, {len(rows)} events, accuracy {100 * metrics['accuracy']:.2f}, by_task "
-          f"{ {k: round(100 * v, 1) for k, v in metrics['by_task'].items()} }" + (f", verdict {metrics['verdict']}" if "verdict" in metrics else ""))
+          f"{ {k: round(100 * v, 1) for k, v in metrics['by_task'].items()} }")
 
 
 if __name__ == "__main__":

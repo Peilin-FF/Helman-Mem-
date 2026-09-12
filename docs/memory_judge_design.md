@@ -1004,7 +1004,19 @@ Figures in outputs/address/attention_mass/: figA (layers x reliability rank per 
 figB (share on the favourite by layer), figC (one event, peers ordered by the record, correctness
 marked), figD (token-resolution map of the last prompt token for one event).
 
-## 22. Next direction: train the judgement itself (decided 2026-09-11)
+## 22. Train the judgement itself (2026-09-11 to 2026-09-13; CLOSED)
+
+**Closed 2026-09-13 (user): the judgement-training methods below (the Trust line A2 / A1 / A3, evidence seeking B1)
+were judged not worth carrying and their code and outputs were removed** (feedback_state/verdict.py,
+feedback_state/evidence_seek.py, scripts/judge_logodds_auc.py, launch_judge.sh, the verdict / check paths of the
+reward, config, rollout, data builder and evaluator; outputs/rl/judge*, their parquets, attention dumps and probes).
+The sections below stay as the record of what was tried and found. In one paragraph: a label-free per-event judgement
+can be trained into a 4B model (verdict AUC 0.85 in-distribution, 0.87 with the model's own check, against the frozen
+judge's 0.63), it equals the record ranked within an event in-distribution and trails it out of domain, the two are
+complementary (mixture 0.87-0.89), the record must never be a training input (A1), the model's check policy does not
+transfer to unseen task types and erodes own reasoning there (B1), none of it raised answer accuracy above the
+no-memory control, and the record's tilt (+4 to +6 OOD on every model) remains the only cross-domain help.
+
 
 What the tilt experiments established (21.2-21.8): the memory is a test-time channel every model
 reads identically; training under it makes the model tilt-dependent (better conversion of the same

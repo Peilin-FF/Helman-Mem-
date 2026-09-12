@@ -197,11 +197,6 @@ class vLLMRollout(BaseRollout):
         self.sampling_params = SamplingParams(**kwargs)
 
         self.pad_token_id = tokenizer.pad_token_id
-        self.tokenizer = tokenizer
-        # sigma, method B stage 1: the model asks for one check, a sandbox runs it, generation continues after the result
-        self.evidence_seek = bool(config.get("evidence_seek", False))
-        self.seek_cfg = dict(check_tokens=int(config.get("seek_check_tokens", 160)), result_tokens=int(config.get("seek_result_tokens", 352)),
-                             timeout=float(config.get("seek_timeout", 5.0)))
 
     @contextmanager
     def update_sampling_params(self, **kwargs):
@@ -273,7 +268,6 @@ class vLLMRollout(BaseRollout):
                 ids = input_data["prompt_token_ids"]
                 vllm_attn_bias.register(ids, row[-len(ids):].float().cpu().numpy())
 
-        infos = non_tensor_batch.pop("extra_info", None)   # sigma: per-prompt records for the check executor (never returned: the trainer keeps its own copy)
         do_sample = prompts.meta_info.get("do_sample", True)
         is_validate = prompts.meta_info.get("validate", False)
         if not do_sample:
@@ -302,40 +296,28 @@ class vLLMRollout(BaseRollout):
                 lora_requests = [LoRARequest(lora_name=f"{lora_int_id}",lora_int_id=lora_int_id,lora_path="/simon-stub-path")] * batch_size
 
         # users can customize different sampling_params at different run
-        loss_mask_list = None
         with self.update_sampling_params(**kwargs):
-            if self.evidence_seek and infos is not None:   # sigma: two passes with the model's check run in between
-                from feedback_state.evidence_seek import two_pass_generate
+            outputs = self.inference_engine.generate(
+                prompts=vllm_inputs,  # because we have already convert it to prompt token id
+                sampling_params=self.sampling_params,
+                lora_request=lora_requests,
+                use_tqdm=False,
+            )
 
-                response, loss_mask_list, rollout_log_probs, seek_stats = two_pass_generate(
-                    self.inference_engine, vllm_inputs, self.sampling_params, list(infos), self.tokenizer, n=int(self.sampling_params.n),
-                    response_length=int(self.config.response_length), lora_request=lora_requests, **self.seek_cfg)
-                if torch.distributed.get_rank() == 0:
-                    print(f"[seek] {seek_stats}", flush=True)
-            else:
-                outputs = self.inference_engine.generate(
-                    prompts=vllm_inputs,  # because we have already convert it to prompt token id
-                    sampling_params=self.sampling_params,
-                    lora_request=lora_requests,
-                    use_tqdm=False,
-                )
+            # TODO(sgm): disable logprob when recompute_log_prob is enable
+            # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
 
-                # TODO(sgm): disable logprob when recompute_log_prob is enable
-                # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
+            response = []
+            rollout_log_probs = []
+            for output in outputs:
+                for sample_id in range(len(output.outputs)):
+                    response_ids = output.outputs[sample_id].token_ids
+                    response.append(response_ids)
+                    curr_log_prob = []
+                    for i, logprob in enumerate(output.outputs[sample_id].logprobs):
+                        curr_log_prob.append(logprob[response_ids[i]].logprob)
+                    rollout_log_probs.append(curr_log_prob)
 
-                response = []
-                rollout_log_probs = []
-                for output in outputs:
-                    for sample_id in range(len(output.outputs)):
-                        response_ids = output.outputs[sample_id].token_ids
-                        response.append(response_ids)
-                        curr_log_prob = []
-                        for i, logprob in enumerate(output.outputs[sample_id].logprobs):
-                            curr_log_prob.append(logprob[response_ids[i]].logprob)
-                        rollout_log_probs.append(curr_log_prob)
-
-            if loss_mask_list is not None:
-                loss_mask = pad_2d_list_to_length(loss_mask_list, 0, max_length=self.config.response_length).to(idx.device)
             response = pad_2d_list_to_length(response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
             rollout_log_probs = pad_2d_list_to_length(rollout_log_probs, -1, max_length=self.config.response_length).to(idx.device)
             rollout_log_probs = rollout_log_probs.to(torch.float32)
@@ -378,8 +360,6 @@ class vLLMRollout(BaseRollout):
             },
             batch_size=batch_size,
         )
-        if loss_mask_list is not None:   # sigma: the result tokens are read but never trained on (the actor slices the last response_length)
-            batch["loss_mask"] = loss_mask * response_attention_mask
 
         # free vllm cache engine
         if (
