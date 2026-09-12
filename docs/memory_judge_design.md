@@ -1162,6 +1162,59 @@ Decision: in judgement training the record is a target only, never an input. A3 
 main bet; memory.verdict_target=labels, active where the peers disagree, 10,200 of the 17,709 events; lambda 0.5,
 gamma 0), tests as for A2.
 
+### 22.3 A3 result (2026-09-12 12:52): rewarding the judgement against the labels equals distilling the record; the two judgements are complementary
+
+A3 = A2's recipe with the Trust line scored against the peers' verified labels (prompt order) instead of the record,
+active on events where the peers disagree (10,200 of 17,709), gamma 0, no record anywhere in training; full epoch
+(276 steps). Validation at 276: reading 82.3, math 93.2, code 31.1; agreement with the labels on reading ~ +0.70.
+Tests on the whole streams, in-dist / OOD:
+
+| condition                              | A3          | A2          | control     |
+|----------------------------------------|-------------|-------------|-------------|
+| peers, gamma 0, with the Trust line    | 73.2 / 70.4 | 72.6 / 69.4 | -           |
+| peers, gamma 0, no Trust instruction   | 73.6 / 70.7 | 72.5 / 71.2 | 74.4 / 73.3 |
+| peers + tilt gamma 3 (+ Trust line)    | 73.3 / 74.4 | 72.9 / 73.4 | 74.9 / 75.5 |
+| swapped record (+ Trust line)          | 70.5 / 67.2 | 69.8 / 61.4 | 70.5 / 67.7 |
+| question only                          | 72.3 / 69.2 | 71.0 / 69.9 | 71.4 / 72.7 |
+
+| judgement at gamma 0 (AUC vs labels / favourite right) | A3                              | A2                              |
+|--------------------------------------------------------|---------------------------------|---------------------------------|
+| no record at test                                      | 0.846 / 92.3%  ·  0.722 / 72.4% | 0.845 / 92.0%  ·  0.710 / 69.8% |
+| under the tilt, gamma 3                                | 0.842 / 92.8%  ·  0.742 / 78.4% | 0.843 / 92.7%  ·  0.728 / 76.5% |
+| under the swapped record                               | 0.619 / 70.0%  ·  0.603 / 57.4% | 0.658 / 68.8%  ·  0.579 / 56.0% |
+
+Attention at gamma 0 (per-token density): A3 favourite 1.02x in-dist (corr(record) +0.06: uniform, unlike A2's 1.12x)
+and 1.08x OOD (+0.21, like A2): the in-distribution verdict quality does not need the attention lean; A2's lean came
+from distilling the record's peer-by-task structure.
+
+**The like-for-like comparison with the record.** The record's "0.92" is the AUC of its raw estimate pooled over ALL
+peer-events, unanimous ones included, where calibration across events (knowing that all six are wrong on this
+question) earns most of the separation. A Trust line is a ranking within one event and cannot express that. On the
+same measure, the record's estimate ranked within each disagreeing event and pooled (scripts inline, 2026-09-12):
+
+| within-event ranking, disagreeing events (AUC) | record | trained verdict | 50/50 rank mixture |
+|------------------------------------------------|--------|-----------------|--------------------|
+| A3, in-dist (3,108 events)                     | 0.841  | 0.846           | **0.874**          |
+| A3, OOD (10,392)                               | 0.762  | 0.722           | **0.778**          |
+| A2, in-dist (3,116)                            | 0.842  | 0.845           | 0.872              |
+| A2, OOD (10,545)                               | 0.761  | 0.710           | 0.772              |
+
+So the trained per-event judgement equals the record's within-event ranking in-distribution and trails it by 0.04 on
+OOD, and the two are complementary: their rank mixture beats both on both streams (+0.03 in-dist, +0.02 OOD), the
+record contributing what content cannot show (reputation across events) and the verdict what the record cannot see
+(this event's content).
+
+Reading. (1) The judgement can be trained into the weights directly against verified labels, and it lands where
+distillation landed (0.846 vs 0.845 in-dist; 0.722 vs 0.710 OOD): the per-event judgement of a 4B model from content
+in one epoch plateaus near 0.85 in-dist / 0.72 OOD whatever the target. (2) It is complementary to the record, so the
+deployed judge should be the fusion of the trained verdict and the record rather than either alone; the record's
+cross-event calibration (its pooled 0.92) stays outside the model, as the plan said. (3) Accuracy: A3 is the best of
+the three judgement arms in-distribution (73.6 without the instruction, 72.3 alone: above the control alone, 71.4)
+but still below the control with peers (74.4 / 73.3), and on OOD the tilt still adds +3.7 on top of its judgement
+(74.4). Same caveats as 22.1 (single epoch vs the control's two-phase schedule; lambda 0.5). Next: stage 1 of method B
+(the model writes the check, a sandbox runs it) to push the per-event judgement past content reading; and a fusion
+readout (verdict + record) at the tilt, which needs no training. GPUs idle from 12:52.
+
 ## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:
