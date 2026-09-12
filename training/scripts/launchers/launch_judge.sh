@@ -7,7 +7,7 @@
 # (method B stage 0, evidence lines computed by us and handed over in the prompt, was removed on 2026-09-11: the
 #  model has to seek the evidence itself, which is stage 1, a two-pass rollout that is not built yet)
 # Tests per arm on the in-distribution stream and the FULL OOD stream, then the attention measurement.
-# Usage: bash launch_judge.sh [A2|A1|all]     (all = A2 then A1)
+# Usage: bash launch_judge.sh [A2|A1|A3|B1|smokeB1|tests <arm>|all]     (all = A2 then A1)
 set -u
 [ -d training ] || cd /mnt/data/peilin/sigma-mem
 export PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 VLLM_ENABLE_V1_MULTIPROCESSING=0
@@ -36,6 +36,20 @@ tests_A () {   # checkpoint, name: verdict line in every peers condition, plus p
   ( ev 0 $1 indist peers "" peers_noverdict ) & ( ev 1 $1 oodfull peers "" peers_noverdict ) & ( attention $1 $2 ) &
   wait
 }
+build_seek_data () {   # method B stage 1 prompts: the check + Trust-line instruction on the peers prompts (25% of events question-only)
+  [ -f $D/full_peers_seek2.parquet ] || python -m training.sigma_rl.build_rl_data --prompts $P/prompts_train6_fixed.jsonl --records data/mixed_train_big6/train.jsonl --out $D/full_peers_seek2.parquet --guided none --prompt_source peers --solo_fraction 0.25 --evidence_seek 2>&1 | grep -i "build-rl-data\|error"
+  [ -f $D/val_peers_seek2.parquet ] || python -m training.sigma_rl.build_rl_data --prompts $P/prompts_indist6_shuffled0.jsonl --records data/indist6/test.jsonl --out $D/val_peers_seek2.parquet --guided none --prompt_source peers --every 8 --limit 512 --evidence_seek 2>&1 | grep -i "build-rl-data\|error"
+}
+B1="memory.verdict_lambda=0.5 memory.verdict_target=labels memory.check_bonus=0.0 actor_rollout_ref.rollout.evidence_seek=True data.max_response_length=1280"
+tests_B1 () {   # checkpoint, name: the check at test time (gamma 0 and 3), the Trust line without a check, question only, plain peers
+  ( ev 0 $1 indist peers "--evidence_seek" seek ) & ( ev 1 $1 oodfull peers "--evidence_seek" seek ) &
+  ( ev 2 $1 indist peers "--evidence_seek --attn_gamma 3" seek_tilt ) & ( ev 3 $1 oodfull peers "--evidence_seek --attn_gamma 3" seek_tilt ) &
+  ( ev 4 $1 indist solo "" solo ) & ( ev 5 $1 oodfull solo "" solo ) &
+  ( ev 6 $1 indist peers "--verdict" peers ) & ( ev 7 $1 oodfull peers "--verdict" peers ) &
+  wait
+  ( ev 0 $1 indist peers "" peers_noverdict ) & ( ev 1 $1 oodfull peers "" peers_noverdict ) & ( attention $1 $2 ) &
+  wait
+}
 train_arm () {   # name, extra overrides, train parquet, val parquet: ONE continuous epoch (277 steps of 64 events) from the
                  # frozen model, reference fixed at the frozen model, no restart at step 40 (user, 2026-09-11)
   echo "=== $1 (one epoch, seed 1): $(date)"
@@ -53,10 +67,19 @@ fi
 if [ $what = A1 ] || [ $what = all ]; then
   train_arm judgeA1 "memory.verdict_lambda=0.5 $TILT" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA1); echo "=== tests: judgeA1 $CK: $(date)"; tests_A $CK judgeA1; }
 fi
+if [ $what = smokeB1 ]; then   # two training steps of B1 (the two-pass rollout, the loss mask, the reward) with validation after each
+  build_seek_data
+  train_arm judgeB1_smoke "$B1 trainer.total_training_steps=2 trainer.save_freq=2 trainer.test_freq=1 trainer.val_before_train=False" $D/full_peers_seek2.parquet $D/val_peers_seek2.parquet
+  grep -o "\[seek\] .*" logs/judgeB1_smoke.train.out | head -3; grep -oE "step:[12] .*" logs/judgeB1_smoke.train.out | grep -oE "critic/score/mean:[0-9.]+|check_used/mean:[0-9.]+|verdict_agreement/mean:[0-9.]+|verdict_parsed/mean:[0-9.]+|response_length/mean:[0-9.]+|val-core/all/acc/mean@1:[0-9.]+|val-aux/[a-z]+/check_used/mean@1:[0-9.]+" | tr "\n" " "; echo
+fi
+if [ $what = B1 ]; then   # method B stage 1: the model writes one check, the sandbox runs it, then the Trust line (rewarded against the labels) and the answer
+  build_seek_data
+  train_arm judgeB1 "$B1" $D/full_peers_seek2.parquet $D/val_peers_seek2.parquet && { CK=$(last_ck judgeB1); echo "=== tests: judgeB1 $CK: $(date)"; tests_B1 $CK judgeB1; }
+fi
 if [ $what = A3 ]; then   # A3: the Trust line rewarded against the peers' VERIFIED LABELS (the judgement itself), gamma 0; the record is not involved
   train_arm judgeA3 "memory.verdict_lambda=0.5 memory.verdict_target=labels" $D/full_peers_verdict.parquet $D/val_peers_verdict.parquet && { CK=$(last_ck judgeA3); echo "=== tests: judgeA3 $CK: $(date)"; tests_A $CK judgeA3; }
 fi
-for f in outputs/rl/judgeA2/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeA1/hf/global_step_*/eval_*/eval_metrics.json; do
+for f in outputs/rl/judgeA2/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeA1/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeA3/hf/global_step_*/eval_*/eval_metrics.json outputs/rl/judgeB1/hf/global_step_*/eval_*/eval_metrics.json; do
   [ -f "$f" ] && python -c "
 import json; m=json.load(open('$f')); v=m.get('verdict',{})
 print('%-60s %6.2f  %s  verdict: auc=%s fav=%s rho_rec=%s' % ('$f'.replace('/eval_metrics.json','').replace('outputs/rl/',''), 100*m['accuracy'], {k: round(100*x,1) for k,x in m['by_task'].items()}, v.get('auc_vs_correct'), v.get('favourite_right'), v.get('spearman_with_record')))"

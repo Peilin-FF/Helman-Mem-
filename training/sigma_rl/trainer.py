@@ -301,6 +301,8 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
                                       non_tensor_batch_keys=[k for k in ("raw_prompt_ids", "raw_prompt", "tools_kwargs", "multi_modal_data") if k in batch.non_tensor_batch])
                 if "attn_bias" in batch.batch.keys():   # the memory's attention tilt: rides with the prompts into the rollout and stays for the actor / ref forwards
                     gen_batch.batch["attn_bias"] = batch.batch["attn_bias"]
+                if "extra_info" in batch.non_tensor_batch:   # evidence seeking (method B): the rollout runs the model's check on each event's record
+                    gen_batch.non_tensor_batch["extra_info"] = batch.non_tensor_batch["extra_info"].copy()
                 is_last_step = self.global_steps >= self.total_training_steps
                 with _timer("step", timing_raw):
                     with _timer("gen", timing_raw):

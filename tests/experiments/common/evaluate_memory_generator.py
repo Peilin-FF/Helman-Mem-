@@ -25,6 +25,7 @@ apply_torch_fp8_shim()
 from transformers import AutoTokenizer
 
 from feedback_state.data import JsonlDataset
+from feedback_state.evidence_seek import add_seek_instruction
 from feedback_state.verdict import add_verdict_instruction, parse_verdict, strip_verdict
 from feedback_state.lora import apply_lora, load_lora_state_dict, set_lora_active
 from feedback_state.memory_generator import grade, has_chat_template, render_prompt
@@ -46,6 +47,8 @@ def parse_args():
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--windows", type=int, default=10)
     p.add_argument("--verdict", action="store_true", help="method A: ask for and score a 'Trust: ...' line before the answer (peers modes)")
+    p.add_argument("--evidence_seek", action="store_true", help="method B stage 1: the reply may open with one sandbox check (two generation passes, vLLM engine); implies --verdict")
+    p.add_argument("--seek_extra_tokens", type=int, default=512, help="tokens added to --max_new_tokens for the check request and the result block")
     p.add_argument("--thinking", choices=["on", "off"], default="off", help="on = Qwen3 thinking mode (raise --max_new_tokens; the answer after </think> is graded)")
     p.add_argument("--engine", choices=["hf", "vllm"], default="hf", help="vllm = decode with vLLM (greedy, continuous batching; ~30x faster than HF generate); hf = transformers generate")
     p.add_argument("--gpu_memory_utilization", type=float, default=0.85, help="vLLM engine memory share (lower it when the GPU is shared)")
@@ -86,7 +89,14 @@ def main() -> None:
         rows = rows[k::n]
         print(f"[gen-eval] shard {k}/{n}: {len(rows)} events", flush=True)
     messages = [r[f"messages_{args.mode}"] for r in rows]
-    if args.verdict and args.mode != "solo":
+    seek_infos = None
+    if args.evidence_seek and args.mode != "solo":
+        if args.engine != "vllm":
+            raise SystemExit("--evidence_seek needs --engine vllm (two generation passes)")
+        args.verdict = True   # the seek instruction asks for the Trust line too
+        messages = [add_seek_instruction(m) for m in messages]
+        seek_infos = [{"record": json.dumps(records[str(r["id"])]), "peer_order": list(r["peer_order"]), "prompt_source": "peers"} for r in rows]
+    elif args.verdict and args.mode != "solo":
         messages = [add_verdict_instruction(m) for m in messages]
     prompts = [render_prompt(tok, m, thinking=args.thinking == "on") for m in messages]
     # the central model can be any causal LM: the record lives in the prompt files (memory_prob per peer, built from the
@@ -118,9 +128,9 @@ def main() -> None:
     if args.engine == "vllm":
         if args.checkpoint is not None and hf_dir is None:
             raise SystemExit("--engine vllm needs a plain HF checkpoint directory (or no checkpoint for the frozen model); LoRA payloads need --engine hf")
-        outputs = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args, tok, ids_list=ids_list, biases=biases)
-        print(f"[gen-eval] vllm decoded {len(prompts)} prompts ({time.time() - t0:.0f}s)", flush=True)
-        write_results(args, rows, records, outputs, t0)
+        outputs, seek_stats = generate_vllm(str(hf_dir) if hf_dir is not None else args.central_model, prompts, args, tok, ids_list=ids_list, biases=biases, seek_infos=seek_infos)
+        print(f"[gen-eval] vllm decoded {len(prompts)} prompts ({time.time() - t0:.0f}s)" + (f"; checks {seek_stats}" if seek_stats else ""), flush=True)
+        write_results(args, rows, records, outputs, t0, extra_metrics={"seek": seek_stats} if seek_stats else None)
         return
     base = load_central_model(str(hf_dir) if hf_dir is not None else args.central_model, dtype=dtype, local_files_only=True).to(device=device, dtype=dtype)
     if hf_dir is not None:
@@ -161,7 +171,7 @@ def main() -> None:
     write_results(args, rows, records, outputs, t0)
 
 
-def generate_vllm(model_path: str, prompts: list[str], args, tok, ids_list=None, biases=None) -> list[str]:
+def generate_vllm(model_path: str, prompts: list[str], args, tok, ids_list=None, biases=None, seek_infos=None) -> tuple[list[str], dict | None]:
     """Greedy decoding of already-rendered prompts with vLLM (same prompts, same stop condition as the HF path).
     With ``biases`` (one float32 vector per prompt over its tokens ``ids_list``) the attention tilt runs inside the engine.
 
@@ -181,22 +191,35 @@ def generate_vllm(model_path: str, prompts: list[str], args, tok, ids_list=None,
     from transformers import AutoConfig
     from vllm import LLM, SamplingParams
 
+    pool = None
+    if seek_infos is not None:   # the checks run in spawned workers created BEFORE the engine's threads exist (a fork of the engine process can deadlock)
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        pool = ProcessPoolExecutor(max_workers=16, mp_context=multiprocessing.get_context("spawn"))
+
     if ids_list is None:
         ids_list = [tok(p, add_special_tokens=False)["input_ids"] for p in prompts]
     longest = max(len(ids) for ids in ids_list)
+    new_tokens = args.max_new_tokens + (args.seek_extra_tokens if seek_infos is not None else 0)
     model_max = int(getattr(AutoConfig.from_pretrained(model_path, local_files_only=True), "max_position_embeddings", 32768) or 32768)
-    max_len = min(32768, model_max, max(4096, longest + args.max_new_tokens + 64))
-    if longest + args.max_new_tokens > max_len:
-        print(f"[gen-eval] WARNING: longest prompt {longest} + {args.max_new_tokens} new tokens exceeds the model's context {max_len}", flush=True)
+    max_len = min(32768, model_max, max(4096, longest + new_tokens + 64))
+    if longest + new_tokens > max_len:
+        print(f"[gen-eval] WARNING: longest prompt {longest} + {new_tokens} new tokens exceeds the model's context {max_len}", flush=True)
     llm = LLM(model=model_path, tokenizer=args.central_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization,
               max_model_len=max_len, enable_prefix_caching=True, trust_remote_code=False, seed=0, disable_sliding_window=True)
-    params = SamplingParams(temperature=0.0, max_tokens=args.max_new_tokens)
+    params = SamplingParams(temperature=0.0, max_tokens=new_tokens)
     inputs = [{"prompt_token_ids": ids} for ids in ids_list]
     if biases is not None:
         for ids, b in zip(ids_list, biases):
             vllm_attn_bias.register(ids, b)
+    if seek_infos is not None:   # method B stage 1: pass 1 to the check, the sandbox, pass 2 to the Trust line and the answer
+        from feedback_state.evidence_seek import two_pass_generate
+        responses, _masks, _lps, stats = two_pass_generate(llm, inputs, params, seek_infos, tok, n=1, response_length=new_tokens, pool=pool)
+        pool.shutdown(wait=False, cancel_futures=True)
+        return [tok.decode(ids, skip_special_tokens=True) for ids in responses], stats
     outs = llm.generate(inputs, params, use_tqdm=True)
-    return [o.outputs[0].text for o in outs]
+    return [o.outputs[0].text for o in outs], None
 
 
 def verdict_metrics(vrows) -> dict:
@@ -219,7 +242,7 @@ def verdict_metrics(vrows) -> dict:
     return out
 
 
-def write_results(args, rows, records, outputs, t0) -> None:
+def write_results(args, rows, records, outputs, t0, extra_metrics: dict | None = None) -> None:
     hits, oracle, majority, out_rows = [], [], [], []
     vrows = []   # method A: (rank, memory_prob, peer_correct) per row with a parsed Trust line
     for r, text in zip(rows, outputs):
@@ -246,6 +269,8 @@ def write_results(args, rows, records, outputs, t0) -> None:
                "by_task": {t: float(np.mean([hh for hh, rr in zip(hits, rows) if rr["task_type"] == t])) for t in sorted({rr["task_type"] for rr in rows})}}
     if vrows:
         metrics["verdict"] = verdict_metrics(vrows)
+    if extra_metrics:
+        metrics.update(extra_metrics)
     with (args.output / "generations.jsonl").open("w") as f:
         for row in out_rows:
             f.write(json.dumps(row) + "\n")

@@ -1215,6 +1215,37 @@ but still below the control with peers (74.4 / 73.3), and on OOD the tilt still 
 (the model writes the check, a sandbox runs it) to push the per-event judgement past content reading; and a fusion
 readout (verdict + record) at the tilt, which needs no training. GPUs idle from 12:52.
 
+### 22.4 Method B stage 1 built and launched (2026-09-12 16:17): the model writes the check, a sandbox runs it
+
+Design (user's point of 2026-09-11: the judgement is joint, so the check is relational). The reply may open with ONE
+check, `Check: input=<text>` (the text is fed as stdin to every peer's program and each output comes back with which
+peers agree: a differential test, no expected output needed), `Check: python=<expression>` (evaluated; the value shown
+next to each peer's extracted final answer, equal or not), or `Check: quote=<text>` (whether it occurs in the passage,
+and whether each peer's answer does), then `</check>`. Generation stops there, the sandbox runs the check on all six
+peers, a `Result:` block is inserted, and generation continues to the Trust line and the answer. Trainer: a two-pass
+vLLM rollout (feedback_state/evidence_seek.py, called from vllm_rollout_spmd when rollout.evidence_seek is set): pass 1
+with stop=</check> (n samples), the checks, pass 2 (one continuation per sample; a reply cut by the pass-1 budget
+without a check also continues); the result tokens carry loss_mask 0 (the vendored trainer already honours loss_mask in
+the policy loss, the entropy and the KL). Reward: verifier + 0.5 x 0.5(1 + Spearman(Trust line, labels)) on events where
+the peers disagree (the A3 recipe), gamma 0, no record anywhere; check_bonus 0 (the frozen model already writes a
+check in 97% of replies). Budgets: response 1280 = 160 (check) + <= 352 (result) + the answer. Data
+full_peers_seek2.parquet / val_peers_seek2.parquet (the instruction placed BEFORE the task instruction). Evaluator:
+--evidence_seek (two passes with vLLM, a spawned process pool for the checks). Launcher: launch_judge.sh B1 / smokeB1.
+
+Two things the smoke taught. (1) The checks must never run in the rollout process: it hosts vLLM, torch and Ray (~120
+threads) and a fork of it can deadlock before exec; the first smoke hung for 77 minutes with orphaned children. The
+checks now run as Ray tasks in fresh workers inside the trainer (like the code grader) and in a spawned process pool in
+the evaluator, with process-group kills on timeout and a 90-s cap per batch. (2) A long instruction appended after
+the task instruction displaces it: under the first wording the frozen model answered code events by describing the
+outputs instead of writing a program (code 10.7 on 300 in-dist events) and invented second checks with made-up results.
+With the check text placed before the task instruction and "only the first check is run, then answer exactly as the
+instruction below requires", the frozen model on the same 300 events: 63.7 (code 34.7, math 90.7, reading 60.2)
+against 62.3 with the Trust line alone (code 28.0, math 90.7, reading 60.9): the differential test is worth +6.7 on
+code before any training; 297/300 replies use a check (177 input, 22 python, 98 quote; input is over-used on non-code
+events, where it returns "no program to run"). Rollout stats in the smoke: 61-63 of 64 samples per rank run a check;
+generation 30 s per step, step ~110 s. Full B1 launched 16:17 (job 20260912-161724, ~8.5 h + tests: the check at
+gamma 0 and under the tilt, the Trust line without a check, question only, plain peers, attention).
+
 ## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:

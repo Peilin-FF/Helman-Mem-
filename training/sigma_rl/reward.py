@@ -12,6 +12,7 @@ import os
 import sys
 from collections import defaultdict
 
+from feedback_state.evidence_seek import has_result
 from feedback_state.verdict import parse_verdict, record_is_flat, strip_verdict, verdict_agreement
 from concurrent.futures import ThreadPoolExecutor
 
@@ -91,9 +92,10 @@ class SigmaRewardManager:
     """Same contract as verl's NaiveRewardManager, graded with a thread pool (code tests run in
     sandboxed subprocesses, so threads give real parallelism)."""
 
-    def __init__(self, tokenizer, num_examine: int = 0, compute_score=None, reward_fn_key: str = "data_source", max_workers: int = 32, code_timeout: float = 10.0, verdict_lambda: float = 0.0, verdict_flat: float = 0.1, verdict_target: str = "record") -> None:
+    def __init__(self, tokenizer, num_examine: int = 0, compute_score=None, reward_fn_key: str = "data_source", max_workers: int = 32, code_timeout: float = 10.0, verdict_lambda: float = 0.0, verdict_flat: float = 0.1, verdict_target: str = "record", check_bonus: float = 0.0) -> None:
         self.verdict_lambda, self.verdict_flat = float(verdict_lambda), float(verdict_flat)   # method A: reward the Trust line for agreeing with the target
         self.verdict_target = str(verdict_target)   # "record": the memory's per-peer estimate (distillation); "labels": the peers' verified correctness (the judgement itself)
+        self.check_bonus = float(check_bonus)   # method B stage 1: for a reply that carries an executed check (Result block)
         if self.verdict_target not in ("record", "labels"):
             raise ValueError(f"memory.verdict_target must be record or labels, got {verdict_target!r}")
         self.tokenizer = tokenizer
@@ -167,6 +169,10 @@ class SigmaRewardManager:
                 reward += self.verdict_lambda * agree if active else 0.0
                 extra["verdict_active"].append(float(active)); extra["verdict_parsed"].append(float(vrank is not None))
                 extra["verdict_agreement"].append(float(agree))   # 0 on flat records, so the mean stays a number
+            if self.check_bonus > 0:
+                used = has_result(text)
+                reward += self.check_bonus if used else 0.0
+                extra["check_used"].append(float(used))
             reward_tensor[i, max(length - 1, 0)] = reward
             if printed[source] < self.num_examine:
                 printed[source] += 1
