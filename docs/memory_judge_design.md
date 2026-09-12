@@ -1289,6 +1289,18 @@ on task diversity (OOD-like task types in the training stream, or a reward for s
 anchor own ability (a larger question-only share, or the KL taken on question-only prompts); the record stays the
 cross-domain carrier. Files: outputs/rl/judgeB1/hf/global_step_276/eval_*, outputs/address/attention_mass/judgeB1_*.
 
+The memory's role in B1 (2026-09-13 01:10). In training: none by design (gamma 0, no record in the loop; the
+lesson of A1). At test time, two complementary readings. (a) The tilt on top of the check: nothing in-dist (74.83 both),
++0.7 OOD. (b) The tilt WITHOUT the check (Trust line, gamma 3): in-dist 71.3 (check 74.8, neither 70.8), OOD **72.8**
+(check 64.5, neither 66.9; short-answer 53.9 against 33.3 with the check): the largest tilt gain of any model, +5.8
+OOD, repairing most of B1's out-of-domain loss. (c) The two judgements mixed (within-event ranks, disagreeing events):
+in-dist record 0.842, B1's verdict with the check 0.868, 50/50 mixture **0.893**, the best judgement of the project;
+OOD 0.761 / 0.687 / 0.764, the record carries everything. So in-distribution the check replaces the record and out of
+domain the record replaces the check: the per-event judgement (weights or tool use) and the cross-event reputation
+(the record) are the two components the plan named, and neither substitutes for the other. The natural next arm wires
+the record in by design: it directs whether and where to check (skip where the record is flat or the task type is
+unfamiliar; spend the check on the peers the record is unsure about), which is also the fix for the OOD failure.
+
 ## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:
