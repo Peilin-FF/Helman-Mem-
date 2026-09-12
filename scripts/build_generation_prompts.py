@@ -20,7 +20,7 @@ import torch
 
 from feedback_state.addresses import Projection
 from feedback_state.feature_streams import load_stream, load_stream_from
-from feedback_state.memory_generator import build_messages, domain_note, prob_from_logit, target_text
+from feedback_state.memory_generator import PEER_NAMES, build_messages, domain_note, prob_from_logit, target_text
 from feedback_state.memory_runtime import MemoryRuntime
 from feedback_state.permutations import random_order
 
@@ -36,6 +36,7 @@ def main() -> None:
     ap.add_argument("--lam", type=float, default=100.0)
     ap.add_argument("--proj-ckpt", type=Path, default=None)
     ap.add_argument("--permute", choices=["on", "off"], default="on")
+    ap.add_argument("--peer-names", choices=["on", "off"], default="off", help="on: every peer block is headed 'Peer k (Name)' with a fixed name per canonical peer (stable identities across events)")
     ap.add_argument("--target", choices=["peer", "final", "self", "onpolicy", "onpolicy_peer", "onpolicy_hinted"], default="peer",
                     help="self = the central model's own generation when it was graded correct (from --self-generations), else a correct peer's, else the gold answer")
     ap.add_argument("--self-generations", type=Path, default=None, help="generations.jsonl of a solo evaluation on this stream (for --target self / onpolicy)")
@@ -94,6 +95,7 @@ def main() -> None:
             ell, n_eff, _, X = runtime.read(t)
             perm = random_order(r, int(rng.integers(1 << 30))) if args.permute == "on" else list(range(r))
             texts = [fs.texts[t][p] for p in perm]
+            names = [PEER_NAMES[int(p)] for p in perm] if args.peer_names == "on" else None
             probs = [prob_from_logit(float(ell[p])) for p in perm]
             evid = [float(n_eff[p]) for p in perm]
             task = fs.task[t]
@@ -121,8 +123,8 @@ def main() -> None:
                 "peer_order": [int(p) for p in perm], "peer_correct": [int(y[p]) for p in perm],
                 "memory_prob": [round(p, 4) for p in probs], "memory_evidence": [round(e, 1) for e in evid],
                 "memory_domain": domain_counts, "task_type_note": task,
-                "messages_memory": build_messages(rec, texts, mode="memory", probs=probs, evidence=evid, domain=domain),
-                "messages_peers": build_messages(rec, texts, mode="peers"),
+                "messages_memory": build_messages(rec, texts, mode="memory", probs=probs, evidence=evid, domain=domain, peer_names=names),
+                "messages_peers": build_messages(rec, texts, mode="peers", peer_names=names),
                 "messages_solo": build_messages(rec, texts, mode="solo"),
                 "target": target,
             }

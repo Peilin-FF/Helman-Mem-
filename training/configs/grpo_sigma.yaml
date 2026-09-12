@@ -248,6 +248,9 @@ algorithm:
 memory:
   guided_rollouts: 1          # 0 = no guided samples (plain GRPO on the question only)
   guided_groups: all          # all = every prompt gets its stream-time answer | zero = only groups whose solo samples all failed
+  self_distill: False         # the memory as a teacher the student never sees (2026-09-13): rollouts and the update run without the tilt;
+                              # the KL term (actor.use_kl_loss, kl_loss_coef) targets the CURRENT policy's log-probs computed WITH the tilt
+                              # (data.attn_gamma, model.attn_bias=True, rollout.attn_bias=False) instead of a frozen reference
   guided_sampling: greedy     # greedy = one answer | sample = rollout.n answers at temperature 1
   guided_loss_prompt: both    # guided = learn to use peers + memory | solo = re-label under the question-only prompt (internalisation) | both
   guided_filter: none         # none = the post-hoc reward decides (ours) | verified = keep only verified-correct guided answers (labels-before baseline)

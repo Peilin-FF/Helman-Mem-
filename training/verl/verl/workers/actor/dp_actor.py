@@ -99,6 +99,8 @@ class DataParallelPPOActor(BasePPOActor):
             entropy = None
             if _sigma_attn_bias is not None and _sigma_attn_bias.HF_STEER is not None:   # sigma: tilt of this micro-batch (prompt part; response tokens get 0)
                 ab = micro_batch.get("attn_bias", None) if hasattr(micro_batch, "get") else micro_batch["attn_bias"] if "attn_bias" in micro_batch else None
+                if not getattr(self, "apply_attn_bias", True):   # self-distillation: the student's forwards ignore the tilt, the teacher pass applies it
+                    ab = None
                 _sigma_attn_bias.HF_STEER.bias = None if ab is None else torch.nn.functional.pad(ab.to(device=input_ids.device, dtype=torch.float32), (0, seqlen - ab.shape[1]))
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
@@ -319,6 +321,7 @@ class DataParallelPPOActor(BasePPOActor):
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
 
+        self.apply_attn_bias = bool(data.meta_info.get("apply_attn_bias", True))   # sigma: False for the student's own log-probs under self-distillation
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
         if "attn_bias" in data.batch.keys():   # sigma
             select_keys.append("attn_bias")
@@ -366,6 +369,7 @@ class DataParallelPPOActor(BasePPOActor):
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         multi_turn = data.meta_info.get("multi_turn", False)
+        self.apply_attn_bias = bool(data.meta_info.get("apply_attn_bias", True))   # sigma: False under self-distillation (the student trains without the tilt)
 
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
         if multi_turn or "loss_mask" in data.batch.keys():

@@ -318,6 +318,9 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
                     if self.config.trainer.balance_batch:
                         self._balance_batch(batch, metrics=metrics)
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+                    self_distill = bool(self._memory_cfg().get("self_distill", False))   # the memory as a teacher the student never sees
+                    if self_distill:
+                        batch.meta_info["apply_attn_bias"] = False   # the student's own log-probs and its update: no tilt
                     with _timer("old_log_prob", timing_raw):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
@@ -325,7 +328,16 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
                         metrics["actor/entropy_loss"] = entropy_loss.detach().item()
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
-                    if self.use_reference_policy:
+                    if self_distill:   # teacher = the current policy with the memory's tilt on its attention; its log-probs stand in for the reference
+                        with _timer("ref", timing_raw):
+                            batch.meta_info["apply_attn_bias"] = True
+                            teacher = self.actor_rollout_wg.compute_log_prob(batch)
+                            batch.meta_info["apply_attn_bias"] = False
+                            batch.batch["ref_log_prob"] = teacher.batch["old_log_probs"]
+                            gap = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * batch.batch["response_mask"]
+                            metrics["sd/teacher_minus_student_logprob"] = float(gap.sum() / batch.batch["response_mask"].sum().clamp_min(1))
+                            metrics["sd/teacher_minus_student_abs"] = float(gap.abs().sum() / batch.batch["response_mask"].sum().clamp_min(1))
+                    elif self.use_reference_policy:
                         with _timer("ref", timing_raw):
                             ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch) if self.ref_in_actor else self.ref_policy_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)

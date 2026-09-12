@@ -1378,3 +1378,58 @@ GPU smoke (2026-09-11 22:07-22:16, 48 events, whole pipeline, all five families,
 conditions + swapped which was then dropped): Llama-3.1 72.9 / 70.8 / 58.3 (tilt / peers / solo), Ministral
 66.7 / 64.6 / 50.0, phi-4 70.8 / 68.8 / 64.6, Qwen2.5 and Llama-3 base passed the same checks; 44-45/48 prompts
 tilted, bias kernels taken, the tilt changed 18-44 of 48 generations. Encoder speed 0.5 s/event (8B), 0.7 s (phi-4).
+
+## 24. The memory as a teacher: stable identities + self-distillation from the tilted self (2026-09-13)
+
+**Why (user, 2026-09-13).** "The memory state has more effects than test-time steering. We need to consider how
+to use it to help the central model increase the reliability-judgement ability itself instead of just relying on
+an external module during testing." And: "Stable peer identities. Is necessary I think."
+
+The tilt (section 21) is a channel the model reads at test time; training under it produces tilt-dependence (run 3b:
+71.4 / 72.7 at gamma 0). The judgement arms (section 22) put the record into the prompt or the reward; the model
+either read it as a shortcut (A1) or plateaued at the per-event ceiling (~0.85 / 0.72 verdict AUC). What was never
+tried: letting the record teach the WEIGHTS what it knows, and giving the model the one thing the record has that a
+per-event judge cannot have: cross-event identity. Two changes, both in the weights, nothing external at test time.
+
+**24.1 Stable peer identities.** The six peers are the same six models in every event. Until now each prompt showed
+them as anonymous "Peer 1..6" in a random order, so reputation could only live in the record. Now every peer block
+is headed `Peer k (Name)` with a fixed name per canonical peer id (Ada, Ben, Cara, Dev, Eli, Faye; the prompt order
+still varies per event) and the system prompt says that the same named peers answer every question and that their
+reliability differs by peer and by kind of question. The model can then learn, across the stream, which name to
+trust on which task: the cross-event component of the record becomes learnable into the weights.
+Code: `memory_generator.PEER_NAMES` / `SYSTEM_PEERS_NAMED` / `peer_block(name=)`, `build_generation_prompts.py
+--peer-names on`; `peer_char_spans` is unchanged (the header still starts with `Peer k` and ends with `:\n`).
+Files: `outputs/gen/q3_4b/prompts_{train6_fixed,indist6_probe,ood6_probe}_named.jsonl` (same orders and seeds as the
+unnamed files), `outputs/rl/data/q3_4b_6peer/{full_peers_named,val_peers_named}.parquet`.
+
+**24.2 Self-distillation from the tilted self (NSD).** Teacher and student are the same network at the same step.
+Rollouts are sampled WITHOUT the tilt (gamma 0). The KL term of GRPO, instead of pulling toward the frozen model,
+pulls toward the current policy's log-probs of the SAME samples computed WITH the memory's tilt (gamma 3):
+
+    L = L_GRPO(student samples, verifier reward)  +  beta * KL(pi_theta(. | x, gamma 0)  ||  pi_theta(. | x, gamma 3))
+
+with beta = 0.3 (low_var_kl, teacher detached). The tilt is what the record knows expressed as an attention
+preference; distilling it moves that preference into the weights. The reward keeps the student honest (the teacher
+is not always right: tilt 74.9 / 75.5), and the student never sees the record: no record text, no tilt at test time.
+Implementation: `memory.self_distill: True`; `data.attn_gamma=3` builds the tilt tensor and `model.attn_bias=True`
+installs the HF hooks, but `rollout.attn_bias=False` keeps it out of vLLM; the trainer sets
+`meta_info["apply_attn_bias"]=False` for the student's log-probs and the update and `True` for one extra
+`compute_log_prob` pass whose output becomes `ref_log_prob` (the RefPolicy worker is not created). Metrics
+`sd/teacher_minus_student_logprob` (signed) and `sd/teacher_minus_student_abs` show how far the tilted self is
+from the untilted self on the student's samples.
+
+**24.3 Arms and tests** (`training/scripts/launchers/launch_named.sh`, two-phase schedule of run 3b / ctrl3b:
+40 steps seed 1, then a full epoch seed 2 from step 40, 8 GPUs):
+
+| arm | prompts | KL target | gamma in rollouts / update |
+|---|---|---|---|
+| NSD | named | current policy WITH tilt (beta 0.3) | 0 / 0 (teacher pass at 3) |
+| NCTRL | named | frozen model (beta 0.01) | 0 / 0 |
+| control (ctrl3b_peers) | unnamed | frozen model (0.01) | 0 / 0 |
+
+Tests (vLLM, thinking off, 768 tokens, whole streams): peers at gamma 0 on the named prompts (THE number: the
+judgement in the weights; control 74.4 / 73.3), tilt gamma 3 on top (does the record still add?), solo (own ability
+kept?), the NSD checkpoint on the UNNAMED prompts (does the learned judgement need the names?), and the frozen model
+on the named prompts (do names alone change anything?). Reading: NSD peers-gamma-0 > NCTRL > control means the
+record taught the weights; NCTRL > control means identities alone carry reputation into the weights; tilt on top of
+NSD ~ 0 means the tilt was fully absorbed.

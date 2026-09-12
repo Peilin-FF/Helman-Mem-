@@ -44,6 +44,15 @@ SYSTEM_PEERS = (
     + BRIEF
 )
 SYSTEM_SOLO = "Answer the question. " + BRIEF
+# stable identities (2026-09-13): the same six peers answer every question, under fixed names, so that reputation can be
+# learned across events by the central model itself; canonical peer id -> name (the prompt order still varies per event)
+PEER_NAMES = ("Ada", "Ben", "Cara", "Dev", "Eli", "Faye")
+SYSTEM_PEERS_NAMED = (
+    "You are the central model of a multi-agent system. The same six peer models answer every question, each under a fixed "
+    "name; each peer is reliable on some kinds of question and not on others, and their names let you learn from experience "
+    "which of them to trust on which kind of question. Treat their answers as evidence, verify them yourself, and produce "
+    "your own final answer. " + BRIEF
+)
 
 INSTRUCTIONS = {
     "math": "Solve the problem. Reason briefly, then end with a line of the form 'Final answer: <number>'.",
@@ -61,8 +70,9 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + " ..."
 
 
-def peer_block(index: int, text: str, prob: float | None, evidence: float | None, *, char_limit: int, domain: str | None = None) -> str:
-    head = f"Peer {index + 1}"
+def peer_block(index: int, text: str, prob: float | None, evidence: float | None, *, char_limit: int, domain: str | None = None,
+               name: str | None = None) -> str:
+    head = f"Peer {index + 1}" + (f" ({name})" if name else "")
     if prob is not None:
         n = int(round(evidence or 0.0))
         cases = "no similar past cases yet" if n < 1 else f"based on {n} similar past case{'s' if n != 1 else ''}"
@@ -82,7 +92,7 @@ def domain_note(task: str, right: int, total: int) -> str:
 
 def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, probs: Sequence[float] | None = None,
                    evidence: Sequence[float] | None = None, include_context: bool = True, char_limit: int = 3000,
-                   domain: Sequence[str] | None = None) -> list[dict]:
+                   domain: Sequence[str] | None = None, peer_names: Sequence[str] | None = None) -> list[dict]:
     task = task_type_of(record)
     parts = [f"Question:\n{str(record.get('problem', record.get('question', ''))).strip()}"]
     if task == "mcqa":
@@ -99,10 +109,11 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, p
         for i, t in enumerate(texts):
             p = float(probs[i]) if (mode == "memory" and probs is not None) else None
             e = float(evidence[i]) if (mode == "memory" and evidence is not None) else None
-            blocks.append(peer_block(i, t, p, e, char_limit=char_limit, domain=(domain[i] if (mode == "memory" and domain is not None) else None)))
+            blocks.append(peer_block(i, t, p, e, char_limit=char_limit, domain=(domain[i] if (mode == "memory" and domain is not None) else None),
+                                     name=(peer_names[i] if peer_names is not None else None)))
         parts.append("Peer answers:\n\n" + "\n\n".join(blocks))
     parts.append("Instruction: " + INSTRUCTIONS.get(task, INSTRUCTIONS["shortqa"]))
-    system = {"memory": SYSTEM, "peers": SYSTEM_PEERS, "solo": SYSTEM_SOLO}[mode]
+    system = {"memory": SYSTEM, "peers": SYSTEM_PEERS_NAMED if peer_names is not None else SYSTEM_PEERS, "solo": SYSTEM_SOLO}[mode]
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
 
 

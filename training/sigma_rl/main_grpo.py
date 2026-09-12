@@ -71,7 +71,7 @@ class TaskRunner:
         pool_id = "global_pool"
         resource_pool_spec = {pool_id: [config.trainer.n_gpus_per_node] * config.trainer.nnodes}
         mapping = {Role.ActorRollout: pool_id, Role.Critic: pool_id}
-        if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
+        if (config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss) and not bool(config.memory.get("self_distill", False)):
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
             mapping[Role.RefPolicy] = pool_id
         workers = int(config.reward_model.get("max_workers", 32))
