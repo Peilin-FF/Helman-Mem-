@@ -1246,6 +1246,49 @@ events, where it returns "no program to run"). Rollout stats in the smoke: 61-63
 generation 30 s per step, step ~110 s. Full B1 launched 16:17 (job 20260912-161724, ~8.5 h + tests: the check at
 gamma 0 and under the tilt, the Trust line without a check, question only, plain peers, attention).
 
+### 22.5 B1 result (2026-09-12 23:09): evidence seeking beats the record in-distribution and does not transfer
+
+Full epoch (276 steps, 74 s/step). Tests on the whole streams, in-dist / OOD:
+
+| condition                                   | B1          | A3          | control     |
+|---------------------------------------------|-------------|-------------|-------------|
+| the check + Trust line, gamma 0 (seek)      | 74.8 / 64.5 | -           | -           |
+| seek + tilt gamma 3                         | 74.8 / 65.1 | -           | -           |
+| Trust line, no check, gamma 0               | 70.8 / 66.9 | 73.2 / 70.4 | -           |
+| peers, no instruction                       | 71.7 / 67.8 | 73.6 / 70.7 | 74.4 / 73.3 |
+| question only                               | 69.2 / 63.8 | 72.3 / 69.2 | 71.4 / 72.7 |
+
+| judgement at gamma 0 (AUC vs labels / favourite right) | in-dist         | OOD             |
+|--------------------------------------------------------|-----------------|-----------------|
+| B1 with its check                                      | **0.868 / 93.5%** | 0.687 / 67.0% |
+| B1 without the check (Trust line only)                 | 0.724 / 73.6%   | 0.683 / 67.1%   |
+| A3 (no check)                                          | 0.846 / 92.3%   | 0.722 / 72.4%   |
+| the record, ranked within each disagreeing event       | 0.841           | 0.762           |
+
+Checks at test time: in-dist 4,312 of 4,319 replies (input 999 = the 1,000 code events, quote 1,996 = the reading events,
+python 1,317 = the math events: the model learned which check fits which task); OOD 17,271 of 17,403 (python 8,817,
+quote 8,430, input 24), almost all inapplicable to yes/no, multiple-choice and BBH tasks. Per task, OOD: yes/no and
+multiple-choice unchanged (83-84 everywhere); short-answer (BBH) with the check 33.3, Trust line only 39.1, peers 40.3,
+question only 31.0, against A3's 48.6 alone. No tool artefacts in the question-only generations (0 Check/Result lines):
+the loss is in the reasoning itself. Attention at gamma 0: 1.05x / 1.07x (uniform: the judgement runs through the
+check, not the attention). The tilt adds nothing on top of the check in-distribution (74.83 both) and +0.7 on OOD.
+
+Reading. (1) In-distribution the design works: the model chooses the right check per task, its verdict with the
+evidence in front of it reaches AUC 0.868, above A3's 0.846 and above the record's own within-event ranking (0.841):
+the first trained judgement that beats the record where the record is strongest; accuracy with the check 74.8, above
+A3 (73.6) and level with the no-memory control (74.4 / 74.9), reading 82.0 (best of every arm). The check supplies what
+the tilt would have supplied: gamma 3 on top changes nothing. (2) The judgement moved into the tool use and out of
+the weights: without the check B1 judges worse than A3 (0.724 vs 0.846) and answers worse (70.8 vs 73.2); the
+counterpart of A1's tilt-dependence, except that the check is the model's own action and is always available.
+(3) It does not transfer: the check policy is bound to the task types it was trained on (GSM8K / SQuAD / APPS) and is
+applied blindly to yes/no, multiple-choice and BBH events, where it costs 3-6 points; and even with no check the model's
+own multi-step reasoning on BBH fell from 48.6 (A3) to 31.0: learning to lean on evidence in-domain eroded the reasoning
+the model needs where no evidence exists. Net OOD: -4 to -6 against A3 in every condition; the record's tilt (+4 OOD on
+every model) remains the only thing that helps out of domain. Next, if the direction continues: train the check policy
+on task diversity (OOD-like task types in the training stream, or a reward for skipping an inapplicable check), and
+anchor own ability (a larger question-only share, or the KL taken on question-only prompts); the record stays the
+cross-domain carrier. Files: outputs/rl/judgeB1/hf/global_step_276/eval_*, outputs/address/attention_mass/judgeB1_*.
+
 ## 23. Other central-model families, each with its own memory (2026-09-11)
 
 Question (user): does the memory help central models other than Qwen3-4B? Models on the server:
