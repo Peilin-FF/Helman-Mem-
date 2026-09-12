@@ -1,7 +1,8 @@
 # The memory on other central-model families
 
 Does the Bayesian reliability memory help a central model that is not Qwen3-4B? This runs the whole pipeline for
-Meta-Llama-3.1-8B-Instruct, Ministral-8B-Instruct-2410, Qwen2.5-7B-Instruct and phi-4, **each with its own memory**, and compares three ways of answering on two whole test streams.
+Meta-Llama-3.1-8B-Instruct, Ministral-8B-Instruct-2410, Qwen2.5-7B-Instruct, phi-4 and Qwen3.5-9B (a hybrid model with
+linear attention, see its own section below), **each with its own memory**, and compares three ways of answering on two whole test streams.
 
 ```
 bash run_families.sh                 # everything in training/configs/families.yaml, 8 GPUs, resumable; ~1 h per 8B model, ~2 h for phi-4
@@ -125,6 +126,7 @@ script fills from `outputs/gen/families/<tag>/full_*/eval_metrics.json` and `out
 | Ministral-8B-Instruct-2410 · own record | … | … | … | … | … | … | … | … |
 | Qwen2.5-7B-Instruct · own record | … | … | … | … | … | … | … | … |
 | phi-4 (14B) · own record | … | … | … | … | … | … | … | … |
+| Qwen3.5-9B · own record (tilt on the 8 full-attention layers) | … | … | … | … | … | … | … | … |
 
 Columns: the record's quality on each stream (AUC of its per-peer estimate against the peers' verified labels, and how
 often its favourite is right on events where the peers disagree); accuracy in percent for the three conditions on the
@@ -145,7 +147,7 @@ in-distribution stream (4,319 events, standard error ≈ 0.7) and the whole OOD 
 | smoke | `--smoke`: 48 events of train6 and indist6 under the tag `<tag>_smoke`, every step, ~4 min per model; `python scripts/families_table.py --smoke` shows accuracy on the slice plus the sanity checks (prompts tilted, bias kernels taken, generations changed by the tilt) |
 
 Model tags: `llama31` Meta-Llama-3.1-8B-Instruct · `ministral` Ministral-8B-Instruct-2410 · `qwen25` Qwen2.5-7B-Instruct ·
-`phi4` phi-4 (14B). The base Meta-Llama-3-8B was tried in the smoke run and dropped: without a chat template it cannot
+`phi4` phi-4 (14B) · `q35_9b` Qwen3.5-9B (HF engine, `sigma3_5` env; see below). The base Meta-Llama-3-8B was tried in the smoke run and dropped: without a chat template it cannot
 follow the answer format (12.5% on the question alone), so it says nothing about the memory.
 
 Smoke run of 2026-09-11 (48 events, every family, the whole pipeline; numbers mean nothing at this size, the checks do):
@@ -156,6 +158,47 @@ Smoke run of 2026-09-11 (48 events, every family, the whole pipeline; numbers me
 | Ministral-8B-Instruct-2410 | 66.7 | 64.6 | 50.0 | 44/48 | yes | 18/48 |
 | phi-4 | 70.8 | 68.8 | 64.6 | 45/48 | yes | 44/48 |
 | Qwen2.5-7B-Instruct | 70.8 | 66.7 | 64.6 | 43/48 | yes | 20/48 |
+
+## Qwen3.5-9B: a hybrid model with linear attention
+
+Qwen3.5-9B (`Qwen3_5ForCausalLM`) has 32 layers of which **24 are linear attention** (a gated delta net: the context is
+folded into a fixed-size recurrent state, no softmax over the keys) and **8 are full softmax attention** (every fourth
+layer). Three things follow, and the pipeline handles all three.
+
+- **Where the tilt goes.** The tilt is an additive term on a softmax score, `softmax(s + b)`; a linear-attention layer
+  has no per-key score to add it to, so there the tilt has no exact equivalent (scaling the peer tokens' contributions
+  to the recurrent state would be an approximation, and it is not implemented). The tilt is therefore applied to the
+  **8 full-attention layers only**, unchanged; the 24 linear-attention layers read the peers untilted. `install_hf_hooks`
+  hooks only the layers that have a `self_attn` module and prints `tilt installed on 8 of 32 layers`. Expect the
+  effect of the memory on this model to be smaller than on a full-attention model of the same size for that reason
+  alone; the comparison of the three conditions is still exact, because everything else is identical.
+- **Engine.** vLLM 0.8.5 (whose Triton kernels carry the bias for every other family) does not know this architecture,
+  and the environment that does (`sigma3_5`: transformers 5.10.2) has no vLLM. Qwen3.5-9B therefore runs on the
+  **HF engine** (`--engine hf`): the tilt enters through a forward pre-hook that adds the per-token bias to the attention
+  mask (`feedback_state/attn_bias.py`, the same numbers the kernels produce). HF generation is slow, so each evaluation
+  is **sharded over the GPUs** (`--shard k/N`, one process per GPU, batch 8) and joined by `scripts/merge_eval_shards.py`,
+  which recomputes `eval_metrics.json` from the shards exactly as the evaluator does. The driver does this by itself.
+- **Environment.** The features, the record and the evaluation of this model run in the `sigma3_5` conda env
+  (transformers 5.10.2, torch 2.6.0; `fla` / `causal_conv1d` are absent, so the linear layers use the torch fallback).
+  The driver activates it per task from the YAML (`env: sigma3_5`); the rest of the pipeline stays in `sigma`.
+
+YAML entry (already in `training/configs/families.yaml`, tag `q35_9b`):
+
+```yaml
+  q35_9b:
+    path: Qwen3.5-9B          # under models_root
+    engine: hf                # the HF attention hook on the 8 full-attention layers; no vLLM for this model
+    env: sigma3_5             # transformers 5.10 env
+    shards: 8                 # one evaluation shard per GPU, joined afterwards
+    batch_size: 8
+```
+
+Running it is the same command: `bash run_families.sh --smoke --models q35_9b` (4 minutes) then `bash run_families.sh
+--models q35_9b`. Time on 8 GPUs: features ~3 h (about 2 s per event: the linear-attention layers run on the torch fallback), record
+~10 min, evaluation ~4–5 h (HF generation at roughly 100 tokens/s per GPU, 6 evaluations × 8 shards). Outputs land in the same
+places (`outputs/gen/families/q35_9b/full_<stream>6_<cond>/`, with the shard directories underneath) and the table
+picks them up unchanged. Setting up the `sigma3_5` env on another machine: `conda create -n sigma3_5 python=3.12 &&
+pip install -r requirements_qwen3.5.txt`.
 
 ## Notes and troubleshooting
 

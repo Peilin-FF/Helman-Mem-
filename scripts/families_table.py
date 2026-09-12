@@ -18,7 +18,8 @@ import re
 from pathlib import Path
 
 NAMES = {"q3_4b": "Qwen3-4B (frozen)", "llama3": "Meta-Llama-3-8B (base, plain layout)", "llama31": "Meta-Llama-3.1-8B-Instruct",
-         "ministral": "Ministral-8B-Instruct-2410", "qwen25": "Qwen2.5-7B-Instruct", "phi4": "phi-4 (14B)"}
+         "ministral": "Ministral-8B-Instruct-2410", "qwen25": "Qwen2.5-7B-Instruct", "phi4": "phi-4 (14B)",
+         "q35_9b": "Qwen3.5-9B (hybrid: tilt on the 8 full-attention layers, HF engine)"}
 CONDS = ("tilt", "peers", "solo")
 ADDRS = (("", "own record"), ("_q3addr", "Qwen3-4B record"))
 FAM = Path("outputs/gen/families")
@@ -102,15 +103,21 @@ def smoke_table(tags: list[str]) -> str:
             if all(v is None for v in ms.values()):
                 continue
             n = next((m["num_samples"] for m in ms.values() if m), 0)
-            log = Path("logs") / f"fam_{tag}_smoke_indist_tilt{sfx}.out"
+            logs = [Path("logs") / f"fam_{tag}_smoke_indist_tilt{sfx}_shard0.out", Path("logs") / f"fam_{tag}_smoke_indist_tilt{sfx}.out"]   # HF shards first
             tilted, backend, note = "-", "-", ""
-            if log.exists():
+            for log in logs:
+                if not log.exists():
+                    continue
                 txt = log.read_text(errors="replace")
                 m = re.search(r"(\d+)/(\d+) prompts tilted", txt)
-                tilted = f"{m.group(1)}/{m.group(2)}" if m else "not logged"
-                backend = "yes" if re.search(r"TRITON_ATTN_VLLM_V1|Triton", txt) else "NO"
+                if not m:
+                    continue
+                tilted = f"{m.group(1)}/{m.group(2)}"
+                mh = re.search(r"tilt installed on (\d+) of (\d+) layers", txt)
+                backend = (f"HF hook, {mh.group(1)} of {mh.group(2)} layers" if mh else "vLLM bias kernels" if re.search(r"TRITON_ATTN_VLLM_V1|Triton", txt) else "NO")
                 m2 = re.search(r"\[gen-eval\] central model .*?: (.*?);", txt)
                 note = m2.group(1) if m2 else ""
+                break
 
             def differ(a: str, b: str) -> str:
                 fa = FAM / tag / f"smoke_indist6_{a}{sfx}" / "generations.jsonl"; fb = FAM / tag / f"smoke_indist6_{b}{sfx}" / "generations.jsonl"

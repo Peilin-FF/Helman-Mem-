@@ -42,6 +42,7 @@ def parse_args():
     p.add_argument("--max_new_tokens", type=int, default=384)
     p.add_argument("--max_examples", type=int, default=None)
     p.add_argument("--every", type=int, default=1, help="keep every k-th event of the stream (positions and memory states unchanged; even subsample)")
+    p.add_argument("--shard", default=None, help="k/N: evaluate rows k, k+N, ... (one GPU per shard; scripts/merge_eval_shards.py joins the shard directories)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--windows", type=int, default=10)
     p.add_argument("--verdict", action="store_true", help="method A: ask for and score a 'Trust: ...' line before the answer (peers modes)")
@@ -80,6 +81,10 @@ def main() -> None:
         rows = rows[:: args.every]
     if args.max_examples:
         rows = rows[: args.max_examples]
+    if args.shard:
+        k, n = (int(x) for x in args.shard.split("/"))
+        rows = rows[k::n]
+        print(f"[gen-eval] shard {k}/{n}: {len(rows)} events", flush=True)
     messages = [r[f"messages_{args.mode}"] for r in rows]
     if args.verdict and args.mode != "solo":
         messages = [add_verdict_instruction(m) for m in messages]

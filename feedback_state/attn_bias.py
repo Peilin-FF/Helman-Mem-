@@ -157,8 +157,17 @@ def install_hf_hooks(model, layers: str | set[int] | None = "all") -> AttentionS
     # one steer per process, shared by every model installed here (verl colocates the actor and the reference model in one
     # worker; both read the same .bias, and they never run forward at the same time)
     steer = HF_STEER if (HF_STEER is not None and HF_STEER.layers == chosen) else AttentionSteer(chosen)
+    hooked = 0
     for idx, layer in enumerate(layer_list):
-        layer.self_attn._steer_idx = idx
-        layer.self_attn.register_forward_pre_hook(steer.hook, with_kwargs=True)
+        # hybrid models (Qwen3.5, Qwen3-Next) interleave linear-attention layers (gated delta net: no softmax over the keys,
+        # so no per-key additive score exists) with full softmax attention; the tilt goes on the full-attention layers only
+        attn = getattr(layer, "self_attn", None)
+        if attn is None:
+            continue
+        attn._steer_idx = idx
+        attn.register_forward_pre_hook(steer.hook, with_kwargs=True)
+        hooked += 1
+    steer.hooked_layers, steer.total_layers = hooked, len(layer_list)
+    print(f"[attn-bias] tilt installed on {hooked} of {len(layer_list)} layers" + (f" (the other {len(layer_list) - hooked} are linear attention)" if hooked < len(layer_list) else ""), flush=True)
     HF_STEER = steer
     return steer

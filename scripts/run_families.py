@@ -51,7 +51,7 @@ class Pool:
                 log.parent.mkdir(parents=True, exist_ok=True)
                 env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
                 with open(log, "w") as f:
-                    rc = subprocess.call(cmd, shell=True, stdout=f, stderr=subprocess.STDOUT, env=env)
+                    rc = subprocess.call(cmd, shell=True, executable="/bin/bash", stdout=f, stderr=subprocess.STDOUT, env=env)
                 ok = rc == 0 and (done is None or done.exists())
                 print(f"[{stamp()}] {'done ' if ok else 'FAILED'} {name}" + ("" if ok else f" (see {log})"), flush=True)
                 if not ok:
@@ -97,12 +97,18 @@ def main() -> None:
 
     root = Path(cfg.get("models_root", "."))
     for base in models:
-        path = Path(cfg["models"][base])
+        spec = cfg["models"][base]
+        spec = {"path": spec} if isinstance(spec, str) else dict(spec)
+        path = Path(spec["path"])
         path = path if path.is_absolute() else root / path
         if not (path / "config.json").exists():
             sys.exit(f"model directory {path} has no config.json (models_root / models in the YAML)")
+        engine = str(spec.get("engine", ev.get("engine", "vllm")))
+        shards_eval = 1 if args.smoke else int(spec.get("shards", 1 if engine == "vllm" else len(gpus)))
+        env = spec.get("env")   # a conda env for models the default env cannot load (Qwen3.5 needs transformers 5)
+        pre = f'eval "$(conda shell.bash hook)" && conda activate {env} && ' if env else ""
         tag = base + (suffix if args.smoke else "")
-        print(f"===== {tag}: {path}  {stamp()}", flush=True)
+        print(f"===== {tag}: {path}  engine {engine}{f' (env {env})' if env else ''}  {stamp()}", flush=True)
         if "features" in steps:
             for st in ([] if fit_self else [train]) + tests:
                 jsonl, cache = STREAMS[st]
@@ -111,7 +117,7 @@ def main() -> None:
                 tasks = []
                 for k in range(shards):
                     outp = cache_dir / f"shard{k}.pt"
-                    cmd = (f"python scripts/encode_context_features.py --input {inp} --output {outp} --central-model {path} --include-context --save-peer-hidden "
+                    cmd = (f"{pre}python scripts/encode_context_features.py --input {inp} --output {outp} --central-model {path} --include-context --save-peer-hidden "
                            f"--num-peers {fe['num_peers']} --max-length {fe['max_length']} --dtype {fe['dtype']} --progress-every {fe.get('progress_every', 500)} "
                            f"--num-shards {shards} --shard-index {k}" + (f" --max-examples {int(sm.get('events', 48))}" if args.smoke else ""))
                     tasks.append((f"features {tag} {st} shard {k}/{shards}", cmd, L / f"enc_{tag}_{st}_{k}.out", outp))
@@ -122,12 +128,12 @@ def main() -> None:
             dim = int(sm.get("dim", 32)) if args.smoke else int(mem["dim"])
             for st in tests:
                 pf = gen / f"prompts_{st}_probe.jsonl"
-                cmd = (f"python scripts/build_generation_prompts.py --model {tag} --fit-stream {st if fit_self else train} --stream {st} --order {mem['order']} "
+                cmd = (f"{pre}python scripts/build_generation_prompts.py --model {tag} --fit-stream {st if fit_self else train} --stream {st} --order {mem['order']} "
                        f"--design {mem['design']} --dim {dim} --lam {mem['lam']} --out {pf} "
                        f"&& python scripts/record_quality.py --prompts {pf} --out {gen / f'record_{st}.json'}")
                 pool.run_all([(f"prompts {tag} {st} (record + quality)", cmd, L / f"prompts_{tag}_{st}.out", pf)])
         if "eval" in steps:
-            tasks = []
+            tasks, merges = [], []
             for st in tests:
                 pf, rec = Path(out["prompts"]) / tag / f"prompts_{st}_probe.jsonl", DATA_ROOT / STREAMS[st][0]
                 if not pf.exists():
@@ -137,11 +143,30 @@ def main() -> None:
                 for cond in ev["conditions"]:
                     mode, extra = MODE[cond]
                     od = Path(out["evals"]) / tag / f"{what}_{TEST_DIR[st]}6_{cond}"
-                    cmd = (f"python -m tests.experiments.common.evaluate_memory_generator --central_model {path} --engine {ev['engine']} "
-                           f"--gpu_memory_utilization {ev['gpu_memory_utilization']} --thinking {ev['thinking']} --max_new_tokens {ev['max_new_tokens']} "
-                           f"--prompts {pf} --records {rec} --mode {mode} {extra.format(gamma=ev['gamma'])} --output {od}")
-                    tasks.append((f"eval {tag} {st} {cond}", cmd, L / f"fam_{tag}_{what}_{TEST_DIR[st]}_{cond}.out", od / "eval_metrics.json"))
+                    common = (f"{pre}python -m tests.experiments.common.evaluate_memory_generator --central_model {path} --engine {engine} "
+                              f"--thinking {ev['thinking']} --max_new_tokens {ev['max_new_tokens']} --prompts {pf} --records {rec} --mode {mode} "
+                              f"{extra.format(gamma=ev['gamma'])}")
+                    if engine == "vllm":
+                        tasks.append((f"eval {tag} {st} {cond}", f"{common} --gpu_memory_utilization {ev['gpu_memory_utilization']} --output {od}",
+                                      L / f"fam_{tag}_{what}_{TEST_DIR[st]}_{cond}.out", od / "eval_metrics.json"))
+                    else:   # HF engine (the tilt through the attention hook): one shard per GPU, joined afterwards
+                        if (od / "eval_metrics.json").exists():
+                            print(f"[{stamp()}] skip  eval {tag} {st} {cond} (already on disk)", flush=True)
+                            continue
+                        for k in range(shards_eval):
+                            tasks.append((f"eval {tag} {st} {cond} shard {k}/{shards_eval}",
+                                          f"{common} --batch_size {int(spec.get('batch_size', 8))} --shard {k}/{shards_eval} --output {od / f'shard{k}'}",
+                                          L / f"fam_{tag}_{what}_{TEST_DIR[st]}_{cond}_shard{k}.out", od / f"shard{k}" / "eval_metrics.json"))
+                        merges.append((f"merge {tag} {st} {cond}", f"python scripts/merge_eval_shards.py --out {od}", L / f"fam_{tag}_{what}_{TEST_DIR[st]}_{cond}.out", od / "eval_metrics.json"))
             pool.run_all(tasks)
+            for name, cmd, log, done in merges:   # CPU work, after every shard of the model is in
+                if done.exists():
+                    continue
+                with open(log, "w") as f:
+                    rc = subprocess.call(cmd, shell=True, stdout=f, stderr=subprocess.STDOUT)
+                print(f"[{stamp()}] {'done ' if rc == 0 and done.exists() else 'FAILED'} {name}" + ("" if rc == 0 else f" (see {log})"), flush=True)
+                if rc != 0:
+                    pool.failed.append(name)
     if "table" in steps or "eval" in steps:
         subprocess.call(f"python scripts/families_table.py {'--smoke' if args.smoke else '--by_task'}", shell=True)
     if pool.failed:

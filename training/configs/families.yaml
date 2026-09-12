@@ -13,8 +13,14 @@ models:                            # tag -> model directory (a name under models
   ministral: Ministral-8B-Instruct-2410
   qwen25: Qwen2.5-7B-Instruct
   phi4: phi-4
+  q35_9b:                          # Qwen3.5-9B: 24 linear-attention (gated delta net) + 8 full-attention layers
+    path: Qwen3.5-9B
+    engine: hf                     # no vLLM for this model; the tilt goes through the HF attention hook on the 8 full-attention layers
+    env: sigma3_5                  # conda env with transformers 5.10 (the sigma env's 4.56 does not know qwen3_5); no vLLM in it
+    shards: 8                      # evaluation shards per condition (one GPU each), joined by scripts/merge_eval_shards.py
+    batch_size: 8
 
-run: [llama31, ministral, qwen25, phi4]                # the models to run, in this order (one model at a time, all its tasks over the GPUs)
+run: [llama31, ministral, qwen25, phi4, q35_9b]        # the models to run, in this order (one model at a time, all its tasks over the GPUs)
 steps: [features, prompts, eval, table]                # each step skips work already on disk, so a run can be resumed
 
 streams:

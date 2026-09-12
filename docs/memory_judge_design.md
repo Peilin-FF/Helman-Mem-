@@ -1259,6 +1259,14 @@ What is model-specific and what is not in the tilt itself:
 - The judge prompt for the features is plain text (no chat template) and needs " Yes" / " No" to be single tokens,
   which holds for all five tokenizers (checked in the smoke run).
 
+Qwen3.5-9B (user, 2026-09-12): a hybrid model, 24 linear-attention layers (gated delta net) + 8 full-attention layers.
+The tilt is a term on a softmax score, so it is applied to the 8 full-attention layers only (install_hf_hooks skips
+layers without self_attn; the linear layers read the peers untilted; no approximation for them is implemented).
+vLLM 0.8.5 does not know the architecture and the env that does (sigma3_5, transformers 5.10.2) has no vLLM, so this
+model runs on the HF engine with the attention hook, sharded over the GPUs (evaluate_memory_generator --shard k/N,
+scripts/merge_eval_shards.py) from the driver (YAML: engine hf, env sigma3_5, shards 8). README_families.md section
+"Qwen3.5-9B".
+
 CPU check (scripts/family_prompt_check.py, first 100 in-dist events, gamma 3, on the Qwen3-4B-addressed prompts since
 the messages are identical for every record): every tokenizer finds all six peer blocks; tilted-block coverage
 99.0-99.1% for all five (Qwen3-4B: 99.1%); 96/100 prompts tilted; prompt tokens median 890-960, max 3.8k; BOS first
