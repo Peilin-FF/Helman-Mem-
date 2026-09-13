@@ -18,6 +18,7 @@ the six-peer streams.  Both import from here so the two steps can never disagree
 from __future__ import annotations
 
 import ast
+import collections
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -221,6 +222,28 @@ def _leaks_gold(record: dict[str, Any], body: str) -> bool:
     return False
 
 
+_WORD_RE = re.compile(r"\w+")
+_RUN_RE = re.compile(r"\b([a-z]\w+)(\s+\1\b){9,}")   # words only: a row of zeros in a literal is not a loop
+
+
+def looped(text: str) -> bool:
+    """A generation stuck in a loop: one word ten times in a row, or one word making up most of a long text."""
+    lowered = str(text or "").lower()
+    if _RUN_RE.search(lowered):
+        return True
+    words = _WORD_RE.findall(lowered)
+    counts = collections.Counter(w for w in words if len(w) > 2)
+    if len(words) < 30 or not counts:
+        return False
+    count = counts.most_common(1)[0][1]
+    return count > 20 and count > 0.3 * len(words)
+
+
+def argument_chars(text: str) -> int:
+    """How much an answer says besides its final-answer line."""
+    return len(_FINAL_LINE_RE.sub("", str(text or "")).strip())
+
+
 def _code_degenerate(program: str, record: dict[str, Any]) -> str | None:
     """A program that is not a real solution: unparseable, a lookup table, a stub, or not reading its input."""
     body = program.strip()
@@ -245,7 +268,7 @@ def _code_degenerate(program: str, record: dict[str, Any]) -> str | None:
 def accept(record: dict[str, Any], text: str, *, value: float, strict: bool = True) -> Verdict:
     """Is this attempt a usable misleading-but-relevant answer?  ``value`` is the graded correctness in [0, 1].
 
-    Rejects, in this order: empty, still correct, a refusal, meta-commentary, the gold answer named as correct,
+    Rejects, in this order: empty, still correct, a refusal, a repetition loop, meta-commentary, the gold answer named as correct,
     the wrong output format for the task, an answer not grounded in the passage, a degenerate program.  ``strict``
     is on while there are attempts left and off on the last one, where the faults in :data:`SOFT` are recorded but no
     longer stand in the way: the alternative to a slightly unnatural wrong answer is the peer's honest answer, which
@@ -263,6 +286,8 @@ def accept(record: dict[str, Any], text: str, *, value: float, strict: bool = Tr
         reasons.append("still_correct")
     if _REFUSAL_RE.search(body[:400]):
         reasons.append("refusal")
+    if looped(body):
+        reasons.append("degenerate")
     if _LEAK_RE.search(body):
         reasons.append("leak")
     if _leaks_gold(record, body):
@@ -373,6 +398,8 @@ def force_wrong(record: dict[str, Any], text: str) -> tuple[str, str | None]:
     """
     task = task_type_of(record)
     body = str(text or "")
+    if argument_chars(strip_thinking(body)) < 20 or looped(strip_thinking(body)):   # nothing to turn around: a rewritten line would be the whole answer
+        return body, None
     if task in {"mcqa", "boolqa"}:
         wrong = wrong_label(record)
         if not wrong:

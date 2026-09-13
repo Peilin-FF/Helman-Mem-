@@ -21,9 +21,9 @@ announced the trick, some refused, some programs were tables of hard-coded outpu
 |---|---|
 | ask | the task's peer prompt plus the instruction to be plausibly wrong; the gold answer is given only so it can be avoided |
 | grade | the streams' own rule: token-F1 ≥ 0.5 for reading, exact match for math, hidden tests for code |
-| check | kept only if graded wrong, in the task's answer format, free of meta-commentary and refusals, not naming the gold, a reading answer taken from the passage, a real program, a closed think block |
+| check | kept only if graded wrong, in the task's answer format, free of meta-commentary, refusals and repetition loops, not naming the gold, a reading answer taken from the passage, a real program, a closed think block |
 | retry | the failures again at temperature 0.7 then 1.0, told what was wrong; on the last attempt a math peer that keeps reaching the gold is given a wrong value (one of its own intermediate results) to arrive at |
-| rewrite | only if all that fails, for math / multiple choice / yes-no: the conclusion is replaced and re-graded, flagged `forced` |
+| rewrite | only if all that fails, for math / multiple choice / yes-no: the conclusion is replaced and re-graded, flagged `forced`; never for an answer with no argument besides its final line (at least 20 characters) or a looping one, which would turn an empty reply into a bare wrong label |
 
 Budgets: misleading answers get the honest budgets (math 512, reading 256, code 768 tokens) except on the short-answer
 OOD tasks, where 96 tokens cut most arguments off before the final line; there they get 256 and are asked to argue in
@@ -34,6 +34,10 @@ model could in principle pick up on.
 An event with no usable answer keeps the honest answer in every stream. On the 48-event smoke, 77-96% of each peer's
 events had a usable answer and none of the usable answers graded correct. `summary.shard*.json` of each peer reports the
 acceptance rate, forced count, attempts and why the rest were unusable.
+
+The weakest peer here is DeepSeek-Coder-V2-Lite-Instruct: told to argue for a wrong option it often returns an empty
+reply, a bare label or a loop ("Final anti anti anti ..."), where its honest answers on the same engine have none of
+these. Those replies are rejected, so it ends with the lowest usable share; its remaining events keep the honest answer.
 
 ## Regimes and the ratio
 

@@ -232,3 +232,17 @@ def test_run_keywords_expand_to_the_sweep_s_regimes():
     assert expand_run(["rates"], cfg) == ["p000", "p050"]
     assert expand_run(["counts"], cfg) == ["k1", "k3"]
     assert expand_run(["sweep", "all100"], cfg) == ["p000", "p050", "k1", "k3", "all100"]
+
+
+def test_a_looping_generation_is_never_accepted():
+    loop = "Final " + "anti " * 40 + "\n\nFinal answer: (A)"
+
+    assert "degenerate" in accept(MCQA, loop, value=0.0).reasons
+    assert "degenerate" in accept(MCQA, loop, value=0.0, strict=False).reasons
+
+
+def test_an_answer_without_an_argument_is_not_rewritten():
+    assert force_wrong(MCQA, "")[1] is None
+    assert force_wrong(MCQA, "Final answer: B")[1] is None
+    assert force_wrong(MCQA, "anti " * 40)[1] is None
+    assert force_wrong(MCQA, "Mercury orbits closest to the Sun, so it is the answer.\n\nFinal answer: B")[1] in {"A", "C"}
