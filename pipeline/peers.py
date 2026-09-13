@@ -101,7 +101,8 @@ def main(argv=None) -> None:
     summary = {"mode": args.mode, "model": args.model, "stream": shown(args.stream), "n": len(rows),
                "generation_params": {"temperature": args.temperature if args.mode == "honest" else args.temperatures,
                                      "top_p": args.top_p, "max_new_tokens": "reasoning 4096" if args.reasoning else budgets(args.max_tokens, args.mode),
-                                     "context": not args.no_context, "reasoning": args.reasoning, "backend": "vllm"},
+                                     "context": not args.no_context, "reasoning": args.reasoning, "backend": "vllm",
+                                     "prompt": "chat template as token ids, no special tokens added"},
                "accuracy_pct": 100 * sum(r["correct"] for r in rows) / n,
                "by_source": {s: {"n": c, "accuracy_pct": 100 * k / c} for s, (c, k) in by_source.items()},
                "seconds": time.time() - t0, **extra}
@@ -115,11 +116,11 @@ def honest(args, records, tok, llm):
     from vllm import SamplingParams
 
     from feedback_state.memory_generator import strip_thinking
-    from feedback_state.peer_generation import grade_all, max_tokens, render
+    from feedback_state.peer_generation import grade_all, max_tokens, prompt_ids
     from feedback_state.tasks import build_peer_prompt, task_type_of
 
     b = budgets(args.max_tokens, "honest")
-    prompts = [render(tok, build_peer_prompt(r, with_context=not args.no_context)) for r in records]
+    prompts = [prompt_ids(tok, build_peer_prompt(r, with_context=not args.no_context)) for r in records]
     params = [SamplingParams(temperature=args.temperature, top_p=args.top_p, max_tokens=max_tokens(r, b, args.reasoning), seed=0) for r in records]
     texts = [o.outputs[0].text for o in llm.generate(prompts, params, use_tqdm=True)]
     values = grade_all([(r, strip_thinking(t) if args.reasoning else t) for r, t in zip(records, texts)], args.grade_workers)
@@ -133,7 +134,7 @@ def misleading(args, records, tok, llm):
 
     from feedback_state.adversarial import accept, force_wrong, misleading_prompt, plausible_wrong_number
     from feedback_state.memory_generator import strip_thinking
-    from feedback_state.peer_generation import grade_all, max_tokens, render
+    from feedback_state.peer_generation import grade_all, max_tokens, prompt_ids
     from feedback_state.tasks import task_type_of
 
     b = budgets(args.max_tokens, "misleading")
@@ -156,7 +157,7 @@ def misleading(args, records, tok, llm):
         # misleads, where a conclusion rewritten afterwards contradicts the lines above it
         targets = {i: plausible_wrong_number(records[i], answer_of(state[i]["best"])) for i in pending
                    if last and task_type_of(records[i]) == "math" and "still_correct" in state[i]["best_reasons"] and state[i]["best"]}
-        prompts = [render(tok, misleading_prompt(records[i], attempt=attempt, complaints=state[i]["reasons"], target_answer=targets.get(i)))
+        prompts = [prompt_ids(tok, misleading_prompt(records[i], attempt=attempt, complaints=state[i]["reasons"], target_answer=targets.get(i)))
                    for i in pending]
         params = [SamplingParams(temperature=temp, top_p=args.top_p, max_tokens=max_tokens(records[i], b, args.reasoning), seed=attempt)
                   for i in pending]

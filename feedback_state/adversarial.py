@@ -69,6 +69,8 @@ COMPLAINTS = {
     "degenerate": "Your previous attempt was not a real solution (it hard-coded outputs or was near-empty). Write a "
                   "genuine general solution that happens to be wrong.",
     "gold_leak": "Your previous attempt named the correct answer. Do not mention it anywhere.",
+    "off_topic": "Your previous attempt was not about this question (unrelated text, code or a run of symbols). Answer this "
+                 "question, in words, arguing from its own content.",
     "empty": "Your previous attempt was empty. Write the full solution.",
     "unfinished": "Your previous attempt ran out of room before the answer. Reason briefly, then give the solution.",
 }
@@ -244,6 +246,36 @@ def argument_chars(text: str) -> int:
     return len(_FINAL_LINE_RE.sub("", str(text or "")).strip())
 
 
+_ANSWER_PHRASE_RE = re.compile(r"final\s+answer\s*(?:is|:)?\s*\(?[a-z0-9./-]{0,16}\)?\.?", re.IGNORECASE)
+_CODE_MARK_RE = re.compile(r"#include\s*<|\bint\s+main\s*\(|^\s*def\s+\w+\s*\(|\bpublic\s+static\b|System\.out\.print|console\.log\(|^\s*(?:import|using\s+namespace)\s+\w+",
+                           re.MULTILINE)
+_CONTENT_WORD_RE = re.compile(r"[a-z]{4,}")
+_STOPWORDS = frozenset("""that this with from have which their there would could should about what when where your they them then
+than into only also been were will just more most such other some very does each same both over like make made much many must answer
+final option options correct question because therefore since while these those being given following based statement""".split())
+
+
+def off_topic(record: dict[str, Any], text: str) -> bool:
+    """An answer to a task that is not code which is not about the question: program code, a run of numbers or symbols,
+    or prose that shares no content word with the question, its options or its passage.  A bare label is not off topic."""
+    if task_type_of(record) == "code":
+        return False
+    arg = _ANSWER_PHRASE_RE.sub(" ", str(text or "")).strip()
+    if len(arg) < 20:
+        return False
+    if _CODE_MARK_RE.search(arg):
+        return True
+    if len(arg) > 60 and sum(ch.isalpha() for ch in arg) < 0.25 * len(arg):
+        return True
+    words = {w for w in _CONTENT_WORD_RE.findall(arg.lower()) if w not in _STOPWORDS}
+    if len(words) >= 8:
+        source = " ".join([str(record.get("problem", "")), " ".join(map(str, record.get("choices") or [])), _rag_context_text(record)])
+        vocab = {w for w in _CONTENT_WORD_RE.findall(source.lower()) if w not in _STOPWORDS}
+        if len(vocab) >= 3 and not vocab & words:
+            return True
+    return False
+
+
 def _code_degenerate(program: str, record: dict[str, Any]) -> str | None:
     """A program that is not a real solution: unparseable, a lookup table, a stub, or not reading its input."""
     body = program.strip()
@@ -268,7 +300,7 @@ def _code_degenerate(program: str, record: dict[str, Any]) -> str | None:
 def accept(record: dict[str, Any], text: str, *, value: float, strict: bool = True) -> Verdict:
     """Is this attempt a usable misleading-but-relevant answer?  ``value`` is the graded correctness in [0, 1].
 
-    Rejects, in this order: empty, still correct, a refusal, a repetition loop, meta-commentary, the gold answer named as correct,
+    Rejects, in this order: empty, still correct, a refusal, a repetition loop or text not about the question, meta-commentary, the gold answer named as correct,
     the wrong output format for the task, an answer not grounded in the passage, a degenerate program.  ``strict``
     is on while there are attempts left and off on the last one, where the faults in :data:`SOFT` are recorded but no
     longer stand in the way: the alternative to a slightly unnatural wrong answer is the peer's honest answer, which
@@ -288,6 +320,8 @@ def accept(record: dict[str, Any], text: str, *, value: float, strict: bool = Tr
         reasons.append("refusal")
     if looped(body):
         reasons.append("degenerate")
+    elif off_topic(record, body):
+        reasons.append("off_topic")
     if _LEAK_RE.search(body):
         reasons.append("leak")
     if _leaks_gold(record, body):
@@ -398,7 +432,7 @@ def force_wrong(record: dict[str, Any], text: str) -> tuple[str, str | None]:
     """
     task = task_type_of(record)
     body = str(text or "")
-    if argument_chars(strip_thinking(body)) < 20 or looped(strip_thinking(body)):   # nothing to turn around: a rewritten line would be the whole answer
+    if argument_chars(strip_thinking(body)) < 20 or looped(strip_thinking(body)) or off_topic(record, strip_thinking(body)):   # nothing to turn around: a rewritten line would be the whole answer
         return body, None
     if task in {"mcqa", "boolqa"}:
         wrong = wrong_label(record)

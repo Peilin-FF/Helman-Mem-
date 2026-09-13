@@ -129,7 +129,8 @@ def test_misleading_expands_datasets_into_answers_streams_and_evaluations(tmp_pa
     assert "--reasoning" in r1.cmd and "--model /models/DeepSeek-R1-Distill-Qwen-7B " in r1.cmd
     assert r1.done == tmp_path / "data/indist6_misleading/DeepSeek-R1-Distill-Qwen-7B/shard0of1.jsonl"
     coder = [j for j in peers if "DeepSeek-Coder" in j.name][0]
-    assert coder.env == {"VLLM_USE_V1": "0"}
+    assert coder.env == {"VLLM_USE_V1": "0"} and "--no-prefix-caching" in coder.cmd
+    assert all("--no-prefix-caching" not in j.cmd for j in peers if "DeepSeek-Coder" not in j.name)
     assert all("--fit-features" not in j.cmd for j in plan.record())      # fit: self
 
 

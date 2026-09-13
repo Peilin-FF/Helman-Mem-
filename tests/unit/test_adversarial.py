@@ -10,6 +10,7 @@ from feedback_state.adversarial import (
     accept,
     adhoc_spec,
     force_wrong,
+    off_topic,
     load_regimes,
     misleading_prompt,
     plausible_wrong_number,
@@ -226,3 +227,41 @@ def test_an_answer_without_an_argument_is_not_rewritten():
     assert force_wrong(MCQA, "Final answer: B")[1] is None
     assert force_wrong(MCQA, "anti " * 40)[1] is None
     assert force_wrong(MCQA, "Mercury orbits closest to the Sun, so it is the answer.\n\nFinal answer: B")[1] in {"A", "C"}
+
+
+def test_an_answer_that_is_not_about_the_question_is_never_accepted():
+    numbers = ",".join(str(i) for i in range(1, 60)) + "\n\nFinal answer: A"
+    program = "#include <bits/stdc++.h>\nusing namespace std;\nint main() { int n; cin >> n; }\n\nFinal answer: A"
+    elsewhere = ("The International Space Station orbits the Earth every ninety minutes, carrying astronauts who conduct "
+                 "experiments in microgravity laboratories. Final answer: A")
+
+    for text in (numbers, program, elsewhere):
+        assert off_topic(MCQA, text)
+        assert "off_topic" in accept(MCQA, text, value=0.0, strict=False).reasons
+        assert force_wrong(MCQA, text)[1] is None
+
+
+def test_a_relevant_or_bare_answer_is_not_off_topic():
+    argued = ("Venus is the brightest planet and sits in the inner solar system, so it is the one closest to the Sun. "
+              "Final answer: A")
+    assert not off_topic(MCQA, argued) and accept(MCQA, argued, value=0.0).ok
+    assert not off_topic(MCQA, "Final answer: A")
+    assert not off_topic(MATH, "5 * 12 = 60, minus the 10 dollar coupon gives 50.\n\nFinal answer: 50")
+    assert not off_topic(CODE, "def main():\n    print(int(input()) + 2)")
+
+
+def test_a_peer_prompt_carries_the_template_s_bos_only_once():
+    from feedback_state.peer_generation import prompt_ids
+
+    class Tok:
+        bos = 1
+
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt, **kw):
+            return "<bos>User: " + messages[0]["content"] + "\nAssistant:"
+
+        def __call__(self, text, add_special_tokens=True):
+            ids = [self.bos] if text.startswith("<bos>") else []
+            return {"input_ids": ([self.bos] if add_special_tokens else []) + ids + [7] * len(text.split())}
+
+    ids = prompt_ids(Tok(), "is the sky blue?")["prompt_token_ids"]
+    assert ids[:2] != [1, 1] and ids[0] == 1

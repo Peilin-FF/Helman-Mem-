@@ -29,6 +29,16 @@ def render(tokenizer, content: str) -> str:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
+def prompt_ids(tokenizer, content: str) -> dict:
+    """The engine input for one user turn: the rendered chat template as token ids, with no special tokens added.
+
+    A chat template already starts with the model's BOS token where the model needs one; handing the rendered text to
+    the engine lets its tokenizer add a second one. Gemma-3, Llama-3.1 and both DeepSeek peers then see a doubled BOS,
+    and DeepSeek-Coder-V2-Lite answers with unrelated text or symbol runs.
+    """
+    return {"prompt_token_ids": tokenizer(render(tokenizer, content), add_special_tokens=False)["input_ids"]}
+
+
 def max_tokens(record: dict, budgets: dict | None = None, reasoning: bool = False) -> int:
     if reasoning:
         return REASONING_MAX_TOKENS
