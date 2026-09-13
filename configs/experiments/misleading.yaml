@@ -12,7 +12,6 @@ eval_conditions: [tilt, peers, solo]         # peers + memory, peers, question o
 table:
   rows: regimes
   reference: [q3_4b]                         # the honest rows (main experiment)
-  deltas: [[tilt, peers], [tilt, solo], [peers, solo]]
   misleading_probe: true
 
 smoke: {datasets: [indist6_misleading_p050]}

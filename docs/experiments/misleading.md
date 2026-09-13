@@ -80,29 +80,25 @@ attention tilt, and on the question alone (`solo`); the record is fit on each st
 no peer answers, so `solo` is the same for every misleading share: it is read from the base stream's result
 (`Layout.eval_dataset`), not re-run.
 
-| misleading share asked (reached: indist6 / ood6) | indist6 tilt | peers | solo | tilt − peers | ood6 tilt | peers | solo | tilt − peers | tilt − solo | peers − solo |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| honest (main experiment) | 67.2 | 64.8 | 60.5 | +2.4 | 74.0 | 69.2 | 67.8 | +4.9 | +6.2 | +1.4 |
-| 0% | 67.3 | 64.8 | 60.5 | +2.6 | 74.0 | 69.2 | 67.8 | +4.8 | +6.2 | +1.4 |
-| 25% | 66.5 | 64.2 | 60.5 | +2.3 | 70.5 | 64.4 | 67.8 | +6.1 | +2.7 | −3.4 |
-| 50% | 66.1 | 64.1 | 60.5 | +2.0 | 68.5 | 59.2 | 67.8 | +9.3 | +0.7 | −8.6 |
-| 75% (71.9 / 75.0) | 64.8 | 62.8 | 60.5 | +2.0 | 63.5 | 52.2 | 67.8 | +11.4 | −4.3 | −15.6 |
-| 100% (81.0 / 91.9) | 63.4 | 61.5 | 60.5 | +1.9 | 53.2 | 47.0 | 67.8 | +6.3 | −14.6 | −20.8 |
+| misleading share asked (reached: indist6 / ood6) | indist6 tilt | indist6 peers | indist6 solo | ood6 tilt | ood6 peers | ood6 solo |
+|---|---:|---:|---:|---:|---:|---:|
+| honest (main experiment) | 67.2 | 64.8 | 60.5 | 74.0 | 69.2 | 67.8 |
+| 0% | 67.3 | 64.8 | 60.5 | 74.0 | 69.2 | 67.8 |
+| 25% | 66.5 | 64.2 | 60.5 | 70.5 | 64.4 | 67.8 |
+| 50% | 66.1 | 64.1 | 60.5 | 68.5 | 59.2 | 67.8 |
+| 75% (71.9 / 75.0) | 64.8 | 62.8 | 60.5 | 63.5 | 52.2 | 67.8 |
+| 100% (81.0 / 91.9) | 63.4 | 61.5 | 60.5 | 53.2 | 47.0 | 67.8 |
 
-On OOD, where the central model leans on the peers, reading the peers stops paying from 25% misleading on (`peers − solo`
-negative) and costs 20.8 points at 100%. The tilt keeps the peers worth reading up to 50% (`tilt − solo` +0.7) and
-recovers up to 11.4 points of the loss (at 75%); at 100% almost no correct answer is left to up-weight. In-distribution
-the model solves most math and code itself: peers stay above solo at every share, and the tilt's +2 holds throughout.
 The record gives misleading answers a lower estimate than honest ones (AUC 0.70-0.72 in-distribution, 0.79-0.89 OOD),
 without being told which answers are misleading. Full table: `outputs/tables/misleading.md`.
 
 ## Reading the table
 
 `outputs/tables/misleading.md`: accuracy per regime under `tilt` (peers + memory), `peers` (peers only) and `solo`
-(question only, shared with the base stream), and their differences, against the honest rows (`swap` is not run by
+(question only, shared with the base stream), against the honest rows (`swap` is not run by
 default: add it to `eval_conditions`); what the record makes of the misleading answers (mean estimate on honest vs misleading answers, the AUC of that
 separation, how often its favourite is misleading); and the peers (ratio asked and reached, accuracy before and after,
-forced count, usable share). The question is how `tilt − peers` grows as more of the peers' answers are misleading, and where `peers − solo` and `tilt − solo` turn negative.
+forced count, usable share).
 
 ## Notes
 
