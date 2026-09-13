@@ -7,12 +7,12 @@ steps: [peers, streams, features, record, evaluate, table]
 central: [q3_4b]
 datasets: [misleading_rates]                 # registered in configs/datasets/: 0-100% misleading, indist6 and ood6
 record: {fit: self}                          # addresses fit on each misleading stream itself (label-free)
-eval_conditions: [tilt, peers, solo, swap]
+eval_conditions: [tilt, peers]               # peers + memory, peers (question only and swap: add solo, swap)
 
 table:
   rows: regimes
   reference: [q3_4b]                         # the honest rows (main experiment)
-  deltas: [[tilt, peers], [tilt, solo], [peers, solo]]
+  deltas: [[tilt, peers]]
   misleading_probe: true
 
 smoke: {datasets: [indist6_misleading_p050]}

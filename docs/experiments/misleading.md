@@ -75,11 +75,11 @@ DeepSeek peers stop at their usable share. p100 reaches 81.0% on indist6 and 91.
 
 ## Reading the table
 
-`outputs/tables/misleading.md`: accuracy per regime (tilt, peers, solo, swap and their differences) against the honest
-rows; what the record makes of the misleading answers (mean estimate on honest vs misleading answers, the AUC of that
+`outputs/tables/misleading.md`: accuracy per regime under `tilt` (peers + memory) and `peers` (peers only), and their
+difference, against the honest rows (question only and swap are not run by default: add `solo`, `swap` to
+`eval_conditions`); what the record makes of the misleading answers (mean estimate on honest vs misleading answers, the AUC of that
 separation, how often its favourite is misleading); and the peers (ratio asked and reached, accuracy before and after,
-forced count, usable share). Under misleading peers `peers − solo` should turn negative; the result is how much of that
-loss `tilt − peers` recovers, with `swap` at or below `peers`.
+forced count, usable share). The question is how `tilt − peers` grows as more of the peers' answers are misleading.
 
 ## Notes
 
