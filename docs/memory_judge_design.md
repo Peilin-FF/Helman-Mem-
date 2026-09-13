@@ -1379,7 +1379,16 @@ conditions + swapped which was then dropped): Llama-3.1 72.9 / 70.8 / 58.3 (tilt
 66.7 / 64.6 / 50.0, phi-4 70.8 / 68.8 / 64.6, Qwen2.5 and Llama-3 base passed the same checks; 44-45/48 prompts
 tilted, bias kernels taken, the tilt changed 18-44 of 48 generations. Encoder speed 0.5 s/event (8B), 0.7 s (phi-4).
 
-## 24. The memory as a teacher: stable identities + self-distillation from the tilted self (2026-09-13)
+## 24. The memory as a teacher: stable identities + self-distillation from the tilted self (2026-09-13; CLOSED, code deleted)
+
+**Outcome (2026-09-13 10:10, user: "this method is no use... delete now").** NSD ran the 40-step phase and 251 of 276 steps of
+the full epoch on 8 GPUs; on the 512-event validation slice at gamma 0 it led the control by 2 points early (74.8 vs 72.9 at
+step 20 of phase 2, all of it on reading comprehension: 86 vs 79) and was level by step 200 (72.5 vs 73.1; rag 84 vs 80, code 25
+vs 34). The tilted teacher and the untilted student became indistinguishable within 40 steps (0.29 -> 0.02 nats per token,
+KL loss 0.26 -> 0.003): the formulation has a trivial fixed point, the model can make the tilt irrelevant instead of learning
+what it says. Never tested on the OOD stream; NCTRL never trained. Killed at step 251, code (peer names, self_distill, the
+teacher pass, launch_named.sh) reverted to 12810dd~1, outputs (nsd_named_p1 / nsd_named / nsd_smoke, the named prompt files
+and parquets) deleted. The design is kept below as the record of what was tried.
 
 **Why (user, 2026-09-13).** "The memory state has more effects than test-time steering. We need to consider how
 to use it to help the central model increase the reliability-judgement ability itself instead of just relying on
