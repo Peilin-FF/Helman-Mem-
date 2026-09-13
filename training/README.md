@@ -107,7 +107,7 @@ rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_grpo_v30    TRAIN=outputs/rl/data/q3_4b/tra
 # 3. full evaluation of any HF checkpoint (question-only, the whole in-distribution stream and the whole OOD stream; vLLM decoding, minutes instead of hours)
 rproj submit 'GPU=1 CKPT=outputs/rl/q3_4b_grpo_hint/hf/global_step_40 bash training/scripts/eval_hf.sh'
 
-# 4. optional SFT stage on memory-chosen hinted solutions (multi-GPU replacement of scripts/generate_hinted.py + train_memory_generator.py)
+# 4. optional SFT stage on memory-chosen hinted solutions (multi-GPU replacement of train_memory_generator.py; the hinted generations came from scripts/generate_hinted.py, removed, at tag sigma-mem-final)
 rproj run 'PYTHONPATH=. python -m training.kalman_rl.build_sft_data --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl --records data/mixed_train_big/train.jsonl --generations outputs/gen/q3_4b/<hinted>/generations.jsonl --out outputs/rl/data/q3_4b/sft_hinted_memory.parquet'
 rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_sft_hinted_memory TRAIN=outputs/rl/data/q3_4b/sft_hinted_memory.parquet bash training/scripts/train_sft.sh'
 ```
@@ -170,14 +170,10 @@ not inherit its stdin — it runs in Ray task workers with stdin on /dev/null
 ## LoRA
 
 Not on this stack: the GRPO and SFT trainers here train the full parameters (`lora_rank: 0`), which is
-what the internalisation objective asks for.  LoRA training is the single-GPU path
-(`feedback_state/train_memory_generator.py --lora_rank 16 [--gated on]`), used for the 2026-09-04 results.
+what the internalisation objective asks for.  The single-GPU LoRA trainer used for the 2026-09-04 results was removed
+(git tag `sigma-mem-final`); the evaluator still loads LoRA checkpoints (`feedback_state/lora.py`).
 
 ## Models
 
 - **Qwen3-4B**: fully supported (vLLM 0.8.5, transformers 4.56 in env `sigma`).
-- **Qwen3.5-4B**: needs transformers 5.x (env `sigma3_5`), which vLLM 0.8.5 / verl 0.3.1 do
-  not support; a newer vLLM (with torch 2.8+) in a separate env is required before the
-  multi-GPU stack can train it.  Until then Qwen3.5 stays on the single-GPU trainers
-  (`feedback_state/train_rlvr.py`, `feedback_state/train_memory_generator.py`), which share
-  the memory hooks with this stack.
+- Qwen3.5 is no longer used (2026-09-13).

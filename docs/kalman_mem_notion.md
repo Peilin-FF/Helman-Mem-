@@ -8,6 +8,15 @@
 > (`memory_judge.py`, `train_memory_judge.py`, `evaluate_memory_judge.py`) were removed from the repository; only the
 > Kalman Mem method remains. Sections below are a dated research log and still name those files. The removed code is
 > at the git tag `sigma-mem-final`.
+>
+> Also removed on 2026-09-13, as no longer used: the training-free steering prototypes (`steer_attention.py`,
+> `fusion_decision.py`, `memory_use_probe.py`), the distillation helpers (`generate_hinted.py`, `filter_targets.py`,
+> `analyze_generations.py`), the peer-selection scripts (`peer_screen.py`, `peer_table.py`), the report-page builders
+> (`results_page.py`, `results_diagrams.py`, `steer_page.py`, `pipeline6_page.py`), `shuffle_jsonl.py`, and the one-off
+> run launchers (`launch_run3b.sh`, `launch_ctrl.sh`, `launch_solo.sh`, `launch_8b.sh`, `launch_oodfull.sh`, `dyn.py`).
+>
+> Qwen3.5 is no longer used (2026-09-13): its environment file, the Qwen3.5-9B family entry and the single-GPU trainers
+> (`train_rlvr.py`, `train_memory_generator.py`) were removed. The Qwen3.5 results below are history.
 
 ---
 

@@ -12,8 +12,7 @@ places, both pure functions of (record, prompt row, generated text):
   pseudo    when a prompt has no verifier, the reliability-weighted vote over the peers'
             answers replaces the verifier reward.
 
-Shared by the single-GPU trainer (feedback_state.train_rlvr) and the multi-GPU stack
-(training/kalman_rl).
+Used by the multi-GPU training stack (training/kalman_rl) and the evaluator.
 """
 from __future__ import annotations
 

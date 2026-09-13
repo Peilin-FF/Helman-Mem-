@@ -15,7 +15,7 @@ central:                           # the model that reads the peers and answers;
   tag: q3_4b                       # names the feature caches and the output directories
   path: Qwen3-4B
   engine: vllm
-  # env: sigma3_5                  # a conda env for a model the default env cannot load (as in families.yaml)
+  # env: <conda env>               # a conda env for a model the default env cannot load (as in families.yaml)
   # shards: 8                      # evaluation shards for the HF engine
 
 peers:                             # the six peers of the streams, in peer_0 .. peer_5 order (the order the streams carry)

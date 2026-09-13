@@ -1,6 +1,6 @@
 """Join the shard directories of a sharded evaluation (evaluate_memory_generator.py --shard k/N) into one result.
 
-    PYTHONPATH=. python scripts/merge_eval_shards.py --out outputs/gen/families/q35_9b/full_oodfull6_tilt
+    PYTHONPATH=. python scripts/merge_eval_shards.py --out outputs/gen/families/<tag>/full_oodfull6_tilt
 
 Reads <out>/shard*/generations.jsonl, restores the stream order, recomputes eval_metrics.json exactly as the evaluator
 does (accuracy, per-task accuracy, the accuracy curve along the stream, the oracle and majority references), and writes <out>/generations.jsonl and <out>/eval_metrics.json.

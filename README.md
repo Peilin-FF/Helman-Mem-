@@ -53,8 +53,7 @@ bash datasets/unpack.sh                        # the six-peer streams -> data/
 pytest tests/unit                              # no GPU needed
 ```
 
-vLLM must be exactly 0.8.5, because the attention kernels are patched from its source. Qwen3.5 models need
-transformers 5, so they use a second environment built from `requirements_qwen3.5.txt`. The drivers activate the
+vLLM must be exactly 0.8.5, because the attention kernels are patched from its source. The drivers activate the
 conda environment named in `KALMAN_ENV`, which defaults to `sigma`.
 
 Download the central model (`Qwen/Qwen3-4B`) and the six peers:
@@ -120,7 +119,7 @@ Three experiments have their own driver and guide, and each one is resumable acr
 
 | guide | what it runs |
 |---|---|
-| [`README_families.md`](README_families.md) | The same pipeline with other central models (Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4, Qwen3.5-9B), each with its own record: `bash run_families.sh` |
+| [`README_families.md`](README_families.md) | The same pipeline with other central models (Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4), each with its own record: `bash run_families.sh` |
 | [`README_misleading_peers.md`](README_misleading_peers.md) | Generating misleading but relevant peer answers, and building streams at a chosen ratio (a share of each peer's answers, or a number of misleading peers per question) |
 | [`README_adversarial.md`](README_adversarial.md) | The whole pipeline on those streams, against the honest rows: `bash run_adversarial.sh` |
 | [`training/README.md`](training/README.md) | Multi-GPU GRPO / SFT of the central model with the record and the tilt (vendored verl, `training/kalman_rl`) |

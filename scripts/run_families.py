@@ -105,7 +105,7 @@ def main() -> None:
             sys.exit(f"model directory {path} has no config.json (models_root / models in the YAML)")
         engine = str(spec.get("engine", ev.get("engine", "vllm")))
         shards_eval = 1 if args.smoke else int(spec.get("shards", 1 if engine == "vllm" else len(gpus)))
-        env = spec.get("env")   # a conda env for models the default env cannot load (Qwen3.5 needs transformers 5)
+        env = spec.get("env")   # a conda env for a model the default env cannot load
         pre = f'eval "$(conda shell.bash hook)" && conda activate {env} && ' if env else ""
         tag = base + (suffix if args.smoke else "")
         print(f"===== {tag}: {path}  engine {engine}{f' (env {env})' if env else ''}  {stamp()}", flush=True)

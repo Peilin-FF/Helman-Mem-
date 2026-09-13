@@ -19,7 +19,7 @@ from pathlib import Path
 
 NAMES = {"q3_4b": "Qwen3-4B (frozen)", "llama3": "Meta-Llama-3-8B (base, plain layout)", "llama31": "Meta-Llama-3.1-8B-Instruct",
          "ministral": "Ministral-8B-Instruct-2410", "qwen25": "Qwen2.5-7B-Instruct", "phi4": "phi-4 (14B)",
-         "q35_9b": "Qwen3.5-9B (hybrid: tilt on the 8 full-attention layers, HF engine)"}
+         }
 CONDS = ("tilt", "peers", "solo")
 ADDRS = (("", "own record"), ("_q3addr", "Qwen3-4B record"))
 FAM = Path("outputs/gen/families")

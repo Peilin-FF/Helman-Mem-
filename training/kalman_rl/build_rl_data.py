@@ -55,7 +55,7 @@ def parse_args():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--guided", choices=GUIDED, default="memory")
     ap.add_argument("--verified_fraction", type=float, default=1.0, help="fraction of prompts whose verifier is available after the answer (the rest use the memory pseudo-reward)")
-    ap.add_argument("--task_quota", default=None, help="e.g. math:0.4,rag:0.4,code:0.2 with --n_prompts (train_rlvr's sampling); default: keep every row")
+    ap.add_argument("--task_quota", default=None, help="e.g. math:0.4,rag:0.4,code:0.2 with --n_prompts ; default: keep every row")
     ap.add_argument("--n_prompts", type=int, default=None)
     ap.add_argument("--every", type=int, default=1, help="keep every k-th row (even subsample along the stream)")
     ap.add_argument("--limit", type=int, default=None)

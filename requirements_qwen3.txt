@@ -1,6 +1,6 @@
 # Requirements for the Qwen3 center models (Qwen3-0.6B / 4B-Instruct / 8B).
 # This is the MAIN environment: transformers 4.56.2 recognizes qwen3 and also runs the
-# vLLM peer-generation data pipeline. Use this for everything EXCEPT loading Qwen3.5.
+# vLLM peer-generation data pipeline. It is the only environment the repository needs.
 #
 #   pip install -r requirements_qwen3.txt
 #   (vLLM line: install separately with --no-deps, see note below)

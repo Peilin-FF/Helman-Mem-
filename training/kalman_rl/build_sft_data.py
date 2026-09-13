@@ -1,8 +1,8 @@
 """Verified generations  ->  SFT parquet (prompt = question-only chat, response = own-words solution).
 
 Sources of responses, in this order of preference per row:
-  --generations   generations.jsonl of scripts/generate_hinted.py (hinted, own-words answers; the
-                  hint was chosen by the memory) or of any solo evaluation; kept when correct
+  --generations   generations.jsonl of a hinted run (own-words answers with a memory-chosen hint; its generator
+                  scripts/generate_hinted.py is at the git tag sigma-mem-final) or of any solo evaluation; kept when correct
   --prompts       the prompt file's ``target`` (peer / self-distilled targets), when no generation
 
   PYTHONPATH=. python -m training.kalman_rl.build_sft_data --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl \
