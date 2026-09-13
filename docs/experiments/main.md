@@ -1,0 +1,46 @@
+# main: the frozen Qwen3-4B reference rows
+
+```bash
+bash run.sh configs/experiments/main.yaml --smoke     # 48 events, every step, ~5 min
+bash run.sh configs/experiments/main.yaml             # the whole in-distribution and OOD streams
+```
+
+Qwen3-4B is both the frozen judge whose hidden states address the record and the central model that answers. The record
+is fit on `train6` (PCA addresses, label-free) and run read-before-write along `indist6` and `ood6` in the order
+`shuffled0`. The model answers every event in four conditions.
+
+| step | what runs | where it lands |
+|---|---|---|
+| features | `pipeline.features` on train6, indist6, ood6, one shard per GPU | `outputs/features/q3_4b/<stream>/` |
+| record | `pipeline.record` per evaluated stream | `outputs/record/q3_4b/<stream>/shuffled0.fit-train6.jsonl` + `.quality.json` |
+| evaluate | `pipeline.evaluate` per stream and condition, vLLM | `outputs/eval/q3_4b/<stream>/<condition>/` |
+| table | `pipeline.table` | `outputs/tables/main.md` |
+
+Results (whole streams, thinking off, 768 new tokens, greedy):
+
+| stream | tilt | peers | solo | swap | record AUC / favourite right on mixed events |
+|---|---:|---:|---:|---:|---|
+| indist6 (4,319 events) | 67.2 | 64.8 | 60.5 | 60.0 | 0.92 / 91% |
+| ood6 (17,403 events) | 74.0 | 69.2 | 67.8 | 64.2 | 0.92 / 83% |
+
+`swap` gives the record's estimates to the wrong peers (by rank); it falls below `peers`, so the gain of `tilt` comes from
+what the record knows, not from tilting attention as such.
+
+Time on 8 A100s: features about 30 min for the three streams, record a few minutes per stream, evaluation about 15 min
+per condition on ood6.
+
+One note on the conditions: `peers` and `solo` run on vLLM's default attention backend, `tilt` and `swap` on the patched
+Triton kernels, so `tilt − peers` also contains the (small) numerical difference between the two kernels.
+
+## Reproducibility (checked 2026-09-13)
+
+- **Record.** The PCA addresses use a randomized low-rank SVD. Since 2026-09-13 it is seeded, so a record rebuilt on the
+  same kind of device is identical row for row (checked: two rebuilds of indist6, 4,319 of 4,319 rows identical). The
+  stored records were built unseeded and cannot be regenerated bit for bit; a rebuild differs in the estimates by 0.009 on
+  average and matches in quality (AUC 0.9233 against 0.9232, favourite right on mixed events 90.8% against 91%) and in every
+  prompt.
+- **Prompts.** The central model's system prompts are exactly those of the stored records. A sentence against long
+  reasoning that was added on 2026-09-09 for thinking mode is no longer part of them.
+- **Evaluation.** Re-evaluating the stored indist6 record in the tilt condition gave 67.08 against the stored 67.19: the
+  same verdict on 4,288 of 4,319 events. vLLM's batched greedy decoding is not bit-deterministic, so expect differences of
+  about 0.1 point between runs of the same condition; compare conditions within one run of an experiment where it matters.

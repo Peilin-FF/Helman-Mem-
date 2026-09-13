@@ -1,7 +1,7 @@
 # The six-peer streams (version 3, 2026-09)
 
 The three event streams behind every reliability-memory result since 2026-09-07 (`docs/memory_judge_design.md`
-sections 19–23, `README_families.md`), gzipped so that each file stays under GitHub's size limit. `bash datasets/unpack.sh`
+sections 19–23, `docs/experiments/`), gzipped so that each file stays under GitHub's size limit. `bash datasets/unpack.sh`
 restores them into `data/`, where the code reads them; `manifest.json` has the sha256 of each archive, the event counts
 and the source benchmarks.
 
@@ -29,4 +29,4 @@ read-before-write). Fields: `id`, `source`, `task_type` (`math` / `rag` / `code`
 Peer answers were generated once with vLLM (temperature 0.2, top-p 0.95; 768 new tokens on the training and
 in-distribution streams, 96 on OOD) and graded with the task's verifier (exact match after answer extraction for math,
 F1 ≥ 0.5 for reading, the hidden tests for code, option match for OOD). Re-packing after a change to `data/`:
-`PYTHONPATH=. python scripts/release_dataset.py`.
+`PYTHONPATH=. python datasets/release_dataset.py`.

@@ -25,7 +25,7 @@ import torch
 class Projection:
     """Standardise + PCA (fitted on unlabeled training features) + global scale."""
 
-    def __init__(self, X: torch.Tensor | None = None, dim: int = 256, device=None, *, state: dict | None = None) -> None:
+    def __init__(self, X: torch.Tensor | None = None, dim: int = 256, device=None, *, state: dict | None = None, seed: int = 0) -> None:
         if state is not None:
             for k in ("mean", "std", "center", "basis"):
                 setattr(self, k, state[k].to(device))
@@ -39,7 +39,12 @@ class Projection:
         self.center = Z.mean(0)
         Zc = Z - self.center
         q = min(int(dim) + 16, Zc.shape[0], Zc.shape[1])
-        _, _, V = torch.pca_lowrank(Zc, q=q, center=False, niter=6)
+        # pca_lowrank draws a random sketch: seed it, or every run gets a slightly different basis (and record). Records
+        # built before 2026-09-13 were unseeded, so they cannot be regenerated bit for bit; their quality can (AUC to 1e-4).
+        devices = [Zc.device] if Zc.device.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(int(seed))
+            _, _, V = torch.pca_lowrank(Zc, q=q, center=False, niter=6)
         self.basis = V[:, : int(dim)].contiguous()
         self.scale = float((Zc @ self.basis).std()) + 1e-6
         self.dim = int(dim)

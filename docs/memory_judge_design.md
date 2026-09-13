@@ -14,6 +14,11 @@
 >
 > Qwen3.5 is no longer used (2026-09-13): its environment file, the Qwen3.5-9B family entry and the single-GPU trainers
 > (`train_rlvr.py`, `train_memory_generator.py`) were removed. The Qwen3.5 results below are history.
+>
+> The pipeline was reorganised on 2026-09-13: every experiment is a YAML file under `configs/experiments/` run by
+> `bash run.sh`; scripts named below (`scripts/*.py`, `tests/experiments/...`, `run_families.sh`, `run_adversarial.sh`)
+> are now stages in `pipeline/` or studies in `analysis/`, and results moved to the layout in README.md
+> (`outputs/MIGRATION.json` maps old to new paths). The code before that is at the git tag `pre-pipeline-restructure`.
 
 Status: design + first measurements (2026-09-04). Code: `feedback_state/kalman_memory.py`,
 `feedback_state/kernel_memory.py`, `feedback_state/addresses.py`, `feedback_state/memory_runtime.py`,

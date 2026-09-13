@@ -1,9 +1,8 @@
-"""Datasets for the vendored verl trainers.
+"""The RL dataset for the vendored verl trainer.
 
-Prompts are rendered with ``enable_thinking=False`` so the policy sees exactly the prompt our
-evaluations use (Qwen3 non-thinking mode).  Each RL row may carry a second, *guided* prompt
-(the question plus the peers' solutions, annotated by the memory or not, or one of them) from
-which the trainer draws the central model's stream-time answer.
+Prompts are rendered with ``enable_thinking=False`` so the policy sees exactly the prompt the evaluations use. With
+``data.attn_gamma > 0`` each row also carries the tilt over its prompt tokens (``attn_bias``), built from the record's
+estimates and the peer blocks' character spans stored by training/kalman_rl/build_rl_data.py.
 """
 from __future__ import annotations
 
@@ -14,14 +13,9 @@ import torch
 
 import verl.utils.torch_functional as verl_F
 from verl.utils.dataset.rl_dataset import RLHFDataset
-from verl.utils.dataset.sft_dataset import SFTDataset
 from verl.utils.model import compute_position_id_with_mask
 
 from feedback_state.attn_bias import bias_values, token_bias
-
-GUIDED_TENSOR_KEYS = ("guided_input_ids", "guided_attention_mask", "guided_position_ids", "has_guided")
-GUIDED_NON_TENSOR_KEYS = ("guided_raw_prompt_ids",)
-
 
 def render(tokenizer, messages, thinking: bool = False) -> str:
     """Chat template with the generation prompt; Qwen3's thinking block is disabled unless ``thinking`` (same as feedback_state.memory_generator.render_prompt)."""
@@ -49,14 +43,9 @@ def kalman_collate_fn(data_list: list[dict]) -> dict:
 
 
 class KalmanRLDataset(RLHFDataset):
-    """RLHFDataset with (1) our prompt rendering and (2) an optional guided prompt per row.
-
-    Row fields added on top of verl's: guided_input_ids / guided_attention_mask / guided_position_ids
-    (left-padded to max_prompt_length, zeros when absent), guided_raw_prompt_ids and has_guided.
-    """
+    """RLHFDataset with our prompt rendering and the tilt tensor."""
 
     def __init__(self, data_files, tokenizer, config, processor=None):
-        self.guided_key = config.get("guided_key", "guided_prompt")
         self.thinking = bool(config.get("enable_thinking", False))   # Qwen3 thinking mode for every prompt of this run
         self.attn_gamma = float(config.get("attn_gamma", 0.0))         # the memory's attention tilt: gamma * log(p_i / max p) on peer i's block
         self.attn_bias_form = str(config.get("attn_bias_form", "logratio"))
@@ -96,26 +85,6 @@ class KalmanRLDataset(RLHFDataset):
 
             self.dataframe = self.dataframe.filter(fits, num_proc=self.num_workers, desc=f"Filtering prompts longer than {limit} tokens")
             print(f"filter dataset len: {len(self.dataframe)}")
-        self._report_guided_budget()
-
-    def _report_guided_budget(self, chunk: int = 512) -> None:
-        """Nothing is truncated silently: say how many rows carry a guided prompt and how many lose it to the budget."""
-        if self.guided_key not in self.dataframe.column_names:
-            print("[kalman-data] no guided prompts in this file")
-            return
-        tok, limit = self.tokenizer, self.max_prompt_length
-        total = with_guidance = over = 0
-        longest = 0
-        for start in range(0, len(self.dataframe), chunk):
-            rows = self.dataframe[start : start + chunk][self.guided_key]
-            texts = [render(tok, g, self.thinking) for g in rows if g is not None and len(g) > 0]
-            total += len(rows)
-            with_guidance += len(texts)
-            if texts:
-                lengths = [len(ids) for ids in tok(texts, add_special_tokens=False)["input_ids"]]
-                over += sum(n > limit for n in lengths)
-                longest = max(longest, max(lengths))
-        print(f"[kalman-data] rows={total} with_guided_prompt={with_guidance} over_budget({limit})={over} longest_guided_prompt={longest} tokens")
 
     def _encode(self, raw: str):
         enc = self.tokenizer(raw, return_tensors="pt", add_special_tokens=False)
@@ -146,21 +115,7 @@ class KalmanRLDataset(RLHFDataset):
         row["raw_prompt_ids"] = self._raw_ids(raw)
         if self.attn_gamma > 0:
             row["attn_bias"] = self._attn_bias(raw, messages, row.get("extra_info") or {}, att)
-        guided = row.pop(self.guided_key, None)
-        has_guided = 0
-        guided_raw: list[int] = []
-        if guided is not None and len(guided) > 0:
-            graw = render(self.tokenizer, guided, self.thinking)
-            guided_raw = self.tokenizer.encode(graw, add_special_tokens=False)
-            if len(guided_raw) <= self.max_prompt_length:   # an over-long guided prompt just means "no guidance" for this row
-                gids, gatt, gpos = self._encode(graw)
-                has_guided = 1
-        if not has_guided:
-            gids, gatt, gpos = torch.full_like(ids, self.tokenizer.pad_token_id), torch.zeros_like(att), torch.zeros_like(pos)
-            guided_raw = []
-        row["guided_input_ids"], row["guided_attention_mask"], row["guided_position_ids"] = gids, gatt, gpos
-        row["guided_raw_prompt_ids"] = guided_raw
-        row["has_guided"] = torch.tensor(has_guided, dtype=torch.long)
+        row.pop("guided_prompt", None)   # a column of the parquets built before 2026-09-13 (always empty in the trained runs)
         if self.return_raw_chat:
             row["raw_prompt"] = messages
         if self.return_full_prompt:
@@ -169,56 +124,3 @@ class KalmanRLDataset(RLHFDataset):
         row["index"] = extra.get("index", item)
         row["tools_kwargs"] = {}
         return row
-
-
-class KalmanSFTDataset(SFTDataset):
-    """Single-turn SFT rows: ``prompt`` (chat messages, or an already rendered string) and ``response`` (text).
-
-    Loss on the response tokens only (verl's mask convention); prompts rendered like the RL prompts.
-    Used through ``data.custom_cls`` of verl.trainer.fsdp_sft_trainer.
-    """
-
-    def _read_files_and_tokenize(self):
-        import pandas as pd
-
-        frames = [pd.read_parquet(f) for f in self.parquet_files]
-        self.dataframe = pd.concat(frames, ignore_index=True)
-        pk, rk = self.prompt_key[0], self.response_key[0]
-        self.prompts = [self._as_prompt(p) for p in self.dataframe[pk].tolist()]
-        self.responses = [str(r) for r in self.dataframe[rk].tolist()]
-
-    @staticmethod
-    def _as_prompt(p):
-        if isinstance(p, str):
-            return p
-        return [dict(m) for m in list(p)]
-
-    def __getitem__(self, item):
-        tokenizer = self.tokenizer
-        prompt, response = self.prompts[item], self.responses[item]
-        prompt_str = prompt if isinstance(prompt, str) else render(tokenizer, prompt)
-        response_str = response + tokenizer.eos_token
-        p = tokenizer(prompt_str, return_tensors="pt", add_special_tokens=False)
-        r = tokenizer(response_str, return_tensors="pt", add_special_tokens=False)
-        prompt_ids, prompt_att = p["input_ids"][0], p["attention_mask"][0]
-        response_ids, response_att = r["input_ids"][0], r["attention_mask"][0]
-        prompt_length, response_length = prompt_ids.shape[0], response_ids.shape[0]
-        input_ids = torch.cat((prompt_ids, response_ids), dim=-1)
-        attention_mask = torch.cat((prompt_att, response_att), dim=-1)
-        n = input_ids.shape[0]
-        if n < self.max_length:
-            input_ids = torch.cat((input_ids, torch.full((self.max_length - n,), tokenizer.pad_token_id, dtype=input_ids.dtype)))
-            attention_mask = torch.cat((attention_mask, torch.zeros(self.max_length - n, dtype=attention_mask.dtype)))
-        elif n > self.max_length:
-            if self.truncation == "right":
-                input_ids, attention_mask = input_ids[: self.max_length], attention_mask[: self.max_length]
-            elif self.truncation == "left":
-                input_ids, attention_mask = input_ids[-self.max_length:], attention_mask[-self.max_length:]
-            else:
-                raise NotImplementedError(f"sequence length {n} > max_length {self.max_length} (truncation={self.truncation})")
-        position_ids = compute_position_id_with_mask(attention_mask)
-        loss_mask = attention_mask.clone()
-        if prompt_length > 1:
-            loss_mask[: min(prompt_length, loss_mask.size(0)) - 1] = 0
-        loss_mask[min(prompt_length + response_length, loss_mask.size(0)) - 1] = 0
-        return {"input_ids": input_ids, "attention_mask": attention_mask, "position_ids": position_ids, "loss_mask": loss_mask}

@@ -1,10 +1,10 @@
-"""Entry point: multi-GPU GRPO on the central model with the memory hooks.
+"""Entry point: multi-GPU GRPO of the central model (Ray + FSDP + vLLM, vendored verl). Config: configs/train/grpo.yaml.
 
   PYTHONPATH=.:training/verl python -m training.kalman_rl.main_grpo \
-      data.train_files=... data.val_files=... actor_rollout_ref.model.path=... trainer.n_gpus_per_node=4 [any hydra override]
+      data.train_files=... data.val_files=... actor_rollout_ref.model.path=... trainer.n_gpus_per_node=8 [any hydra override]
 
-Use training/scripts/train_grpo.sh, which sets the environment (CUDA_VISIBLE_DEVICES, PYTHONPATH,
-Ray temp dir, code-execution flag) and tees the log.  Config: training/configs/grpo_kalman.yaml.
+pipeline.train runs it through training/scripts/train_grpo.sh (environment, Ray temp dir, log) for every arm of an
+experiment config.
 """
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ import ray
 from omegaconf import OmegaConf
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-CONFIG_DIR = os.path.join(ROOT, "training", "configs")
+CONFIG_DIR = os.path.join(ROOT, "configs", "train")
 
 
-@hydra.main(config_path=CONFIG_DIR, config_name="grpo_kalman", version_base=None)
+@hydra.main(config_path=CONFIG_DIR, config_name="grpo", version_base=None)
 def main(config):
     run(config)
 
@@ -29,7 +29,6 @@ def run(config) -> None:
             "TOKENIZERS_PARALLELISM": "true",
             "NCCL_DEBUG": "WARN",
             "VLLM_LOGGING_LEVEL": "WARN",
-            "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
             "FEEDBACK_CODE_EXEC_ALLOW": os.environ.get("FEEDBACK_CODE_EXEC_ALLOW", "1"),
             "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
         }
@@ -62,7 +61,7 @@ class TaskRunner:
         pprint(OmegaConf.to_container(config, resolve=True))
         OmegaConf.resolve(config)
         assert config.actor_rollout_ref.actor.strategy in ("fsdp", "fsdp2"), "this entry point uses the FSDP workers"
-        assert config.actor_rollout_ref.rollout.mode == "sync", "the memory hint pass uses the synchronous rollout"
+        assert config.actor_rollout_ref.rollout.mode == "sync", "the tilt is registered per prompt in the synchronous rollout"
         local_path = copy_to_local(config.actor_rollout_ref.model.path)
         trust_remote_code = config.data.get("trust_remote_code", False)
         tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
@@ -75,15 +74,8 @@ class TaskRunner:
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
             mapping[Role.RefPolicy] = pool_id
         workers = int(config.reward_model.get("max_workers", 32))
-        manager = str(config.reward_model.get("reward_manager", "kalman"))
-        if manager == "outcome":   # strict post-answer verification only (no pseudo-reward, labels-after rows only)
-            from training.kalman_rl.outcome_reward import OutcomeRewardManager
-
-            reward_fn = OutcomeRewardManager(tokenizer, max_workers=workers)
-            val_reward_fn = OutcomeRewardManager(tokenizer, max_workers=workers)
-        else:
-            reward_fn = KalmanRewardManager(tokenizer, num_examine=0, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers)
-            val_reward_fn = KalmanRewardManager(tokenizer, num_examine=1, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers)
+        reward_fn = KalmanRewardManager(tokenizer, num_examine=0, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers)
+        val_reward_fn = KalmanRewardManager(tokenizer, num_examine=1, compute_score=compute_score, reward_fn_key=config.data.reward_fn_key, max_workers=workers)
         train_dataset = KalmanRLDataset(config.data.train_files, tokenizer, config.data)
         val_dataset = KalmanRLDataset(config.data.val_files, tokenizer, config.data)
         trainer = KalmanRayPPOTrainer(

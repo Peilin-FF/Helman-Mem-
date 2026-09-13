@@ -73,3 +73,14 @@ def test_delta_rule_moves_towards_target():
         mem.write(x, torch.tensor([1.0]))
     mu, _ = mem.read(x.unsqueeze(0))
     assert float(mu) > 0.99
+
+
+def test_the_pca_addresses_are_the_same_on_every_run():
+    import torch
+
+    from feedback_state.addresses import Projection
+
+    X = torch.randn(300, 64, generator=torch.Generator().manual_seed(1))
+    a, b = Projection(X, dim=8), Projection(X, dim=8)
+
+    assert torch.equal(a.basis, b.basis) and a.scale == b.scale

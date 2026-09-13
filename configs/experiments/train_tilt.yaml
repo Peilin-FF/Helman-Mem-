@@ -1,0 +1,41 @@
+# GRPO of Qwen3-4B with and without the record's attention tilt (docs/experiments/train_tilt.md). The three arms of the
+# design log's section 21: the same data and schedule, differing only in the prompt and the tilt switches.
+base: ../base.yaml
+name: train_tilt
+steps: [features, record, train, evaluate, table]   # features and record are shared with the main experiment: already done there
+central: [q3_4b]                    # the frozen judge whose features address the record
+judge: q3_4b                        # the model whose record the training data carries
+init: q3_4b                         # the model trained
+
+train_data:
+  stream: train6                    # the training events, in the record's fixed order
+  order: fixed
+val_data:
+  stream: indist6                   # every 8th event of the in-distribution record, 512 events (as in the recipe: note that
+  order: shuffled0                  # this validation set is drawn from the stream the models are later evaluated on)
+  every: 8
+  limit: 512
+
+gpus_per_run: 8                     # every run uses this many GPUs
+arms:                               # name -> prompt (peers | solo), solo_fraction, tilt (the four tilt switches on)
+  run3b_tilt:   {prompt: peers, solo_fraction: 0.25, tilt: true}
+  ctrl3b_peers: {prompt: peers, solo_fraction: 0.25}
+  solo3b_q:     {prompt: solo}
+tilt_overrides: [data.attn_gamma=3.0, actor_rollout_ref.model.attn_bias=True, actor_rollout_ref.rollout.attn_bias=True,
+                 actor_rollout_ref.model.use_remove_padding=False, actor_rollout_ref.model.attn_implementation=sdpa]
+overrides: []                       # added to every arm (any key of configs/train/grpo.yaml): one epoch from Qwen3-4B by default
+
+eval_streams: [indist6, ood6]       # the final checkpoint of every arm, in these conditions
+eval_conditions: [tilt, peers, solo, swap]
+table:
+  rows: runs
+  reference: [q3_4b]
+  deltas: [[tilt, peers], [peers, solo]]
+
+smoke:                              # --smoke: 2 GPUs, 2 steps, 48-event evaluation
+  events: 48
+  gpus_per_run: 2
+  overrides: [trainer.total_training_steps=2, trainer.save_freq=2, trainer.test_freq=-1, data.train_batch_size=16,
+              actor_rollout_ref.actor.ppo_mini_batch_size=8, trainer.val_before_train=False]
+  streams: [indist6]
+  arms: [run3b_tilt]

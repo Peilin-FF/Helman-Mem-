@@ -1,49 +1,23 @@
-"""Generation with the competence memory: the central model answers, peers are weighted evidence.
+"""The central model's prompts and the grading of its answers.
 
-Selection is bounded by the per-event oracle (some peer must be right).  Here the
-central model writes its own answer, reading the peers' answers together with the
-memory's estimate of each peer's reliability on questions like this one.  The
-memory (KalmanMemory on frozen-judge addresses) is written only with the peers'
-verified labels, so its trajectory along a stream is independent of what the
-central model generates: prompts with the exact decide-then-update memory state
-can be precomputed for a whole stream, training is ordinary supervised
-fine-tuning on (prompt, correct target) pairs, and evaluation is batched decoding.
-
-Prompt modes:
-  memory   peers' answers annotated with P(correct) and the evidence count
-  peers    peers' answers without any reliability information (ablation)
-  solo     the question only (the central model's own ability)
+Prompt modes (the record never enters a prompt as text; it enters the attention, feedback_state.attn_bias):
+  peers   the question (options / passage), the peers' answers as ``Peer 1 ... Peer k``, the task instruction
+  solo    the question and the task instruction
 """
 from __future__ import annotations
 
 import math
 from typing import Any, Sequence
 
-from feedback_state.tasks import (
-    _choice_labels,
-    _rag_context_text,
-    code_extract_answer,
-    peer_is_correct,
-    task_type_of,
-)
+from feedback_state.tasks import _choice_labels, _rag_context_text, code_extract_answer, peer_is_correct, task_type_of
 
-# reminder against over-long reasoning (thinking mode): part of every central-model system prompt
-BRIEF = "Do not reason more than the question needs: think briefly, then give the final answer."
-
-SYSTEM = (
-    "You are the central model of a multi-agent system. Several peer models answered the same question. "
-    "A reliability memory has tracked, from verified feedback on earlier questions, how often each peer was "
-    "correct on similar questions; its estimate for each peer answer is given together with the number of "
-    "similar past cases it rests on and the peer's verified record on this kind of task. Treat the peer answers "
-    "as evidence weighted by their reliability, verify them yourself, and produce your own final answer. "
-    + BRIEF
-)
+# The system prompts of every stored result (records built 2026-09-07). A reminder against long reasoning was appended
+# to both on 2026-09-09 for thinking mode, which was dropped; it is not part of them, so rebuilt records match the stored ones.
 SYSTEM_PEERS = (
     "You are the central model of a multi-agent system. Several peer models answered the same question. "
-    "Treat their answers as evidence, verify them yourself, and produce your own final answer. "
-    + BRIEF
+    "Treat their answers as evidence, verify them yourself, and produce your own final answer."
 )
-SYSTEM_SOLO = "Answer the question. " + BRIEF
+SYSTEM_SOLO = "Answer the question."
 
 INSTRUCTIONS = {
     "math": "Solve the problem. Reason briefly, then end with a line of the form 'Final answer: <number>'.",
@@ -61,28 +35,14 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + " ..."
 
 
-def peer_block(index: int, text: str, prob: float | None, evidence: float | None, *, char_limit: int, domain: str | None = None) -> str:
-    head = f"Peer {index + 1}"
-    if prob is not None:
-        n = int(round(evidence or 0.0))
-        cases = "no similar past cases yet" if n < 1 else f"based on {n} similar past case{'s' if n != 1 else ''}"
-        head += f" (estimated probability correct: {prob:.2f}, {cases}" + (f"; {domain}" if domain else "") + ")"
-    return f"{head}:\n{_clip(text, char_limit)}"
+def peer_block(index: int, text: str, *, char_limit: int) -> str:
+    return f"Peer {index + 1}:\n{_clip(text, char_limit)}"
 
 
-TASK_DOMAIN = {"math": "math word problems", "rag": "reading comprehension", "code": "programming tasks", "boolqa": "yes/no questions",
-               "mcqa": "multiple-choice questions", "shortqa": "short-answer reasoning"}
-
-
-def domain_note(task: str, right: int, total: int) -> str:
-    """The peer's verified record on this kind of task so far (read before this event is written)."""
-    name = TASK_DOMAIN.get(task, task)
-    return f"on {name}: no record yet" if total < 1 else f"on {name}: right on {right} of {total} earlier questions"
-
-
-def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, probs: Sequence[float] | None = None,
-                   evidence: Sequence[float] | None = None, include_context: bool = True, char_limit: int = 3000,
-                   domain: Sequence[str] | None = None) -> list[dict]:
+def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, include_context: bool = True, char_limit: int = 3000) -> list[dict]:
+    """System + user messages of one event; ``texts`` are the peers' answers in prompt (slot) order."""
+    if mode not in ("peers", "solo"):
+        raise ValueError(f"unknown prompt mode {mode!r}")
     task = task_type_of(record)
     parts = [f"Question:\n{str(record.get('problem', record.get('question', ''))).strip()}"]
     if task == "mcqa":
@@ -94,16 +54,17 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, p
         ctx = _rag_context_text(record)
         if ctx:
             parts.append(f"Context / Evidence:\n{ctx}")
-    if mode != "solo":
-        blocks = []
-        for i, t in enumerate(texts):
-            p = float(probs[i]) if (mode == "memory" and probs is not None) else None
-            e = float(evidence[i]) if (mode == "memory" and evidence is not None) else None
-            blocks.append(peer_block(i, t, p, e, char_limit=char_limit, domain=(domain[i] if (mode == "memory" and domain is not None) else None)))
-        parts.append("Peer answers:\n\n" + "\n\n".join(blocks))
+    if mode == "peers":
+        parts.append("Peer answers:\n\n" + "\n\n".join(peer_block(i, t, char_limit=char_limit) for i, t in enumerate(texts)))
     parts.append("Instruction: " + INSTRUCTIONS.get(task, INSTRUCTIONS["shortqa"]))
-    system = {"memory": SYSTEM, "peers": SYSTEM_PEERS, "solo": SYSTEM_SOLO}[mode]
+    system = SYSTEM_PEERS if mode == "peers" else SYSTEM_SOLO
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
+def peer_texts_in_prompt_order(record: dict[str, Any], peer_order: Sequence[int]) -> list[str]:
+    """The peers' answers in the order a record row shows them (slot -> canonical peer id through peer_order)."""
+    keys = sorted(record.get("peer_responses", {}))
+    return [str(record["peer_responses"][keys[int(p)]]) for p in peer_order]
 
 
 def has_chat_template(tokenizer) -> bool:
@@ -111,11 +72,10 @@ def has_chat_template(tokenizer) -> bool:
 
 
 def render_prompt(tokenizer, messages: list[dict], *, thinking: bool = False) -> str:
-    """Chat template with the generation prompt; Qwen3's thinking mode is off unless ``thinking`` is set.
+    """Chat template with the generation prompt, thinking off unless ``thinking``.
 
-    Other families' templates ignore the ``enable_thinking`` variable.  A tokenizer without a chat template (a base
-    model such as Meta-Llama-3-8B) gets a plain layout: BOS, the system text, the user turn, then ``Answer:``; the
-    peer blocks are the same text, so the tilt's character spans are unchanged.
+    A tokenizer without a chat template (a base model) gets a plain layout: BOS, the system text, the user turn, then
+    ``Answer:``; the peer blocks are the same text, so the tilt's character spans are unchanged.
     """
     if not has_chat_template(tokenizer):
         system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
@@ -132,30 +92,7 @@ THINK_END = "</think>"
 
 def strip_thinking(text: str) -> str:
     """The answer part of a generation: everything after the last closing think tag (the whole text when there is none)."""
-    if THINK_END in text:
-        return text.rsplit(THINK_END, 1)[1]
-    return text
-
-
-def target_text(record: dict[str, Any], texts: Sequence[str], correct: Sequence[int], *, mode: str = "peer", char_limit: int = 4000) -> str | None:
-    """Supervised target: a correct peer's response (shortest) or, failing that, the gold final answer."""
-    task = task_type_of(record)
-    if mode == "peer":
-        cands = [str(t) for t, c in zip(texts, correct) if int(c) == 1 and str(t).strip()]
-        if cands:
-            best = min(cands, key=len)
-            if task == "code":
-                code = code_extract_answer(best)
-                return f"```python\n{code.strip()}\n```" if code.strip() else None
-            return _clip(best, char_limit)
-    if task == "code":
-        return None
-    gold = str(record.get("answer", "")).strip()
-    if not gold:
-        return None
-    if task == "mcqa":
-        return f"Final answer: ({gold})"
-    return f"Final answer: {gold}"
+    return text.rsplit(THINK_END, 1)[1] if THINK_END in text else text
 
 
 def grade(record: dict[str, Any], text: str, *, code_timeout: float = 10.0) -> bool:

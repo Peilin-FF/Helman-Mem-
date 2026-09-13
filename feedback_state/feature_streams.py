@@ -1,16 +1,12 @@
-"""Cached frozen-center-model features + labels for one event stream.
+"""Cached frozen-judge features + labels for one event stream (pipeline.features output, joined with the stream JSONL).
 
-``scripts/encode_context_features.py`` writes, per event, the unsteered center
-model's representation of the question (``q_mean``/``q_last``), of the three
-candidate-judge prompts (``sem`` = mean over candidates, ``peer_hidden`` = per
-candidate) and the judge's own Yes/No log-odds (``margins``).  This module
-aligns those tensors with the JSONL records (labels, answers, task/source) so the
-memory can be simulated without a GPU forward pass.
+``pipeline/features.py`` writes, per event, the frozen judge's representation of the question (``q_mean``), of each
+peer's judge prompt (``peer_hidden``; ``sem`` = their mean) and its own Yes/No log-odds (``margins``). This module aligns
+those tensors with the stream's records (labels, answers, task and source), so the record can be run without a GPU.
 """
 from __future__ import annotations
 
 import glob
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,64 +15,6 @@ import torch
 
 from feedback_state.data import JsonlDataset
 from feedback_state.permutations import canonical_peer_view
-
-DATA_ROOT = Path(os.environ.get("KALMAN_DATA_ROOT", "data"))
-FEATURE_ROOT = Path(os.environ.get("KALMAN_FEATURE_ROOT", "outputs/context_features"))
-
-ADV = "_adv_"   # robustness streams: "<stream>_adv_<regime>" (README_adversarial.md)
-
-
-class _Streams(dict):
-    """The known streams, plus the adversarial variants built by ``scripts/build_adversarial_stream.py``.
-
-    ``indist6_adv_all50`` resolves to ``data/indist6_adv_all50/test.jsonl`` with its own feature cache
-    ``outputs/context_features/<model>_indist6_adv_all50_ph/ood``: a stream whose peers answer adversarially is a
-    stream like any other, so nothing downstream (encoder, record, evaluation) needs to know about the experiment.
-    """
-
-    def __missing__(self, name: str):
-        if ADV not in str(name):
-            raise KeyError(name)
-        base, _, regime = str(name).partition(ADV)
-        if base not in self or not regime:
-            raise KeyError(name)
-        jsonl, cache = self[base]
-        directory, _, split = str(jsonl).rpartition("/")
-        leaf = str(cache).rpartition("/")[2]
-        return (f"{directory}{ADV}{regime}/{split}", "{m}_" + f"{name}_ph/{leaf}")
-
-
-class _PeersPerStream(dict):
-    """Peer count per stream; an adversarial variant has as many peers as the stream it was built from."""
-
-    def __missing__(self, name: str):
-        base = str(name).partition(ADV)[0]
-        if base != name and base in self:
-            return self[base]
-        raise KeyError(name)
-
-
-# stream name -> (jsonl relative to DATA_ROOT, cache directory template relative to FEATURE_ROOT)
-STREAMS = _Streams({
-    "train": ("mixed_train_big/train.jsonl", "{m}_big_ph/train"),
-    "train_small": ("mixed_train/train.jsonl", "{m}_ph/train"),
-    "indist": ("indist/test.jsonl", "{m}_indist_ph/ood"),
-    "ood": ("ood/test.jsonl", "{m}_ph/ood"),
-    # five-peer streams (2026-09-06): the three peers above plus Meta-Llama-3.1-8B-Instruct and DeepSeek-Coder-V2-Lite-Instruct
-    "train5": ("mixed_train_big5/train.jsonl", "{m}_big5_ph/train"),
-    "indist5": ("indist5/test.jsonl", "{m}_indist5_ph/ood"),
-    "ood5": ("ood5/test.jsonl", "{m}_5_ph/ood"),
-    # six-peer streams: the five above plus DeepSeek-R1-Distill-Qwen-7B (answer text after its think block)
-    "train6": ("mixed_train_big6/train.jsonl", "{m}_big6_ph/train"),
-    "indist6": ("indist6/test.jsonl", "{m}_indist6_ph/ood"),
-    "ood6": ("ood6/test.jsonl", "{m}_6_ph/ood"),
-})
-PEERS_PER_STREAM = _PeersPerStream({"train5": 5, "indist5": 5, "ood5": 5, "train6": 6, "indist6": 6, "ood6": 6})
-MODELS = {"q3_0_6b": "Qwen3-0.6B", "q3_4b": "Qwen3-4B", "q3_8b": "Qwen3-8B",
-          # other families (docs section 23): each family's memory is built from that family's OWN features (the address
-          # never comes from a Qwen judge when the central model is not Qwen); tags are the cache prefixes {m}_big6_ph etc.
-          "llama3": "Meta-Llama-3-8B", "llama31": "Meta-Llama-3.1-8B-Instruct", "ministral": "Ministral-8B-Instruct-2410",
-          "qwen25": "Qwen2.5-7B-Instruct", "phi4": "phi-4"}
 
 
 @dataclass
@@ -113,21 +51,6 @@ class FeatureStream:
             task=[self.task[i] for i in order], source=[self.source[i] for i in order],
             texts=[self.texts[i] for i in order],
         )
-
-
-def stream_paths(name: str, model: str) -> tuple[Path, Path]:
-    jsonl, cache = STREAMS[name]
-    return DATA_ROOT / jsonl, FEATURE_ROOT / cache.format(m=model)
-
-
-def load_stream(name: str, model: str, *, num_peers: int | None = None, limit: int | None = None) -> FeatureStream:
-    jsonl_path, cache_dir = stream_paths(name, model)
-    if num_peers is None:
-        try:
-            num_peers = PEERS_PER_STREAM[name]
-        except KeyError:
-            num_peers = 3
-    return load_stream_from(jsonl_path, cache_dir, name=name, model=model, num_peers=num_peers, limit=limit)
 
 
 def load_stream_from(jsonl_path, cache_dir, *, name: str = "", model: str = "", num_peers: int = 3, limit: int | None = None) -> FeatureStream:

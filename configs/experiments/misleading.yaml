@@ -1,0 +1,30 @@
+# Robustness: the six peers answer with misleading but relevant solutions (docs/experiments/misleading.md).
+# Every peer answers every event misleadingly once (peers); a regime then chooses which answers enter the stream (streams).
+base: ../base.yaml
+name: misleading
+steps: [peers, streams, features, record, evaluate, table]
+central: [q3_4b]
+eval_streams: [ood6, indist6]
+record: {fit: self}                          # addresses fit on each adversarial stream itself (label-free)
+eval_conditions: [tilt, peers, solo, swap]
+
+regimes:                                     # pNNN (a share of every peer's answers) and kN (N misleading peers per event)
+  all100:     {kind: fraction, rate: 1.0, peers: all, note: "every answer of every peer is misleading"}
+  saboteurs2: {kind: fraction, rate: 1.0, peers: [1, 4], note: "Phi-4-mini and DeepSeek-Coder always lie, four peers honest"}
+  all50:      {kind: fraction, rate: 0.5, peers: all, note: "half of every peer's answers, a different half per peer"}
+  flip:       {kind: flip, at: 0.5, peers: [1, 4], note: "two peers honest for the first half of the stream, misleading after"}
+  targeted:   {kind: targeted, rate: 1.0, peers: all, note: "every peer misleading exactly where it was right"}
+sweep:                                       # run with --set regimes_run=[rates] / [counts] / [sweep]
+  rates: [0.0, 0.25, 0.5, 0.75, 1.0]         # -> p000 ... p100, the rate reached in the stream
+  counts: [0, 1, 2, 3, 4, 5, 6]              # -> k0 ... k6
+  peers: all
+  exact: true
+regimes_run: [all100, saboteurs2, all50]     # regime names, pNNN / kN, or the keywords rates / counts / sweep
+
+table:
+  rows: regimes
+  reference: [q3_4b]                         # the honest rows (main experiment)
+  deltas: [[tilt, peers], [tilt, solo], [peers, solo]]
+  misleading_probe: true
+
+smoke: {regimes: [p050], streams: [indist6]}

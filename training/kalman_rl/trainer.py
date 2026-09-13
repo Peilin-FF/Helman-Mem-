@@ -1,25 +1,10 @@
-"""GRPO with the central model's stream-time answer, on verl's Ray PPO trainer.
+"""GRPO of the central model on verl's Ray PPO trainer, with the record's attention tilt in every forward.
 
-Protocol (one event of the stream = one prompt).  The central model receives the question and the
-peers' solutions; it does not know which solution is right.  It decides what to trust from the
-memory (each peer's reliability on this question address, learned from the feedback of *earlier*
-events) and its own judgment, and answers.  Only then is the answer graded, the memory updated.
-This is the "labels after the answer" regime.  The classical regime ("labels before": rejection
-sampling / distillation on solutions that are known to be correct) is the baseline, obtained from the
-same code by building the guided prompt from a *verified-correct* peer (build_rl_data --guided
-hint_label / hint_random) and keeping only verified guided answers (memory.guided_filter=verified).
-
-Per step, on top of verl's plain GRPO (group-mean baseline, PPO clip, no critic, KL off):
-
-  solo samples     n rollouts from the question-only prompt (exploration, and what is evaluated later)
-  guided samples   rollouts from the guided prompt: the stream-time answer.  Graded post hoc like every
-                   other sample.  Trained under the guided prompt (learning to use peers + memory) and/or
-                   re-labelled under the question-only prompt (internalisation), same GRPO group as the
-                   solo samples so the group baseline is shared.
-
-The memory enters only through the guided prompt (which solutions, with which reliability notes) and,
-when no verifier is available after the answer, through the pseudo-reward (training/kalman_rl/reward.py).
-Everything else (advantages, actor update, checkpoints, validation) is untouched verl.
+Each prompt of the stream is answered by rollout.n samples (question + peers' answers, or the question alone), graded by
+the task verifier, and trained with verl's GRPO (group-mean baseline, PPO clip, KL loss to the reference). With
+``data.attn_gamma > 0`` the tilt rides with the prompt into the rollout (patched vLLM kernels) and into the actor and
+reference forwards (additive attention mask). On top of verl this trainer only writes metrics.jsonl and keeps a bf16 HF
+copy of every checkpoint under hf/global_step_N (the fp32 copy verl writes is removed).
 """
 from __future__ import annotations
 
@@ -27,7 +12,6 @@ import json
 import os
 import shutil
 import uuid
-from collections import defaultdict
 from pprint import pprint
 
 import numpy as np
@@ -35,19 +19,11 @@ import torch
 from tqdm import tqdm
 
 from verl import DataProto
-from verl.protocol import pad_dataproto_to_divisor
 from verl.trainer.ppo.core_algos import agg_loss
 from verl.trainer.ppo.metric_utils import compute_data_metrics, compute_throughout_metrics, compute_timing_metrics
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer, _timer, apply_kl_penalty, compute_advantage, compute_response_mask
 from verl.trainer.ppo.reward import compute_reward
 from verl.utils.metric import reduce_metrics
-from verl.utils.model import compute_position_id_with_mask
-
-from training.kalman_rl.dataset import GUIDED_NON_TENSOR_KEYS, GUIDED_TENSOR_KEYS
-
-
-def _take(extra: dict, idx) -> dict:
-    return {k: [v[i] for i in idx] for k, v in extra.items()}
 
 
 def hf_copy(src: str, dst: str, dtype: str = "bfloat16") -> None:
@@ -73,151 +49,16 @@ def hf_copy(src: str, dst: str, dtype: str = "bfloat16") -> None:
 
 
 class KalmanRayPPOTrainer(RayPPOTrainer):
-    # ------------------------------------------------------------------ guided pass (the stream-time answer)
-    def _memory_cfg(self) -> dict:
-        m = self.config.get("memory", None)
-        return dict(m) if m is not None else {}
-
-    @staticmethod
-    def _clone(dp: DataProto) -> DataProto:
-        return dp.select_idxs(list(range(len(dp))))
-
-    def _guided_pass(self, batch: DataProto, guided_batch: DataProto | None, reward_tensor: torch.Tensor, reward_extra: dict, metrics: dict):
-        mcfg = self._memory_cfg()
-        rollouts = int(mcfg.get("guided_rollouts", 0))
-        batch.non_tensor_batch["sample_kind"] = np.array(["solo"] * len(batch), dtype=object)
-        scores = reward_tensor.sum(-1)
-        uids = batch.non_tensor_batch["uid"]
-        group_scores: dict[str, list[float]] = defaultdict(list)
-        first_row: dict[str, int] = {}
-        for i, u in enumerate(uids):
-            group_scores[u].append(float(scores[i]))
-            first_row.setdefault(u, i)
-        zero = {u for u, s in group_scores.items() if max(s) <= 0.0}
-        metrics["memory/groups"] = len(group_scores)
-        metrics["memory/zero_groups"] = len(zero)
-        for k in ("guided_groups", "guided_samples", "guided_success", "guided_samples_added"):
-            metrics[f"memory/{k}"] = 0
-        if rollouts <= 0 or guided_batch is None:
-            return batch, reward_tensor, reward_extra
-        only_zero = str(mcfg.get("guided_groups", "all")) == "zero"
-        verified_only = bool(mcfg.get("guided_verified_only", True))
-        loss_prompt = str(mcfg.get("guided_loss_prompt", "both"))
-        assert loss_prompt in ("solo", "guided", "both"), loss_prompt
-        guided_row: dict[str, int] = {}
-        has = guided_batch.batch["has_guided"]
-        infos = guided_batch.non_tensor_batch.get("extra_info", None)
-        for j, u in enumerate(guided_batch.non_tensor_batch["uid"]):
-            if int(has[j]) != 1:
-                continue
-            if verified_only and infos is not None and not bool((infos[j] or {}).get("verified", True)):
-                continue
-            guided_row[u] = j
-        sel = [u for u in first_row if u in guided_row and (not only_zero or u in zero)][: int(mcfg.get("max_guided_groups", 1_000_000))]
-        metrics["memory/guided_groups"] = len(sel)
-        if not sel:
-            return batch, reward_tensor, reward_extra
-        # --- rollout from the guided prompts
-        src = guided_batch.select_idxs([guided_row[u] for u in sel])
-        raw = np.empty(len(sel), dtype=object)
-        for i, x in enumerate(src.non_tensor_batch["guided_raw_prompt_ids"]):
-            raw[i] = [int(t) for t in x]
-        hg = DataProto.from_dict(
-            tensors={"input_ids": src.batch["guided_input_ids"], "attention_mask": src.batch["guided_attention_mask"], "position_ids": src.batch["guided_position_ids"]},
-            non_tensors={"raw_prompt_ids": raw},
-            meta_info={"do_sample": str(mcfg.get("guided_sampling", "greedy")) != "greedy"},
-        )
-        world_size = self.actor_rollout_wg.world_size
-        hg_padded, pad = pad_dataproto_to_divisor(hg, world_size)
-        out_full = self.actor_rollout_wg.generate_sequences(hg_padded)
-        reps = len(out_full) // len(hg_padded)
-        out = out_full[: len(sel) * reps]
-        base_rows = [first_row[u] for u in sel for _ in range(reps)]
-        responses = out.batch["responses"]
-        response_att = out.batch["attention_mask"][:, -responses.shape[1]:]
-        # --- rows under the guided prompt, exactly as generated
-        g = batch.select_idxs(base_rows)
-        for key in ("prompts", "responses", "input_ids", "attention_mask", "position_ids"):
-            g.batch[key] = out.batch[key]
-        g.batch["response_mask"] = response_att
-        if "rollout_log_probs" in g.batch.keys() and "rollout_log_probs" in out.batch.keys():
-            g.batch["rollout_log_probs"] = out.batch["rollout_log_probs"]
-        g.non_tensor_batch["sample_kind"] = np.array(["guided"] * len(g), dtype=object)
-        # --- the same answers re-labelled under the question-only prompt (internalisation)
-        sb = batch.select_idxs(base_rows)
-        prompt_solo = sb.batch["prompts"]
-        attention_mask = torch.cat([sb.batch["attention_mask"][:, : prompt_solo.shape[1]], response_att], dim=1)
-        sb.batch["responses"] = responses
-        sb.batch["input_ids"] = torch.cat([prompt_solo, responses], dim=1)
-        sb.batch["attention_mask"] = attention_mask
-        sb.batch["position_ids"] = compute_position_id_with_mask(attention_mask)
-        sb.batch["response_mask"] = response_att
-        if "rollout_log_probs" in sb.batch.keys() and "rollout_log_probs" in out.batch.keys():
-            sb.batch["rollout_log_probs"] = out.batch["rollout_log_probs"]
-        sb.non_tensor_batch["sample_kind"] = np.array(["guided_solo"] * len(sb), dtype=object)
-        # --- grade after the answer (once; both views share the answer)
-        h_reward, h_extra = compute_reward(g, self.reward_fn)
-        h_scores = h_reward.sum(-1)
-        metrics["memory/guided_samples"] = int(len(g))
-        metrics["memory/guided_success"] = int((h_scores > 0).sum())
-        # the central model's stream-time answers, graded after the fact (before any filtering)
-        g_acc = np.asarray(h_extra["acc"], dtype=float) if "acc" in h_extra else h_scores.gt(0).float().numpy()
-        metrics["reward/acc_guided"] = float(g_acc.mean())
-        metrics["reward/score_guided"] = float(h_scores.mean())
-        g_tasks = g.non_tensor_batch["data_source"]
-        for task in sorted(set(g_tasks.tolist())):
-            metrics[f"reward/acc_guided/{task}"] = float(g_acc[g_tasks == task].mean())
-        keep = torch.nonzero(h_scores > 0).flatten().tolist() if str(mcfg.get("guided_filter", "none")) == "verified" else list(range(len(g)))
-        if not keep:
-            return batch, reward_tensor, reward_extra
-        parts = []
-        if loss_prompt in ("guided", "both"):
-            parts.append(g)
-        if loss_prompt in ("solo", "both"):
-            parts.append(sb)
-        need = (-(len(keep) * len(parts))) % world_size   # every dp rank must receive the same number of rows
-        added = DataProto.concat([part.select_idxs(keep) for part in parts])
-        added = added.select_idxs(list(range(len(added))) + [i % len(added) for i in range(need)])
-        add_reward = torch.cat([h_reward[keep] for _ in parts], dim=0)
-        add_reward = torch.cat([add_reward, add_reward[[i % len(add_reward) for i in range(need)]]], dim=0) if need else add_reward
-        add_extra = {k: [v[i] for i in keep] * len(parts) for k, v in h_extra.items()}
-        add_extra = {k: v + [v[i % len(v)] for i in range(need)] for k, v in add_extra.items()}
-        metrics["memory/guided_samples_added"] = int(len(added))
-        merged = DataProto.concat([batch, added])
-        reward_tensor = torch.cat([reward_tensor, add_reward], dim=0)
-        extra = {k: list(v) + list(add_extra.get(k, [0.0] * len(added))) for k, v in reward_extra.items()}
-        for k, v in add_extra.items():
-            if k not in extra:
-                extra[k] = [0.0] * len(batch) + list(v)
-        return merged, reward_tensor, extra
-
     # ------------------------------------------------------------------ logging helpers
-    def _memory_metrics(self, batch: DataProto, metrics: dict) -> None:
+    @staticmethod
+    def _acc_metrics(batch: DataProto, metrics: dict) -> None:
         nt = batch.non_tensor_batch
-        scores = batch.batch["token_level_scores"].sum(-1).numpy()
-        kind = nt.get("sample_kind", np.array(["solo"] * len(batch), dtype=object))
-        acc = np.asarray(nt["acc"], dtype=float) if "acc" in nt else scores
-        for name, label in (("solo", "solo"), ("guided", "guided_kept")):   # guided_kept = the guided rows that entered the update
-            m = kind == name
-            if not m.any():
-                continue
-            metrics[f"reward/score_{label}"] = float(scores[m].mean())
-            metrics[f"reward/acc_{label}"] = float(acc[m].mean())
-            if name == "solo":
-                for task in sorted(set(nt["data_source"].tolist())):
-                    mt = m & (nt["data_source"] == task)
-                    if mt.any():
-                        metrics[f"reward/acc_solo/{task}"] = float(acc[mt].mean())
-        solo = kind == "solo"
-        if "verified" in nt and solo.any():
-            ver = np.asarray(nt["verified"], dtype=float) > 0.5
-            metrics["reward/verified_frac"] = float(ver[solo].mean())
-            unv = solo & ~ver
-            if unv.any():
-                metrics["reward/pseudo_score_unverified"] = float(scores[unv].mean())
-                metrics["reward/true_acc_unverified"] = float(acc[unv].mean())
-                if "pseudo" in nt:
-                    metrics["reward/pseudo_available_frac"] = float(np.asarray(nt["pseudo"], dtype=float)[unv].mean())
+        if "acc" not in nt:
+            return
+        acc = np.asarray(nt["acc"], dtype=float)
+        metrics["reward/acc"] = float(acc.mean())
+        for task in sorted(set(nt["data_source"].tolist())):
+            metrics[f"reward/acc/{task}"] = float(acc[nt["data_source"] == task].mean())
 
     @staticmethod
     def _finish_tracking(logger) -> None:
@@ -290,13 +131,6 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
                 metrics, timing_raw = {}, {}
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
                 batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
-                guided_batch = None
-                if "has_guided" in batch.batch.keys():
-                    guided_batch = batch.pop(batch_keys=[k for k in GUIDED_TENSOR_KEYS if k in batch.batch.keys()],
-                                             non_tensor_batch_keys=[k for k in GUIDED_NON_TENSOR_KEYS if k in batch.non_tensor_batch])
-                    guided_batch.non_tensor_batch["uid"] = batch.non_tensor_batch["uid"].copy()
-                    if "extra_info" in batch.non_tensor_batch:
-                        guided_batch.non_tensor_batch["extra_info"] = batch.non_tensor_batch["extra_info"].copy()
                 gen_batch = batch.pop(batch_keys=["input_ids", "attention_mask", "position_ids"],
                                       non_tensor_batch_keys=[k for k in ("raw_prompt_ids", "raw_prompt", "tools_kwargs", "multi_modal_data") if k in batch.non_tensor_batch])
                 if "attn_bias" in batch.batch.keys():   # the memory's attention tilt: rides with the prompts into the rollout and stays for the actor / ref forwards
@@ -310,8 +144,6 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
                     batch.batch["response_mask"] = compute_response_mask(batch)
                     with _timer("reward", timing_raw):
                         reward_tensor, reward_extra = compute_reward(batch, self.reward_fn)
-                    with _timer("guided", timing_raw):
-                        batch, reward_tensor, reward_extra = self._guided_pass(batch, guided_batch, reward_tensor, reward_extra, metrics)
                     batch.batch["token_level_scores"] = reward_tensor
                     if reward_extra:
                         batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra.items()})
@@ -365,7 +197,7 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
-                            extras = {k: batch.non_tensor_batch[k].tolist() for k in ("acc", "verified", "pseudo", "sample_kind", "data_source") if k in batch.non_tensor_batch}
+                            extras = {k: batch.non_tensor_batch[k].tolist() for k in ("acc", "data_source") if k in batch.non_tensor_batch}
                             self._dump_generations(inputs=inputs, outputs=outputs, scores=scores, reward_extra_infos_dict=extras, dump_path=rollout_data_dir)
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
                         with _timer("testing", timing_raw):
@@ -380,7 +212,7 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=self.resource_pool_manager.get_n_gpus()))
-                self._memory_metrics(batch, metrics)
+                self._acc_metrics(batch, metrics)
                 logger.log(data=metrics, step=self.global_steps)
                 self._append_metrics_file(metrics)
                 progress_bar.update(1)

@@ -1,30 +1,27 @@
 # Vendored verl (0.3.1.dev, ARPO fork)
 
-Source: `/mnt/peilin/ARPO/ARPO/verl_arpo_entropy` (github.com/RUC-NLPIR/ARPO, a fork of
-volcengine/verl 0.3.1).  Only the `verl/` python package, `scripts/` (checkpoint merger, diagnostics),
-`LICENSE`, `Notice.txt` and `requirements.txt` are kept; `__pycache__`, docs, tests, docker and
-examples are not.  The package is used through `PYTHONPATH=training/verl` (no install), so every
-job snapshot carries its own copy.
+Source: github.com/RUC-NLPIR/ARPO (`verl_arpo_entropy`, a fork of volcengine/verl 0.3.1). Only the `verl/` package,
+`scripts/`, `LICENSE`, `Notice.txt` and `requirements.txt` are kept. It is used through `PYTHONPATH=training/verl` (no
+install), so every job snapshot carries its own copy.
 
-What we use: `verl.trainer.ppo.ray_trainer.RayPPOTrainer` (subclassed in
-`training/kalman_rl/trainer.py`), the FSDP actor/rollout workers, the vLLM spmd rollout
-(`rollout.mode=sync`), `verl.trainer.fsdp_sft_trainer`, `scripts/model_merger.py`.
-
-What we do not use: the ARPO / AEPO agentic machinery — `rollout.mode=sync_with_tool`
-(`workers/rollout/vllm_rollout/vllm_rollout_with_tools.py`), `workers/agent/`, `tools/`, the
-entropy-based branching knobs (`initial_rollouts`, `beam_size`, `branch_probability`,
-`entropy_weight`), the deep-research reward.  They stay in the tree untouched; our config
-(`training/configs/grpo_kalman.yaml`) simply never selects them.
+Used: `verl.trainer.ppo.ray_trainer.RayPPOTrainer` (subclassed in `training/kalman_rl/trainer.py`), the FSDP actor and
+rollout workers, the vLLM spmd rollout (`rollout.mode=sync`). Not used: the ARPO / AEPO agentic and entropy machinery
+(`sync_with_tool` rollouts, `workers/agent/`, `tools/`, branching knobs); it stays untouched and `configs/train/grpo.yaml`
+never selects it.
 
 ## Local patches (grep `kalman:`)
 
-1. `verl/workers/fsdp_workers.py`: the actor's and critic's `attn_implementation` come from
-   `model.attn_implementation` (default `flash_attention_2`) instead of being hard-coded, so the
-   stack also runs with `sdpa` when flash-attn is unavailable.
-2. `verl/trainer/fsdp_sft_trainer.py`: same for SFT.
+1. `verl/__init__.py`: `pkg_resources` replaced by `importlib.metadata` for the version check.
+2. `verl/workers/fsdp_workers.py`: `attn_implementation` of the actor and critic comes from the config instead of being
+   hard-coded; with `model.attn_bias` the HF attention-bias hooks (`feedback_state.attn_bias.install_hf_hooks`) are
+   installed on the actor and reference models (requires `use_remove_padding=False`).
+3. `verl/workers/actor/dp_actor.py`: the per-micro-batch tilt (`attn_bias`) is set on the hooks before each forward, and
+   padding shared by a whole micro-batch is trimmed (with the tilt trimmed alike).
+4. `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py`: with `rollout.attn_bias` the patched Triton kernels are
+   installed (`feedback_state.vllm_attn_bias.install`) and every prompt's tilt is registered with its token ids.
+5. `verl/trainer/ppo/ray_trainer.py`: the tilt travels with the validation prompts into the rollout.
+6. `verl/trainer/fsdp_sft_trainer.py`: `attn_implementation` from the config.
+7. `verl/utils/checkpoint/fsdp_checkpoint_manager.py`: fp32 model / optimizer / extra shards are written only when listed
+   in `checkpoint.contents`; `['hf_model']` keeps the HF copy only (a full checkpoint of a 4B model is 63 GB).
 
 Everything else is byte-identical to the fork.
-3. `verl/__init__.py`: `pkg_resources` (absent from the `sigma` env) replaced by
-   `importlib.metadata` for the version check.
-4. `verl/utils/checkpoint/fsdp_checkpoint_manager.py`: the fp32 model / optimizer / extra shards are written only
-   when listed in `checkpoint.contents` (63 GB per checkpoint of a 4B model filled the disk); `['hf_model']` keeps the HF copy only.

@@ -12,7 +12,7 @@ single place that knows
   * how to force a wrong final answer when a model keeps being right anyway (:func:`force_wrong`), and
   * which (peer, event) pairs a regime makes adversarial (:class:`Regime`, :meth:`Regime.is_misled`).
 
-``scripts/adversarial_peers.py`` generates and verifies; ``scripts/build_adversarial_stream.py`` applies a regime to
+``pipeline/peers.py --mode misleading`` generates and verifies; ``pipeline/streams.py replace`` applies a regime to
 the six-peer streams.  Both import from here so the two steps can never disagree about what "misled" means.
 """
 from __future__ import annotations
@@ -368,7 +368,7 @@ def force_wrong(record: dict[str, Any], text: str) -> tuple[str, str | None]:
     """Rewrite the answer's conclusion to a wrong one; returns (text, what was forced) or (text, None).
 
     The last resort for a peer that keeps answering correctly.  Only for tasks whose answer is a single value that can
-    be replaced without rewriting the argument; ``scripts/adversarial_peers.py`` re-grades the result and counts it
+    be replaced without rewriting the argument; ``pipeline/peers.py`` re-grades the result and counts it
     separately, so a forced answer is never silently mixed in with a naturally misleading one.
     """
     task = task_type_of(record)
@@ -587,7 +587,7 @@ def regimes_from_config(cfg: dict[str, Any], names: Iterable[str] = ()) -> dict[
 def record_positions(n_events: int, order: str) -> np.ndarray:
     """Position in [0, 1) of each event of the file, in the order the record walks the stream.
 
-    ``scripts/build_generation_prompts.py`` uses ``fixed`` (file order) or ``shuffledK``
+    ``pipeline/record.py`` uses ``fixed`` (file order) or ``shuffledK``
     (``numpy.random.default_rng(K).permutation(N)``); this reproduces it without the features.
     """
     if order == "fixed":

@@ -1,9 +1,7 @@
 """Rewards for the multi-GPU trainer.
 
-compute_score        the task verifier (math_equal / QA match / sandboxed code tests) when the prompt is
-                     verified, the memory's reliability-weighted peer vote when it is not
-KalmanRewardManager   verl reward manager that grades a batch in parallel and returns per-sample
-                     extras (acc, verified, pseudo) for logging and validation metrics
+compute_score        the task verifier (math_equal / QA match / sandboxed code tests): 1 if the answer is right, else 0
+KalmanRewardManager  verl reward manager that grades a batch in parallel and returns per-sample extras (acc) for logging
 """
 from __future__ import annotations
 
@@ -17,8 +15,7 @@ import torch
 
 from verl import DataProto
 
-from feedback_state.memory_generator import grade, strip_thinking
-from feedback_state.memory_rl import memory_pseudo_reward, peer_texts_in_prompt_order
+from feedback_state.memory_generator import grade
 
 
 def stdin_to_devnull() -> None:
@@ -71,18 +68,9 @@ def grade_code_remote(record_json: str, text: str, code_timeout: float):
 def compute_score(data_source: str, solution_str: str, ground_truth, extra_info=None, code_timeout: float = 10.0, acc: float | None = None, **_) -> dict:
     """verl custom-reward signature.  Returns score (the training reward) plus logging fields.
     ``acc`` may be precomputed (the reward manager grades code in Ray workers)."""
-    info = dict(extra_info or {})
-    rec = _record(info, data_source, ground_truth)
     if acc is None:
-        acc = verifier_acc(rec, solution_str, code_timeout)
-    if bool(info.get("verified", True)):
-        return {"score": acc, "acc": acc, "verified": 1.0, "pseudo": 0.0}
-    try:
-        peers = peer_texts_in_prompt_order(rec, [int(p) for p in info["peer_order"]])
-        pr = memory_pseudo_reward(rec, peers, [float(p) for p in info["memory_prob"]], strip_thinking(solution_str))
-    except Exception:
-        pr = None
-    return {"score": float(pr) if pr is not None else 0.0, "acc": acc, "verified": 0.0, "pseudo": 1.0 if pr is not None else 0.0}
+        acc = verifier_acc(_record(dict(extra_info or {}), data_source, ground_truth), solution_str, code_timeout)
+    return {"score": acc, "acc": acc}
 
 
 class KalmanRewardManager:

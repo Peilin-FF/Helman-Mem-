@@ -19,7 +19,6 @@ from feedback_state.adversarial import (
     sweep_specs,
     wrong_label,
 )
-from feedback_state.feature_streams import PEERS_PER_STREAM, STREAMS
 
 MATH = {"id": "gsm8k:1", "task_type": "math", "problem": "Kate pays 5 dollars a visit, 12 visits.", "answer": "60"}
 MCQA = {"id": "mc:1", "task_type": "mcqa", "problem": "Which planet is closest to the Sun?",
@@ -199,16 +198,6 @@ def test_regimes_are_read_from_the_config_block():
     assert regimes["all100"].peers is None and regimes["all100"].covers(3)
     assert regimes["sab"].peers == (1, 4) and not regimes["sab"].covers(3)
     assert "every peer" in regimes["all100"].describe()
-
-
-def test_an_adversarial_stream_resolves_like_any_other_stream():
-    jsonl, cache = STREAMS["indist6_adv_all50"]
-
-    assert jsonl == "indist6_adv_all50/test.jsonl"
-    assert cache.format(m="q3_4b") == "q3_4b_indist6_adv_all50_ph/ood"
-    assert STREAMS["ood6_adv_flip"][0] == "ood6_adv_flip/test.jsonl"
-    assert STREAMS["train6_adv_all100"][0] == "mixed_train_big6_adv_all100/train.jsonl"
-    assert PEERS_PER_STREAM["ood6_adv_all50"] == 6
 
 
 def test_a_count_regime_puts_exactly_k_misleading_peers_on_every_event():
