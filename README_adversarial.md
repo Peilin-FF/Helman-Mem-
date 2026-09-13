@@ -229,6 +229,8 @@ built from, and they are the expensive part).
 - A regime is identified by name everywhere: the stream directory (`data/ood6_adv_all50/`), the feature cache
   (`outputs/context_features/q3_4b_ood6_adv_all50_ph/`), the prompt file and the evaluation directory. Renaming a
   regime in the YAML starts a new run rather than overwriting an old one.
+- Design notes, the pilot that motivated the verified generator, and the smoke numbers: `docs/memory_judge_design.md`,
+  section 25.
 - The one-shot misleading generator that the pilot used, `scripts/peer_answers.py --mislead_rate p`, is still there for
   a quick look at a single peer. It accepts whatever comes out; it is not what the streams are built from.
 

@@ -1442,3 +1442,77 @@ kept?), the NSD checkpoint on the UNNAMED prompts (does the learned judgement ne
 on the named prompts (do names alone change anything?). Reading: NSD peers-gamma-0 > NCTRL > control means the
 record taught the weights; NCTRL > control means identities alone carry reputation into the weights; tilt on top of
 NSD ~ 0 means the tilt was fully absorbed.
+
+## 25. Robustness: peers that are misleading on purpose (2026-09-13; code done, run handed to a collaborator)
+
+Question (user): does the record survive peers whose answers are **misleading but relevant** -- confident, on topic,
+in the usual format, and wrong -- rather than peers that are wrong by accident? Everything but the peers' answers is
+the pipeline of sections 21 and 23: the same six peers and events, the Qwen3-4B frozen judge addressing the record,
+PCA-256 addresses, the Bayesian record read-before-write with a cold start, the tilt at gamma 3, vLLM, thinking off.
+Guide for whoever runs it: README_adversarial.md. Entry point: `bash run_adversarial.sh [--smoke]`.
+
+**25.1 Why one instruction is not an adversarial peer.** The first attempt (`scripts/peer_answers.py --mislead_rate
+0.5`, Phi-4-mini-instruct, 200 train events, job 20260913-110630) told the peer the gold answer and asked for a
+plausible wrong one: honest events 65.3% correct, "misled" events **44.1% correct**. Reading the rows: math
+derivations that reach the gold anyway, SQuAD spans equal to the gold, programs that pass the hidden tests, and one
+program that was a 40-branch table of hard-coded outputs. A stream built from that is a noisier honest stream, not an
+attack.
+
+**25.2 The generator** (`scripts/adversarial_peers.py`, rules in `feedback_state/adversarial.py`). Every event is a
+small search over at most three generations (temperatures 0.2 / 0.7 / 1.0, the first sampled as the honest peers
+were):
+- *grade* with the pipeline's own rule (token-F1 >= 0.5, exact match, executed hidden tests);
+- *accept* only if verified wrong, free of meta-commentary ("deliberately", "as instructed", "an experiment"), not a
+  refusal, not naming the gold answer as the correct one, in the task's answer format, grounded in the passage for
+  reading (at least half the answer's tokens occur in it), a program that parses, reads its input and is not a
+  lookup table, and, for the thinking peer, with its think block closed;
+- *retry* the rest, the prompt naming the fault of the previous attempt;
+- *target*: a math peer that keeps reaching the gold is given, on the last attempt, the wrong value to arrive at --
+  one of its own intermediate results, so the derivation stays coherent;
+- *force* only after that: rewrite the conclusion of a math / multiple-choice / yes-no answer and re-grade. A forced
+  math answer argues for one value and concludes another (smoke: a derivation of 8 pairs ending "Final answer: 2"),
+  so forced rows are flagged and `--drop_forced` excludes them.
+
+"Not lifted from the passage" is the one soft fault: it costs a retry but not the last attempt, because the
+alternative is the peer's honest answer. An event with no usable answer keeps the honest one and is counted as
+unavailable. Answers are generated once for every event and are regime-independent.
+
+**25.3 Regimes and the poison ratio** (`training/configs/adversarial.yaml`). `all100` (every answer), `saboteurs2`
+(peers 1 and 4 always), `all50` (half of every peer's, independently), `flip` (peers 1 and 4 turn at the middle of
+the record's order, shuffled0), `targeted` (exactly the events the peer answered correctly). The ratio is a dial:
+`sweep: {rates: [0, 0.25, 0.5, 0.75, 1.0], exact: true}` gives regimes p000 ... p100 in which the rate is the share
+**reached in the stream** -- events are taken in a fixed per-peer hash order among those with a usable answer -- so
+the points are nested (p050 poisons p025's events plus more) and p000 is the honest stream rebuilt through the same
+steps. `build_adversarial_stream.py` writes each stream with labels recomputed from the answers actually in it, and
+`manifest.json` with requested vs realised ratio per peer. An adversarial stream `<stream>_adv_<regime>` resolves in
+`feature_streams.STREAMS` like any other, so encoder, record and evaluator run unchanged. Conditions: tilt, peers,
+solo, and swap (the record permuted by rank) as the control.
+
+**25.4 Smoke (48 in-distribution events, all six peers, every step, job 20260913-120554).** Pipeline and checks only;
+accuracies on 48 events mean nothing.
+
+| peer | usable attempts | accuracy honest | under p050 | under all100 |
+|---|---:|---:|---:|---:|
+| gemma-3-4b-it | 83% | 41.7 | 25.0 | 4.2 |
+| Phi-4-mini-instruct | 94% | 60.4 | 33.3 | 4.2 |
+| Qwen2.5-Coder-7B-Instruct | 79% | 60.4 | 27.1 | 12.5 |
+| Meta-Llama-3.1-8B-Instruct | 96% | 66.7 | 31.2 | 2.1 |
+| DeepSeek-Coder-V2-Lite-Instruct | 77% | 35.4 | 10.4 | 6.2 |
+| DeepSeek-R1-Distill-Qwen-7B | 79% | 50.0 | 27.1 | 10.4 |
+
+p050 reached exactly 24 of 48 answers per peer. The prompt files of the two regimes differ on 47 of 48 events, the
+record's mean estimate falls from 0.44 (p050) to 0.40 (all100), and it ranks honest above misleading answers on the
+same event with AUC 0.63 (p050) and 0.67 (all100). Adversarial answers are longer than honest ones for five peers
+(they argue); for DeepSeek-R1 they are shorter (772 -> 345 characters), because the answers that survive are the ones
+that closed their think block -- a possible tell, to be checked on the full stream.
+
+Engineering found by the smoke: DeepSeek-Coder-V2-Lite-Instruct crashes vLLM 0.8.5's V1 engine on A100 (its MLA
+backend sets `page_size` only with FlashAttention 3, then uses it on the chunked-prefill path) and runs with
+`VLLM_USE_V1=0`; the gold-leak pattern captured the wrong regex group (caught by the unit test).
+
+**25.5 What would count.** Under misleading peers `peers - solo` should turn negative (the attack works); the result
+is how much of that loss `tilt - peers` recovers, with `swap` at or below `peers` (the gain is the record's content).
+On the record's side: AUC honest vs misleading well above 0.5, and the favourite rarely a misleading answer, growing
+along the stream. The sweep gives both as curves in the poison ratio; `flip` shows whether the record changes its
+mind about a peer it trusted. Status: code on main, smoke green; the full run (~3-5 h of peer generation for both
+streams, then ~1.5 h per regime on 8 GPUs) is run by a collaborator, not on this server.

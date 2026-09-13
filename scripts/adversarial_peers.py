@@ -112,7 +112,10 @@ def main() -> None:
 
     # per event: the accepted answer, or the best attempt so far and why it was not accepted
     done: dict[int, dict] = {}
-    state: dict[int, dict] = {i: {"reasons": [], "attempts": 0, "best": None, "best_value": None} for i in chosen}
+    # "reasons" = the faults of the latest attempt (what the next prompt complains about);
+    # "best" / "best_reasons" = the attempt kept for the forcing pass and its own faults
+    state: dict[int, dict] = {i: {"reasons": [], "attempts": 0, "best": None, "best_value": None, "best_reasons": []}
+                              for i in chosen}
     pending = list(chosen)
     attempt_stats: list[dict] = []
     attempts_total = max(1, args.max_attempts)
@@ -125,7 +128,7 @@ def main() -> None:
         # reaches it is misleading, where a conclusion rewritten afterwards contradicts the lines above it
         targets = {i: plausible_wrong_number(records[i], answer_of(state[i]["best"]))
                    for i in pending
-                   if last and task_type_of(records[i]) == "math" and "still_correct" in state[i]["reasons"] and state[i]["best"]}
+                   if last and task_type_of(records[i]) == "math" and "still_correct" in state[i]["best_reasons"] and state[i]["best"]}
         prompts = [render(tok, misleading_prompt(records[i], attempt=attempt, complaints=state[i]["reasons"],
                                                  target_answer=targets.get(i))) for i in pending]
         params = [SamplingParams(temperature=temp, top_p=0.95, max_tokens=budget(records[i]), seed=attempt) for i in pending]
@@ -145,9 +148,10 @@ def main() -> None:
                 continue
             reasons_now.update(verdict.reasons)
             # keep the attempt that is closest to usable: one that fails only by being correct can still be forced
-            better = st["best"] is None or (set(verdict.reasons) <= {"still_correct"} and set(st["reasons"]) > {"still_correct"})
+            only_correct = lambda rs: set(rs) <= {"still_correct"}   # fails only by being right: can still be turned around
+            better = st["best"] is None or (only_correct(verdict.reasons) and not only_correct(st["best_reasons"]))
             if better:
-                st["best"], st["best_value"] = text, value
+                st["best"], st["best_value"], st["best_reasons"] = text, value, list(verdict.reasons)
             st["reasons"] = verdict.reasons
             nxt.append(i)
         attempt_stats.append({"attempt": attempt, "temperature": temp, "generated": len(pending),
@@ -187,8 +191,8 @@ def main() -> None:
         if got is None:
             st = state[idx]
             got = {"response": st["best"] or "", "target": st["best_value"] if st["best_value"] is not None else 0.0,
-                   "attempts": st["attempts"], "reasons": st["reasons"], "soft": [], "forced": None}
-            unusable.update(st["reasons"] or ["empty"])
+                   "attempts": st["attempts"], "reasons": st["best_reasons"], "soft": [], "forced": None}
+            unusable.update(st["best_reasons"] or ["empty"])
         value = float(got["target"])
         rows.append({"id": r.get("id"), "source": r.get("source"), "task_type": task, "response": got["response"],
                      "target": value, "correct": int(round(value)), "misled": True, "accepted": idx in done,
