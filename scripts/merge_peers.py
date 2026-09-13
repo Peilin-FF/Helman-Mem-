@@ -62,6 +62,8 @@ def main() -> None:
                 rec["peer_responses"][k] = text
                 meta = dict(next(iter(rec.get("peer_metadata", {}).values()), {}))
                 meta.update({"model": f"{args.model_root}/{name}", "received_context": True, "num_samples": 1})
+                if "misled" in r:   # misleading peers (peer_answers.py --mislead_rate): which events were answered adversarially
+                    meta["misled"] = bool(r["misled"])
                 rec.setdefault("peer_metadata", {})[k] = meta
                 rec.setdefault("peer_correct", {})[k] = float(r.get("target", r["correct"]))
                 if "correctness_by_peer" in rec:   # only where the record already carries the rounded labels (train streams)

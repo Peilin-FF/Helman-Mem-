@@ -23,8 +23,41 @@ from feedback_state.permutations import canonical_peer_view
 DATA_ROOT = Path(os.environ.get("SIGMA_DATA_ROOT", "data"))
 FEATURE_ROOT = Path(os.environ.get("SIGMA_FEATURE_ROOT", "outputs/context_features"))
 
+ADV = "_adv_"   # robustness streams: "<stream>_adv_<regime>" (README_adversarial.md)
+
+
+class _Streams(dict):
+    """The known streams, plus the adversarial variants built by ``scripts/build_adversarial_stream.py``.
+
+    ``indist6_adv_all50`` resolves to ``data/indist6_adv_all50/test.jsonl`` with its own feature cache
+    ``outputs/context_features/<model>_indist6_adv_all50_ph/ood``: a stream whose peers answer adversarially is a
+    stream like any other, so nothing downstream (encoder, record, evaluation) needs to know about the experiment.
+    """
+
+    def __missing__(self, name: str):
+        if ADV not in str(name):
+            raise KeyError(name)
+        base, _, regime = str(name).partition(ADV)
+        if base not in self or not regime:
+            raise KeyError(name)
+        jsonl, cache = self[base]
+        directory, _, split = str(jsonl).rpartition("/")
+        leaf = str(cache).rpartition("/")[2]
+        return (f"{directory}{ADV}{regime}/{split}", "{m}_" + f"{name}_ph/{leaf}")
+
+
+class _PeersPerStream(dict):
+    """Peer count per stream; an adversarial variant has as many peers as the stream it was built from."""
+
+    def __missing__(self, name: str):
+        base = str(name).partition(ADV)[0]
+        if base != name and base in self:
+            return self[base]
+        raise KeyError(name)
+
+
 # stream name -> (jsonl relative to DATA_ROOT, cache directory template relative to FEATURE_ROOT)
-STREAMS = {
+STREAMS = _Streams({
     "train": ("mixed_train_big/train.jsonl", "{m}_big_ph/train"),
     "train_small": ("mixed_train/train.jsonl", "{m}_ph/train"),
     "indist": ("indist/test.jsonl", "{m}_indist_ph/ood"),
@@ -37,8 +70,8 @@ STREAMS = {
     "train6": ("mixed_train_big6/train.jsonl", "{m}_big6_ph/train"),
     "indist6": ("indist6/test.jsonl", "{m}_indist6_ph/ood"),
     "ood6": ("ood6/test.jsonl", "{m}_6_ph/ood"),
-}
-PEERS_PER_STREAM = {"train5": 5, "indist5": 5, "ood5": 5, "train6": 6, "indist6": 6, "ood6": 6}
+})
+PEERS_PER_STREAM = _PeersPerStream({"train5": 5, "indist5": 5, "ood5": 5, "train6": 6, "indist6": 6, "ood6": 6})
 MODELS = {"q3_0_6b": "Qwen3-0.6B", "q3_4b": "Qwen3-4B", "q3_8b": "Qwen3-8B", "q35_4b": "Qwen3.5-4B", "q35_9b": "Qwen3.5-9B",
           # other families (docs section 23): each family's memory is built from that family's OWN features (the address
           # never comes from a Qwen judge when the central model is not Qwen); tags are the cache prefixes {m}_big6_ph etc.
@@ -89,7 +122,11 @@ def stream_paths(name: str, model: str) -> tuple[Path, Path]:
 
 def load_stream(name: str, model: str, *, num_peers: int | None = None, limit: int | None = None) -> FeatureStream:
     jsonl_path, cache_dir = stream_paths(name, model)
-    num_peers = PEERS_PER_STREAM.get(name, 3) if num_peers is None else num_peers
+    if num_peers is None:
+        try:
+            num_peers = PEERS_PER_STREAM[name]
+        except KeyError:
+            num_peers = 3
     return load_stream_from(jsonl_path, cache_dir, name=name, model=model, num_peers=num_peers, limit=limit)
 
 

@@ -7,20 +7,31 @@ Sampling: temperature 0.2, top_p 0.95 (the peer-generation configs); max_new_tok
 grades the text after the last </think>.
 Grading: the rule of data/builders/common/precompute_peer_correct.py, i.e. the task's target function rounded:
 token-F1 >= 0.5 for reading, exact equality for math, executed tests for code (FEEDBACK_CODE_EXEC_ALLOW=1).
+Misleading peers (robustness experiments): ``--mislead_rate p`` picks a deterministic fraction p of the events (hash of
+seed, model name and event id) on which the peer is asked, by feedback_state.adversarial.misleading_prompt, for a
+plausible, confident, relevant solution whose final answer is wrong.  The remaining events use the honest prompt.
+Grading is unchanged, so ``correct`` stays the verified label; each row carries ``misled`` so merge_peers.py can record
+it in peer_metadata.  This is the one-shot version: it accepts whatever comes out, and about half of the misled answers
+turn out correct anyway.  For the robustness streams use ``scripts/adversarial_peers.py``, which re-generates until the
+answer is verified wrong, on topic and free of meta-commentary.
 
   PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 python scripts/peer_answers.py --model /mnt/data/peilin/HF_MODEL/Mistral-7B-Instruct-v0.3 \
       --records data/mixed_train_big/train.jsonl --output outputs/peergen_new/Mistral-7B-Instruct-v0.3
+  PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 python scripts/peer_answers.py --model /mnt/data/peilin/HF_MODEL/Mistral-7B-Instruct-v0.3 \
+      --records data/mixed_train_big/train.jsonl --output outputs/peergen_mislead/Mistral-7B-Instruct-v0.3_p0.5 --mislead_rate 0.5
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import multiprocessing as mp
 import os
 import time
 from pathlib import Path
 
+from feedback_state.adversarial import misleading_prompt
 from feedback_state.data import JsonlDataset
 from feedback_state.memory_generator import grade, strip_thinking
 from feedback_state.tasks import build_peer_prompt, get_task, task_type_of
@@ -42,7 +53,17 @@ def parse_args():
     p.add_argument("--sources", default=None, help="comma-separated source datasets to keep (e.g. apps)")
     p.add_argument("--trust_remote_code", action="store_true")
     p.add_argument("--enforce_eager", action="store_true")
+    p.add_argument("--mislead_rate", type=float, default=0.0, help="fraction of events on which the peer is told to give a plausible but wrong solution")
+    p.add_argument("--mislead_seed", type=int, default=0)
     return p.parse_args()
+
+
+def is_misled(record: dict, model: str, rate: float, seed: int) -> bool:
+    """Deterministic per-event choice: the same (seed, model, id) is misled at every rate >= its hash value."""
+    if rate <= 0:
+        return False
+    h = hashlib.sha256(f"{seed}|{os.path.basename(model.rstrip('/'))}|{record.get('id')}".encode()).digest()
+    return int.from_bytes(h[:8], "big") / 2 ** 64 < rate
 
 
 def _target(args):
@@ -93,9 +114,11 @@ def main() -> None:
     if args.max_examples:
         records = records[: args.max_examples]
     tok = AutoTokenizer.from_pretrained(args.model, local_files_only=True, trust_remote_code=args.trust_remote_code)
-    prompts, params = [], []
+    prompts, params, misled = [], [], []
     for r in records:
-        content = build_peer_prompt(r, with_context=True)
+        m = is_misled(r, args.model, args.mislead_rate, args.mislead_seed)
+        misled.append(m)
+        content = misleading_prompt(r) if m else build_peer_prompt(r, with_context=True)
         try:
             text = tok.apply_chat_template([{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True, enable_thinking=False)
         except (TypeError, ValueError):
@@ -103,7 +126,8 @@ def main() -> None:
         prompts.append(text)
         budget = 4096 if args.reasoning else MAX_TOKENS.get(task_type_of(r), 512)
         params.append(SamplingParams(temperature=0.2, top_p=0.95, max_tokens=budget, seed=0))
-    print(f"[peer-answers] {args.model}: {len(records)} records (shard {args.shard_index}/{args.num_shards})", flush=True)
+    print(f"[peer-answers] {args.model}: {len(records)} records (shard {args.shard_index}/{args.num_shards}), "
+          f"misled {sum(misled)} (rate {args.mislead_rate})", flush=True)
     t0 = time.time()
     llm = LLM(model=args.model, tokenizer=args.model, dtype="bfloat16", gpu_memory_utilization=args.gpu_memory_utilization, max_model_len=args.max_model_len,
               enable_prefix_caching=True, trust_remote_code=args.trust_remote_code, enforce_eager=args.enforce_eager, seed=0)
@@ -112,19 +136,25 @@ def main() -> None:
     print(f"[peer-answers] generated in {time.time() - t0:.0f}s; grading", flush=True)
     del llm
     rows, by_source = [], collections.defaultdict(lambda: [0, 0.0])
-    for r, text in zip(records, texts):
+    by_mode = collections.defaultdict(lambda: [0, 0])
+    for r, text, m in zip(records, texts, misled):
         answer = strip_thinking(text) if args.reasoning else text
         v = graded_value(r, answer)
-        rows.append({"id": r.get("id"), "source": r.get("source"), "task_type": task_type_of(r), "response": text, "target": v, "correct": int(round(v))})
+        rows.append({"id": r.get("id"), "source": r.get("source"), "task_type": task_type_of(r), "response": text, "target": v, "correct": int(round(v)), "misled": bool(m)})
         by_source[r.get("source")][0] += 1; by_source[r.get("source")][1] += int(round(v))
+        by_mode["misled" if m else "honest"][0] += 1; by_mode["misled" if m else "honest"][1] += int(round(v))
     tag = ("." + args.sources.replace(",", "_")) if args.sources else ""
     stem = args.records.stem   # train / test
     with (args.output / (f"{stem}{tag}.jsonl" if args.num_shards == 1 else f"{stem}{tag}.shard{args.shard_index}of{args.num_shards}.jsonl")).open("w") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    summary = {"model": args.model, "n": len(rows), "reasoning": args.reasoning, "by_source": {s: {"n": n, "accuracy": 100 * k / n} for s, (n, k) in by_source.items()}, "seconds": time.time() - t0}
+    summary = {"model": args.model, "n": len(rows), "reasoning": args.reasoning, "mislead_rate": args.mislead_rate, "mislead_seed": args.mislead_seed,
+               "by_source": {s: {"n": n, "accuracy": 100 * k / n} for s, (n, k) in by_source.items()},
+               "by_mode": {s: {"n": n, "accuracy": 100 * k / n} for s, (n, k) in by_mode.items()}, "seconds": time.time() - t0}
     (args.output / (f"summary_{stem}{tag}.json" if args.num_shards == 1 else f"summary_{stem}{tag}.shard{args.shard_index}of{args.num_shards}.json")).write_text(json.dumps(summary, indent=1))
     print("[peer-answers] " + ", ".join(f"{s}: {v['accuracy']:.1f}% ({v['n']})" for s, v in summary["by_source"].items()) + f" ({summary['seconds']:.0f}s)", flush=True)
+    if args.mislead_rate > 0:
+        print("[peer-answers] " + ", ".join(f"{s}: {v['accuracy']:.1f}% correct ({v['n']})" for s, v in summary["by_mode"].items()), flush=True)
 
 
 if __name__ == "__main__":
