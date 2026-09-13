@@ -5,7 +5,7 @@
 
 paths:
   models_root: /mnt/data/peilin/HF_MODEL   # the directory holding the downloaded models (one sub-directory each)
-  data: data                               # datasets: bash datasets/unpack.sh fills it; the pipeline adds built ones
+  data: data                               # datasets: python datasets/download.py fills it; the pipeline adds built ones
   outputs: outputs
   logs: logs
 

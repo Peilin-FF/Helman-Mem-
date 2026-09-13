@@ -3,4 +3,4 @@
 kind: answers
 base: ood6
 mode: misleading
-release: ood6.misleading.jsonl.gz
+release: answers/ood6_misleading.jsonl.gz

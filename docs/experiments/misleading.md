@@ -1,7 +1,7 @@
 # misleading: the six peers answer with misleading but relevant solutions
 
 ```bash
-bash datasets/unpack.sh                                                          # the released answers and streams -> data/
+python datasets/download.py                                                      # the released answers and streams -> data/
 bash run.sh configs/experiments/misleading.yaml --smoke                          # 48 events of indist6_misleading_p050, every step
 bash run.sh configs/experiments/misleading.yaml                                  # the sweep: datasets [misleading_rates]
 bash run.sh configs/experiments/misleading.yaml --set "datasets=[ood6_misleading_p100]"   # one dataset
@@ -9,7 +9,7 @@ bash run.sh configs/experiments/misleading.yaml --set "datasets=[ood6_misleading
 
 Does the record survive peers that are wrong on purpose? Every peer answers every event with a confident, on-topic,
 verified-wrong solution once: the answers datasets `indist6_misleading` and `ood6_misleading` (`peers` step, 3-5 h on 8
-GPUs; released in `datasets/`, so it is skipped after unpacking). Each misleading dataset (`configs/datasets/`) names a
+GPUs; released on Hugging Face, so it is skipped after downloading). Each misleading dataset (`configs/datasets/`) names a
 base stream and a regime that chooses which of those answers replace the honest ones (`streams` step, seconds), and the
 main pipeline runs unchanged on the result.
 

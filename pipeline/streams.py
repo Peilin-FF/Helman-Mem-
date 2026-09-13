@@ -2,7 +2,7 @@
 
     add       append new peers (their pipeline.peers answers) as peer_<k>; events missing an answer are dropped
     replace   put a peer's misleading answers in place of its honest ones, on the events a regime selects
-    build     build registered misleading datasets (configs/datasets/) by name, e.g. after bash datasets/unpack.sh
+    build     build registered misleading datasets (configs/datasets/) by name from their stream and answers
     digest    a content digest of a stream (ids, answers, correctness, misled flags), as datasets/manifest.json lists
 
     PYTHONPATH=. python -m pipeline.streams build misleading_rates

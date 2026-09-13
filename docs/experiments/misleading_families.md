@@ -3,7 +3,7 @@
 This guide runs one experiment: five central models answer the ten misleading datasets (0, 25, 50, 75 and 100% of the
 six peers' answers misleading, in-distribution and OOD), each with its own Kalman Mem record. It is the same protocol
 that produced the Qwen3-4B result (`docs/reports/misleading_peers.md`). You only evaluate; the misleading answers and
-datasets are released in `datasets/`, and nothing is generated.
+datasets are released on Hugging Face, and nothing is generated.
 
 | registered name | model | Hugging Face |
 |---|---|---|
@@ -25,18 +25,16 @@ For every model and dataset, three conditions are measured:
 git clone https://github.com/Peilin-FF/Helman-Mem-.git kalman-mem && cd kalman-mem
 conda create -n sigma python=3.12 && conda activate sigma
 pip install -r requirements_qwen3.txt           # torch 2.6.0, transformers 4.56.2, vLLM 0.8.5 (exactly this version)
-bash datasets/unpack.sh                         # the streams, the misleading answers, then builds the ten misleading datasets
+python datasets/download.py                     # the datasets from Hugging Face into data/ (about 1 GB download, 3 GB on disk)
 ```
 
-`unpack.sh` must end with ten `ok` lines, one per built dataset, e.g.
+It must end with `ok     15 datasets` (the three streams, the peers' misleading answers on two of them, and the ten
+misleading datasets). Every file is checked against its sha256; a `MISMATCH` means the download is corrupt or not the
+release: run it again, and tell us if it persists. The data is at
+https://huggingface.co/datasets/Sssunset/kalman-mem-peers.
 
-```
-ok     data/ood6_misleading_p050/test.jsonl (17,403 events, 50.0% misleading)
-```
-
-A `MISMATCH` means the data differs from the release: stop and tell us.
-
-Download the five models into one directory (each in its own sub-directory, named as below), for example:
+If the five models are not on the machine yet, download them into one directory (each in its own sub-directory, named
+as below), for example:
 
 ```bash
 export MODELS=/path/to/models
@@ -47,8 +45,9 @@ for m in meta-llama/Llama-3.1-8B-Instruct:Meta-Llama-3.1-8B-Instruct mistralai/M
 done
 ```
 
-Then set `paths.models_root` in `configs/base.yaml` to that directory, or add `--set paths.models_root=$MODELS` to every
-command below. The sub-directory names are the `path:` fields in `configs/models/*.yaml`.
+Set `paths.models_root` in `configs/base.yaml` to the directory holding the models, or add
+`--set paths.models_root=$MODELS` to every command below. Each model's sub-directory name must match its `path:` in
+`configs/models/<name>.yaml` (edit `path:` if your copy is named differently, or give an absolute path there).
 
 ## 2. Check before using GPUs (CPU, a minute)
 

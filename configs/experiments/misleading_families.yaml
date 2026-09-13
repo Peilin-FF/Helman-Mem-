@@ -1,6 +1,6 @@
 # Robustness of other central models to misleading peers (docs/experiments/misleading_families.md): each model answers the
 # misleading datasets with its own record (it is its own frozen judge), exactly as Qwen3-4B does in misleading.yaml.
-# The misleading answers and datasets are released data (bash datasets/unpack.sh builds them): nothing is generated here.
+# The misleading answers and datasets are released data (python datasets/download.py): nothing is generated here.
 base: misleading.yaml
 name: misleading_families
 steps: [features, record, evaluate, table]

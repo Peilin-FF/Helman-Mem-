@@ -2,4 +2,4 @@
 path: indist6/test.jsonl
 peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5 (configs/peers/)
 events: 4319
-release: indist6.test.jsonl.gz
+release: data/indist6.jsonl.gz

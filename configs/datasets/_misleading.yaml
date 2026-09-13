@@ -8,3 +8,4 @@
 kind: misleading
 answers: "{base}_misleading"
 order: shuffled0                          # the order the record walks the stream (flip depends on it)
+release: "data/{name}.jsonl.gz"            # released in full on the Hugging Face Hub

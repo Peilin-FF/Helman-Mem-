@@ -50,7 +50,7 @@ git clone https://github.com/Peilin-FF/Helman-Mem-.git sigma-mem && cd sigma-mem
 conda create -n sigma python=3.12 && conda activate sigma
 pip install -r requirements_qwen3.txt          # torch 2.6.0 (CUDA 12.4), transformers 4.56.2, vLLM 0.8.5 (exact)
 bash training/setup_env.sh                     # only for training: hydra, tensordict, flash-attn for the vendored verl
-bash datasets/unpack.sh                        # the released datasets -> data/ (streams, misleading answers, misleading streams)
+python datasets/download.py                    # the released datasets from Hugging Face -> data/ (streams, misleading answers and streams)
 pytest tests/unit                              # CPU only: the rules, the record, the configs and job expansion
 ```
 
@@ -80,7 +80,9 @@ Code answers are graded by executing them (a subprocess with limits, not a sandb
 | `indist6_misleading_p000` … `_p100`, `ood6_misleading_p000` … `_p100` (group `misleading_rates`) | | the streams with 0, 25, 50, 75, 100% of every peer's answers misleading |
 
 Each event carries the question, the gold answer, the six peers' answers and their verified correctness
-(`datasets/README.md`). The pipeline starts from these released datasets.
+(`datasets/README.md`), released on Hugging Face as
+[Sssunset/kalman-mem-peers](https://huggingface.co/datasets/Sssunset/kalman-mem-peers). The pipeline starts from these
+released datasets.
 
 ## Running experiments
 
