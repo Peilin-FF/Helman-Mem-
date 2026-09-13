@@ -33,13 +33,15 @@ one or two sentences. They still come out longer than the honest answers (on one
 170 characters on yes/no, 429 against 160 on multiple choice, 379 against 137 on short answer), a difference the central
 model could in principle pick up on.
 
-An event with no usable answer keeps the honest answer in every stream. On the 48-event smoke, 77-96% of each peer's
-events had a usable answer and none of the usable answers graded correct. `data/<stream>_misleading/<peer>/summary.shard*.json`
-(and `datasets/manifest.json`) reports each peer's acceptance rate, forced count, attempts and why the rest were unusable.
+An event with no usable answer keeps the honest answer in every stream. `data/<stream>_misleading/<peer>/summary.shard*.json`
+(and the dataset card on Hugging Face) reports each peer's acceptance rate, forced count, attempts and why the rest were
+unusable.
 
-The weakest peer here is DeepSeek-Coder-V2-Lite-Instruct: told to argue for a wrong option it often returns an empty
-reply, a bare label or a loop ("Final anti anti anti ..."), where its honest answers on the same engine have none of
-these. Those replies are rejected, so it ends with the lowest usable share; its remaining events keep the honest answer.
+Two generation faults were found and fixed on 2026-09-13/14, and the answers of the affected peers regenerated: vLLM
+0.8.5's V0 prefix caching corrupts DeepSeek-Coder-V2-Lite's MLA attention (about 30% of its answers, honest ones
+included, came out as unrelated text or symbol runs; its model file now sets `prefix_caching: false`), and the engine
+added a second start token to the rendered prompt of gemma-3, Llama-3.1 and both DeepSeek peers (peers are now fed the
+template's token ids). The acceptance rules also reject answers that are not about the question (`off_topic`).
 
 ## Regimes and the ratio
 
@@ -59,21 +61,21 @@ rewritten. The released ones are the rates `p000`, `p025`, `p050`, `p075`, `p100
 `misleading_rates`). Each built stream has a `manifest.json` with the requested and realised ratio per peer, events by
 number of misleading peers, forced and unavailable counts, and accuracy before and after.
 
-A peer cannot go beyond its usable share, so the top rates reach less than asked. The generation of 2026-09-13:
+A peer cannot go beyond its usable share, so the top rates reach less than asked. The released answers (2026-09-14):
 
 | peer | usable, indist6 | usable, ood6 | rewritten (of usable), indist6 / ood6 |
 |---|---:|---:|---:|
-| gemma-3-4b-it | 79.8% | 92.5% | 19.6% / 5.6% |
+| gemma-3-4b-it | 71.3% | 92.0% | 21.8% / 8.4% |
 | Phi-4-mini-instruct | 90.3% | 95.6% | 7.0% / 4.8% |
 | Qwen2.5-Coder-7B-Instruct | 89.2% | 98.3% | 2.4% / 4.0% |
-| Meta-Llama-3.1-8B-Instruct | 95.5% | 98.2% | 0.7% / 0.5% |
-| DeepSeek-Coder-V2-Lite-Instruct | 63.8% | 75.8% | 2.6% / 36.9% |
-| DeepSeek-R1-Distill-Qwen-7B | 67.3% | 91.1% | 15.8% / 10.6% |
+| Meta-Llama-3.1-8B-Instruct | 93.6% | 97.8% | 0.7% / 0.6% |
+| DeepSeek-Coder-V2-Lite-Instruct | 68.6% | 94.5% | 16.0% / 6.3% |
+| DeepSeek-R1-Distill-Qwen-7B | 66.5% | 90.9% | 18.7% / 11.5% |
 
-So p025 and p050 are exact on both streams and p075 on ood6. p075 on indist6 reaches 71.9% overall because the two
-DeepSeek peers stop at their usable share. p100 reaches 81.0% on indist6 and 91.9% on ood6, the most these answers allow.
+So p025 and p050 are exact on both streams and p075 on ood6. p075 on indist6 reaches 71.9% overall because three peers
+stop at their usable share. p100 reaches 79.9% on indist6 and 94.8% on ood6, the most these answers allow.
 
-## Result (2026-09-13): frozen Qwen3-4B on the rate datasets
+## Result (2026-09-14): frozen Qwen3-4B on the rate datasets
 
 Accuracy (%) of the central model with the six answers in the prompt, with (`tilt`) and without (`peers`) the record's
 attention tilt, and on the question alone (`solo`); the record is fit on each stream itself. A question-only prompt holds
@@ -82,16 +84,16 @@ no peer answers, so `solo` is the same for every misleading share: it is read fr
 
 | misleading share asked (reached: indist6 / ood6) | indist6 tilt | indist6 peers | indist6 solo | ood6 tilt | ood6 peers | ood6 solo |
 |---|---:|---:|---:|---:|---:|---:|
-| honest (main experiment) | 67.2 | 64.8 | 60.5 | 74.0 | 69.2 | 67.8 |
-| 0% | 67.3 | 64.8 | 60.5 | 74.0 | 69.2 | 67.8 |
-| 25% | 66.5 | 64.2 | 60.5 | 70.5 | 64.4 | 67.8 |
-| 50% | 66.1 | 64.1 | 60.5 | 68.5 | 59.2 | 67.8 |
-| 75% (71.9 / 75.0) | 64.8 | 62.8 | 60.5 | 63.5 | 52.2 | 67.8 |
-| 100% (81.0 / 91.9) | 63.4 | 61.5 | 60.5 | 53.2 | 47.0 | 67.8 |
+| honest (main experiment) | 76.6 | 74.6 | 69.2 | 74.0 | 69.2 | 67.8 |
+| 0% | 76.8 | 74.6 | 69.2 | 74.0 | 69.2 | 67.8 |
+| 25% | 75.3 | 74.3 | 69.2 | 70.3 | 64.0 | 67.8 |
+| 50% | 74.3 | 73.6 | 69.2 | 67.9 | 58.1 | 67.8 |
+| 75% (71.9 / 75.0) | 73.1 | 72.3 | 69.2 | 63.5 | 51.4 | 67.8 |
+| 100% (79.9 / 94.8) | 72.2 | 71.5 | 69.2 | 50.2 | 45.8 | 67.8 |
 
-The record gives misleading answers a lower estimate than honest ones (AUC 0.70-0.72 in-distribution, 0.79-0.89 OOD),
+The record gives misleading answers a lower estimate than honest ones (AUC 0.70-0.71 in-distribution, 0.77-0.86 OOD),
 without being told which answers are misleading. Full table: `outputs/tables/misleading.md`. The full report, with
-cases, the analysis of the datasets and a known defect in DeepSeek-Coder-V2-Lite's answers: `docs/reports/misleading_peers.md`.
+cases and the analysis of the datasets: `docs/reports/misleading_peers.md`.
 
 ## Reading the table
 

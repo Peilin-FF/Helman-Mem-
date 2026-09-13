@@ -32,12 +32,15 @@ Results of the stored arms (last checkpoints, whole streams):
 
 | model | indist6 tilt / peers / solo | ood6 tilt / peers / solo |
 |---|---|---|
-| frozen Qwen3-4B | 67.2 / 64.8 / 60.5 | 74.0 / 69.2 / 67.8 |
-| run3b_tilt | 75.9 / 75.1 / 73.4 | 75.2 / 72.5 / 70.7 |
-| ctrl3b_peers | 74.9 / 74.4 / 71.4 | 75.5 / 73.3 / 72.7 |
-| solo3b_q | 73.0 / 72.5 / 71.5 | 75.1 / 71.2 / 72.9 |
+| frozen Qwen3-4B | 76.6 / 74.6 / 69.2 | 74.0 / 69.2 / 67.8 |
+| run3b_tilt | 80.2 / 79.5 / 77.3 | 75.2 / 72.5 / 70.7 |
+| ctrl3b_peers | 79.7 / 79.4 / 75.8 | 75.5 / 73.3 / 72.7 |
+| solo3b_q | 79.0 / 78.5 / 76.5 | 75.1 / 71.2 / 72.9 |
 
 Caveats worth keeping in view:
+- Reading is graded by token-F1 ≥ 0.5 since 2026-09-14 (the streams' rule); the rows above are regraded under it. The
+  stored arms were trained with reading rewarded by exact match (`training/kalman_rl/reward.py` grades with the same
+  rule as the evaluation), so a run of this config rewards reading a little more generously than they were.
 - The stored arms were not trained from Qwen3-4B directly: each started from a 40-step checkpoint of an earlier run of
   the same arm (removed on 2026-09-13), with data seed 2. A run of this config starts from Qwen3-4B with data seed 1, so it
   is the recipe going forward and will not reproduce the stored numbers exactly.

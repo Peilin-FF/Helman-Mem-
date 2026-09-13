@@ -209,7 +209,9 @@ def _rag_target(text: str, record: dict[str, Any]) -> float:
 
 
 def _rag_correct(text: str, record: dict[str, Any]) -> bool:
-    return qa_exact_match(qa_extract_answer(text), _qa_gold_answers(record))
+    # The streams' rule, the same one the peers' labels carry: token-F1 >= 0.5 against the gold answer and its aliases.
+    # Until 2026-09-14 this was exact match, so the central model was held to a stricter rule than its peers.
+    return _rag_target(text, record) >= 0.5
 
 
 def _rag_prompt(record: dict[str, Any], with_context: bool) -> str:

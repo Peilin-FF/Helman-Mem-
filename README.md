@@ -36,11 +36,12 @@ is tilted while the record is still flat. This is exact reweighting, `softmax(s 
 `c_i = (p_i / max p)^γ`, so it applies to any softmax attention. It runs inside vLLM's Triton attention kernels at
 engine speed (`feedback_state/vllm_attn_bias.py`).
 
-Frozen Qwen3-4B, thinking off, on whole streams:
+Frozen Qwen3-4B, thinking off, on whole streams (answers graded by the streams' rules: exact match for math, token-F1
+≥ 0.5 for reading, the hidden tests for code, option match on the OOD tasks):
 
 | stream | peers + memory | peers | question only | record AUC |
 |---|---:|---:|---:|---:|
-| in-distribution (4,319 events) | 67.2 | 64.8 | 60.5 | 0.92 |
+| in-distribution (4,319 events) | 76.6 | 74.6 | 69.2 | 0.92 |
 | OOD (17,403 events) | 74.0 | 69.2 | 67.8 | 0.92 |
 
 ## Setup

@@ -20,7 +20,7 @@ Results (whole streams, thinking off, 768 new tokens, greedy):
 
 | stream | tilt | peers | solo | swap | record AUC / favourite right on mixed events |
 |---|---:|---:|---:|---:|---|
-| indist6 (4,319 events) | 67.2 | 64.8 | 60.5 | 60.0 | 0.92 / 91% |
+| indist6 (4,319 events) | 76.6 | 74.6 | 69.2 | 69.3 | 0.92 / 91% |
 | ood6 (17,403 events) | 74.0 | 69.2 | 67.8 | 64.2 | 0.92 / 83% |
 
 `swap` gives the record's estimates to the wrong peers (by rank); it falls below `peers`, so the gain of `tilt` comes from
@@ -41,6 +41,11 @@ Triton kernels, so `tilt − peers` also contains the (small) numerical differen
   prompt.
 - **Prompts.** The central model's system prompts are exactly those of the stored records. A sentence against long
   reasoning that was added on 2026-09-09 for thinking mode is no longer part of them.
-- **Evaluation.** Re-evaluating the stored indist6 record in the tilt condition gave 67.08 against the stored 67.19: the
-  same verdict on 4,288 of 4,319 events. vLLM's batched greedy decoding is not bit-deterministic, so expect differences of
+- **Grading.** Every answer is graded by its stream's rule, the central model's included: exact match for math, token-F1
+  ≥ 0.5 for reading, the hidden tests for code, option match on the OOD tasks. Until 2026-09-14 the central model's
+  reading answers were graded by exact match while the peers' labels used F1 ≥ 0.5; the stored evaluations were regraded
+  with `python -m pipeline.evaluate --regrade --output <dir>` (the generations are unchanged), which raised the
+  in-distribution rows by 8–10 points (tilt 67.2 → 76.6, peers 64.8 → 74.6, question only 60.5 → 69.2) and left OOD as it was.
+- **Evaluation.** Re-evaluating the stored indist6 record in the tilt condition gave 67.08 against the stored 67.19 (both
+  under the exact-match rule of the time): the same verdict on 4,288 of 4,319 events. vLLM's batched greedy decoding is not bit-deterministic, so expect differences of
   about 0.1 point between runs of the same condition; compare conditions within one run of an experiment where it matters.

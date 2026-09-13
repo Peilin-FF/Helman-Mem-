@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pipeline.config import shown
+from pipeline.config import REPO, shown
 
 CONDITION_KEYS = ("condition", "mode", "gamma", "swap_record", "bias_form", "max_new_tokens", "engine",
                   "central_model", "checkpoint", "record", "stream", "every", "max_examples")
@@ -37,6 +37,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--merge", action="store_true", help="join <output>/shard*/ into <output> and stop")
+    p.add_argument("--regrade", action="store_true", help="re-grade <output>/generations.jsonl with the current rules and rewrite its metrics; "
+                   "code rows keep their stored label (programs are not executed again)")
     p.add_argument("--model", help="the central model's directory (its tokenizer is always used)")
     p.add_argument("--checkpoint", type=Path, default=None, help="an HF checkpoint directory of a trained central model")
     p.add_argument("--record", type=Path, help="the record file of the stream (pipeline.record output)")
@@ -95,10 +97,51 @@ def merge(output: Path, windows: int) -> dict:
     return metrics
 
 
+def _stored_path(value: str | None) -> Path | None:
+    """A path as an older eval_metrics.json stored it: absolute (perhaps inside a job snapshot that is gone) or repo-relative."""
+    if not value:
+        return None
+    p = Path(value)
+    return p if p.is_absolute() and p.exists() else REPO / shown(value)
+
+
+def regrade(output: Path, stream: Path | None, windows: int) -> dict:
+    """Re-grade a stored evaluation (the rules changed, the generations did not); code rows keep their stored label."""
+    from feedback_state.data import JsonlDataset
+    from feedback_state.memory_generator import grade
+
+    meta = json.load(open(output / "eval_metrics.json"))
+    stream = stream or _stored_path(meta.get("stream"))
+    if stream is None or not stream.exists():
+        raise SystemExit(f"{output}: the stream is not known ({meta.get('stream')!r}); pass --stream")
+    records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(stream).records}
+    rows = [json.loads(l) for l in (output / "generations.jsonl").open()]
+    changed = 0
+    for r in rows:
+        if r["task_type"] == "code":
+            continue
+        ok = int(grade(records[str(r["id"])], r["generation"]))
+        changed += ok != int(r["correct"])
+        r["correct"] = ok
+    metrics = {k: meta.get(k) for k in CONDITION_KEYS}
+    if meta.get("shards"):
+        metrics["shards"] = meta["shards"]
+    metrics.update(summarise(rows, windows), regraded=time.strftime("%Y-%m-%d"), accuracy_before_regrade=meta.get("accuracy"))
+    with (output / "generations.jsonl").open("w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    (output / "eval_metrics.json").write_text(json.dumps(metrics, indent=1))
+    print(f"[evaluate] regraded {output}: {changed} of {len(rows)} verdicts changed, accuracy {100 * meta.get('accuracy', 0):.2f} -> {100 * metrics['accuracy']:.2f}", flush=True)
+    return metrics
+
+
 def main(argv=None) -> None:
     args = parse_args(argv)
     if args.merge:
         merge(args.output, args.windows)
+        return
+    if args.regrade:
+        regrade(args.output, args.stream, args.windows)
         return
     if not (args.model and args.record and args.stream):
         raise SystemExit("--model, --record and --stream are required (or --merge)")
