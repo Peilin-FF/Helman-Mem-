@@ -207,7 +207,7 @@ class ActorRolloutRefWorker(Worker):
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
         # override model kwargs
-        actor_model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=trust_remote_code, attn_implementation=self.config.model.get("attn_implementation", "flash_attention_2"))  # sigma: configurable
+        actor_model_config = AutoConfig.from_pretrained(local_path, trust_remote_code=trust_remote_code, attn_implementation=self.config.model.get("attn_implementation", "flash_attention_2"))  # kalman: configurable
                 
         # patch for kimi-vl
         if getattr(actor_model_config, "model_type", None) == "kimi_vl":
@@ -258,12 +258,12 @@ class ActorRolloutRefWorker(Worker):
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
 
-            if self.config.model.get("attn_bias", False):   # sigma: the memory's attention tilt through the additive mask (sdpa / eager, no rmpad)
+            if self.config.model.get("attn_bias", False):   # kalman: the memory's attention tilt through the additive mask (sdpa / eager, no rmpad)
                 assert not use_remove_padding, "actor_rollout_ref.model.attn_bias needs use_remove_padding=False (the flash varlen path has no mask)"
                 from feedback_state.attn_bias import install_hf_hooks
                 install_hf_hooks(actor_module)
                 if self.rank == 0:
-                    print(f"[sigma] attention-tilt hooks installed on the {role} model ({actor_model_config._attn_implementation})")
+                    print(f"[kalman] attention-tilt hooks installed on the {role} model ({actor_model_config._attn_implementation})")
 
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -891,7 +891,7 @@ class CriticWorker(Worker):
 
         from transformers import AutoConfig, AutoModelForTokenClassification
 
-        critic_model_config = AutoConfig.from_pretrained(local_path, attn_implementation=config.model.get("attn_implementation", "flash_attention_2"), trust_remote_code=config.model.get("trust_remote_code", False))  # sigma: configurable
+        critic_model_config = AutoConfig.from_pretrained(local_path, attn_implementation=config.model.get("attn_implementation", "flash_attention_2"), trust_remote_code=config.model.get("trust_remote_code", False))  # kalman: configurable
         critic_model_config.num_labels = 1
         # patch for kimi-vl
         if getattr(critic_model_config, "model_type", None) == "kimi_vl":

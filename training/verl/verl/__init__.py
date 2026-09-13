@@ -16,7 +16,7 @@ import logging
 import os
 
 from packaging.version import parse as parse_version
-from importlib.metadata import PackageNotFoundError as DistributionNotFound, version as _dist_version  # sigma: no pkg_resources
+from importlib.metadata import PackageNotFoundError as DistributionNotFound, version as _dist_version  # kalman: no pkg_resources
 
 from .protocol import DataProto
 from .utils.device import is_npu_available
@@ -47,7 +47,7 @@ if is_npu_available:
     package_name = 'transformers'
     required_version_spec = '4.51.0'
     try:
-        installed_version = _dist_version(package_name)  # sigma: no pkg_resources
+        installed_version = _dist_version(package_name)  # kalman: no pkg_resources
         installed = parse_version(installed_version)
         required = parse_version(required_version_spec)
 

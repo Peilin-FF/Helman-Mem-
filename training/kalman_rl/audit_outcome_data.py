@@ -18,8 +18,8 @@ from transformers import AutoTokenizer
 
 from feedback_state.memory_generator import render_prompt
 from feedback_state.tasks import task_type_of
-from training.sigma_rl.outcome_protocol import MAX_PROMPT_LENGTH, PROTOCOL, public_messages
-from training.sigma_rl.outcome_reward import verifier_record
+from training.kalman_rl.outcome_protocol import MAX_PROMPT_LENGTH, PROTOCOL, public_messages
+from training.kalman_rl.outcome_reward import verifier_record
 
 
 def audit(records: Path, tokenizer, *, max_length: int, chunk_size: int = 64) -> dict:

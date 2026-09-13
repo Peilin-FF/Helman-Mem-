@@ -196,7 +196,7 @@ class FSDPSFTTrainer:
                 local_model_path,
                 config=config,
                 torch_dtype=torch_dtype,
-                attn_implementation=self.config.model.get("attn_implementation", "flash_attention_2"),  # sigma: configurable
+                attn_implementation=self.config.model.get("attn_implementation", "flash_attention_2"),  # kalman: configurable
                 trust_remote_code=trust_remote_code,
             )
 

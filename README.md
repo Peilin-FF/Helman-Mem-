@@ -1,346 +1,144 @@
 <div align="center">
-<h2> Σ-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems
-</h2>
-</div>
-<div align="center">
+<h2>Kalman Mem: an online reliability record that steers a multi-agent central model</h2>
 
 [Peilin Feng](https://peilin-ff.github.io/),
 [Suorong Yang](https://suorongyang.github.io/)<sup>†</sup>,
 [Soujanya Poria](https://soujanyaporia.github.io/)<sup>†</sup>
 
 [DeCLaRe Lab](https://declare-lab.github.io/), Nanyang Technological University
-
-<div align="center">
-<!-- [![GitHub issues](https://img.shields.io/github/issues/opendatalab/FakeVLM?color=critical&label=Issues)](https://github.com/opendatalab/FakeVLM/issues)
-[![GitHub Stars](https://img.shields.io/github/stars/opendatalab/FakeVLM?style=social)](https://github.com/opendatalab/FakeVLM/stargazers) -->
-
-[![arXiv](https://img.shields.io/badge/Arxiv-2607.27958-AD1C18.svg?logo=arXiv)](https://arxiv.org/pdf/2607.27958)
-[![](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2Fopendatalab%2FFakeVLM&count_bg=%23C25AE6&title_bg=%23555555&icon=&icon_color=%23E7E7E7&title=Visitor&edge_flat=false)](https://hits.seeyoufarm.com)
-[![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-yellow)](https://huggingface.co/Sssunset/Sigma-Mem)
-[![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/Sssunset/Sigma-Mem-Data)
 </div>
 
-</div>
-This repository contains the official implementation, training and evaluation code, and released data for Σ-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems.
+A central model answers a stream of questions after reading the answers of several peer models. After each answer,
+every peer's answer is verified, so the system learns over time which peers to trust on which kind of question.
+**Kalman Mem** keeps that knowledge in an exact Bayesian record, and it hands the record to the central model
+without adding any text to the prompt. It tilts the model's attention toward the peers the record trusts.
 
+## The method
 
-## 📰 News
-- **[2026.09.11]**: 📦 Dataset version 3: the six-peer streams behind the reliability-memory experiments (`mixed_train_big6`, `indist6`, `ood6`) are in this repository under [`datasets/`](datasets/README.md) (`bash datasets/unpack.sh`).
-- **[2026.08.01]**: 🤗 We are excited to release the Sigma-Mem dataset. Check it out on [Hugging Face](https://huggingface.co/datasets/Sssunset/Sigma-Mem-Data).
-- **[2025.08.01]**: 🤗 We are excited to release the Sigma-Mem trained parameters. Check them out on [Hugging Face](https://huggingface.co/Sssunset/Sigma-Mem).
-- **[2025.9.27]**: 🔥 We have released **Σ-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems**. Check out the [paper](https://arxiv.org/pdf/2607.27958).
+For event *t* and peer *i*, the central model, frozen, reads the question and all the answers. Its hidden states
+give an address `x_{t,i}`: a PCA projection of the question features placed in peer *i*'s block, a projection of
+the features of peer *i*'s answer, and a constant.
 
+The record is the exact posterior of a linear-Gaussian model of signed correctness `s ∈ {−1, +1}`:
 
-## Σ-Mem Overview
+```
+Λ = λI + Σ x xᵀ,    b = Σ s x,    λ = 100
+read-out:   μ = xᵀ Λ⁻¹ b,   v = xᵀ Λ⁻¹ x,   p = Φ(μ / √(1 + v))
+```
 
-<div align="center">
-<img src="imgs/Method.png" alt="framework" width="95%" height="auto">
-</div>
+It runs along the stream **read before write**. The estimate `p_i` for every peer comes from earlier events only.
+Then the model answers, and only then are the event's verified labels written in, one Sherman–Morrison update per
+peer. Every stream starts cold.
 
-We introduce **$\Sigma$-Mem**, an online reliability memory for LLM-based multi-agent
-systems. $\Sigma$-Mem records two complementary signals: peer-specific **historical
-competence evidence**, which captures when each peer has been reliable, and
-**peer-relationship evidence**, which captures how peers tend to succeed or fail
-together. External correctness feedback updates the peer memory matrices
-$\{\mathbf{M}_p\}$ and relationship matrix $\mathbf{G}$ online. Their readouts can
-steer the frozen central model's response evaluation, route a task before peer answers
-are observed, or weight peer outputs without retraining the underlying models.
+The estimates enter as an **attention tilt**. Every attention score onto a token of peer *i*'s answer gets
+`γ · log(p_i / max_j p_j)` added, with γ = 3, in every layer and head. The favourite peer is untouched, and nothing
+is tilted while the record is still flat. This is exact reweighting, `softmax(s + b) = Norm(A ⊙ c)` with
+`c_i = (p_i / max p)^γ`, so it applies to any softmax attention. It runs inside vLLM's Triton attention kernels at
+engine speed (`feedback_state/vllm_attn_bias.py`).
 
-We evaluate $\Sigma$-Mem with five Qwen-family central models under counterfactual
-reliability shifts, unseen-peer settings, and OOD benchmarks beyond its training
-domains. The results show that the recorded reliability state supports more accurate
-and adaptive peer coordination across selection, routing, and weighted aggregation.
+Frozen Qwen3-4B, thinking off, on whole streams:
 
-## <img id="painting_icon" width="3%" src="https://cdn-icons-png.flaticon.com/256/2435/2435606.png"> Contributions
+| stream | peers + memory | peers | question only | record AUC |
+|---|---:|---:|---:|---:|
+| in-distribution (4,319 events) | 67.2 | 64.8 | 60.5 | 0.92 |
+| OOD (17,403 events) | 74.0 | 69.2 | 67.8 | 0.92 |
 
-- We propose **$\Sigma$-Mem**, an online reliability memory that records
-  peer-specific historical competence and peer-to-peer relationship evidence from
-  externally verified correctness feedback.
-- We represent both reliability states as real symmetric matrices with decayed,
-  bounded updates. This makes each update spectrally controlled while allowing
-  persistent, task-aligned evidence to accumulate over time.
-- Across five central models, $\Sigma$-Mem adapts to counterfactual reliability
-  shifts and generalizes to unseen peers and domains. The same memory supports
-  residual-steered peer selection, response-free routing, and reliability-weighted
-  voting without additional training.
-
-## Environment Setup
-Qwen3 and Qwen3.5 require different
-`transformers` versions, so use separate environments when evaluating both model
-families.
+## Setup
 
 ```bash
-# Qwen3
-conda create -n sigma3 python == 3.12
-conda activate sigma3
-pip install -r requirements_qwen3.txt
-
-# Qwen3.5
-conda create -n sigma3_5 python == 3.12
-conda activate sigma3_5
-pip install -r requirements_qwen3.5.txt
+git clone https://github.com/Peilin-FF/Helman-Mem-.git sigma-mem && cd sigma-mem
+conda create -n sigma python=3.12 && conda activate sigma
+pip install -r requirements_qwen3.txt          # torch 2.6.0 (CUDA 12.4), transformers 4.56.2, vLLM 0.8.5 (exact)
+bash datasets/unpack.sh                        # the six-peer streams -> data/
+pytest tests/unit                              # no GPU needed
 ```
 
-## 📝 Model Preparation
+vLLM must be exactly 0.8.5, because the attention kernels are patched from its source. Qwen3.5 models need
+transformers 5, so they use a second environment built from `requirements_qwen3.5.txt`. The drivers activate the
+conda environment named in `KALMAN_ENV`, which defaults to `sigma`.
 
-Download the open-source center models:
+Download the central model (`Qwen/Qwen3-4B`) and the six peers:
+
+| slot | peer |
+|---|---|
+| `peer_0` | `google/gemma-3-4b-it` |
+| `peer_1` | `microsoft/Phi-4-mini-instruct` |
+| `peer_2` | `Qwen/Qwen2.5-Coder-7B-Instruct` |
+| `peer_3` | `meta-llama/Llama-3.1-8B-Instruct` |
+| `peer_4` | `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` |
+| `peer_5` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B` |
+
+The peers' answers are already in the streams, graded. Peer models are needed only to generate new answers, for
+example the misleading ones.
+
+## Data
+
+| stream | events | tasks |
+|---|---:|---|
+| `data/mixed_train_big6/train.jsonl` | 17,709 | GSM8K, SQuAD, APPS |
+| `data/indist6/test.jsonl` | 4,319 | GSM8K test, SQuAD dev, APPS test |
+| `data/ood6/test.jsonl` | 17,403 | yes/no, multiple-choice and short-answer tasks never seen in training |
+
+Each event carries the question, the gold answer, the six peers' answers and their verified correctness. See
+`datasets/README.md`.
+
+## Running the pipeline
+
+The pipeline for the frozen Qwen3-4B has three steps. They are shown for the in-distribution stream on one GPU.
+For the OOD stream, use `ood6` and `data/ood6/test.jsonl`.
 
 ```bash
-cd sigma-mem
-mkdir -p models
+export PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 VLLM_ENABLE_V1_MULTIPROCESSING=0
+M=models/Qwen3-4B
 
-hf download Qwen/Qwen3-0.6B --local-dir models/Qwen3-0.6B
-hf download Qwen/Qwen3-4B --local-dir models/Qwen3-4B
-hf download Qwen/Qwen3-8B --local-dir models/Qwen3-8B
-hf download Qwen/Qwen3.5-4B --local-dir models/Qwen3.5-4B
-hf download Qwen/Qwen3.5-9B --local-dir models/Qwen3.5-9B
+# 1. addresses: the frozen model reads question + answers (also for train6, where the PCA is fit)
+python scripts/encode_context_features.py --input data/mixed_train_big6/train.jsonl \
+    --output outputs/context_features/q3_4b_big6_ph/train/shard0.pt --central-model $M \
+    --include-context --save-peer-hidden --num-peers 6 --max-length 8192 --dtype bfloat16
+python scripts/encode_context_features.py --input data/indist6/test.jsonl \
+    --output outputs/context_features/q3_4b_indist6_ph/ood/shard0.pt --central-model $M \
+    --include-context --save-peer-hidden --num-peers 6 --max-length 8192 --dtype bfloat16
+
+# 2. the record along the stream, read before write, and its quality against the labels
+python scripts/build_generation_prompts.py --model q3_4b --fit-stream train6 --stream indist6 \
+    --order shuffled0 --design qc --dim 256 --lam 100 --out outputs/gen/q3_4b/prompts_indist6_probe.jsonl
+python scripts/record_quality.py --prompts outputs/gen/q3_4b/prompts_indist6_probe.jsonl \
+    --out outputs/gen/q3_4b/record_indist6.json
+
+# 3. the central model answers: peers + memory (tilt), peers alone, question alone
+for cond in "tilt:--mode peers --attn_gamma 3" "peers:--mode peers" "solo:--mode solo"; do
+  python -m tests.experiments.common.evaluate_memory_generator --central_model $M --engine vllm \
+      --thinking off --max_new_tokens 768 --prompts outputs/gen/q3_4b/prompts_indist6_probe.jsonl \
+      --records data/indist6/test.jsonl ${cond#*:} --output outputs/gen/q3_4b/indist6_${cond%%:*}
+done
 ```
 
-Download all five peer models. The standard three-peer experiments use peers 1--3;
-the peer generalization experiments additionally use peers 4 and 5.
+Encoding shards over GPUs with `--num-shards N --shard-index k`. Each evaluation writes `eval_metrics.json` and
+`generations.jsonl`.
 
-<!-- | Peer | Hugging Face repository | Local directory |
-| --- | --- | --- |
-| Peer 1 (`peer_0`) | `google/gemma-3-4b-it` | `models/gemma-3-4b-it` |
-| Peer 2 (`peer_1`) | `microsoft/Phi-4-mini-instruct` | `models/Phi-4-mini-instruct` |
-| Peer 3 (`peer_2`) | `Qwen/Qwen2.5-Coder-7B-Instruct` | `models/Qwen2.5-Coder-7B-Instruct` |
-| Peer 4 (`peer_3`) | `meta-llama/Llama-3.2-3B-Instruct` | `models/Llama-3.2-3B-Instruct` |
-| Peer 5 (`peer_4`) | `openbmb/BitCPM-CANN-3B` | `models/BitCPM-CANN-3B` | -->
+Three experiments have their own driver and guide, and each one is resumable across 8 GPUs:
 
-```bash
-hf download google/gemma-3-4b-it \
-  --local-dir models/gemma-3-4b-it
-hf download microsoft/Phi-4-mini-instruct \
-  --local-dir models/Phi-4-mini-instruct
-hf download Qwen/Qwen2.5-Coder-7B-Instruct \
-  --local-dir models/Qwen2.5-Coder-7B-Instruct
-hf download meta-llama/Llama-3.2-3B-Instruct \
-  --local-dir models/Llama-3.2-3B-Instruct
-hf download openbmb/BitCPM-CANN-3B \
-  --local-dir models/BitCPM-CANN-3B
+| guide | what it runs |
+|---|---|
+| [`README_families.md`](README_families.md) | The same pipeline with other central models (Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4, Qwen3.5-9B), each with its own record: `bash run_families.sh` |
+| [`README_misleading_peers.md`](README_misleading_peers.md) | Generating misleading but relevant peer answers, and building streams at a chosen ratio (a share of each peer's answers, or a number of misleading peers per question) |
+| [`README_adversarial.md`](README_adversarial.md) | The whole pipeline on those streams, against the honest rows: `bash run_adversarial.sh` |
+| [`training/README.md`](training/README.md) | Multi-GPU GRPO / SFT of the central model with the record and the tilt (vendored verl, `training/kalman_rl`) |
+
+## Repository layout
+
 ```
-After downloading the open-source model weights, download
-the trained Sigma-Mem parameters:
-
-```bash
-hf download Sssunset/Sigma-Mem --local-dir models/Sigma-Mem
+feedback_state/      the method: kalman_memory.py (the record), addresses.py, memory_runtime.py,
+                     attn_bias.py + vllm_attn_bias.py (the tilt), memory_generator.py (prompts, grading),
+                     tasks.py (task registry and graders), feature_streams.py, adversarial.py
+scripts/             encoding, record, tables, drivers (run_families.py, run_adversarial.py), analyses
+tests/               experiments/common/evaluate_memory_generator.py (the evaluator), unit/ (pytest)
+training/            kalman_rl/ (our trainer code), verl/ (vendored, patched), configs/, scripts/
+data/builders/       stream construction and code grading (common/, mixed_train/)
+datasets/            the six-peer streams, compressed
+docs/                memory_judge_design.md (the design log), kalman_mem_notion.md (the method in detail)
 ```
 
-The resulting directory layout is:
-
-```text
-models/
-├── Qwen3-0.6B/
-├── Qwen3-4B/
-├── Qwen3-8B/
-├── Qwen3.5-4B/
-├── Qwen3.5-9B/
-├── gemma-3-4b-it/
-├── Phi-4-mini-instruct/
-├── Qwen2.5-Coder-7B-Instruct/
-├── Llama-3.2-3B-Instruct/
-├── BitCPM-CANN-3B/
-└── Sigma-Mem/
-    ├── Qwen3-0.6B/
-    ├── Qwen3-4B/
-    ├── Qwen3-8B/
-    ├── Qwen3.5-4B/
-    └── Qwen3.5-9B/
-```
-
-The checked-in configs and experiment profiles load these paths directly. The
-Sigma-Mem download contains only the learned memory/projection parameters and does
-not duplicate or modify the center-model weights.
-
-## 📦 Data Preparation
-
-Download the training and evaluation dataset into `data/`:
-
-```bash
-hf download Sssunset/Sigma-Mem-Data \
-  --repo-type dataset \
-  --local-dir data
-```
-
-### Dataset Card
-
-The dataset is organized into five data directories. For the
-counterfactual groups, the event number below applies to each of the four CF streams.
-
-| Directory | Events | Peers | Description |
-| --- | ---: | ---: | --- |
-| `mixed_train` | 2,963 | 3 | Offline training stream from GSM8K, SQuAD, and APPS |
-| `counterfactual_3peer` | 2,685 | 3 | CF@0, CF@50, CF@70, and CF@90 evaluation streams |
-| `counterfactual_4peer` | 2,685 | 4 | CF streams extended with Llama-3.2-3B-Instruct |
-| `counterfactual_5peer` | 2,685 | 5 | CF streams further extended with BitCPM-CANN-3B |
-| `ood` | 17,403 | 3 | OOD evaluation stream over six benchmarks |
-| `mixed_train_big6` | 17,709 | 6 | Six-peer training stream from GSM8K, SQuAD, and APPS (version 3, in `datasets/`) |
-| `indist6` | 4,319 | 6 | Six-peer in-distribution test stream: GSM8K test, SQuAD dev, APPS test (version 3, in `datasets/`) |
-| `ood6` | 17,403 | 6 | Six-peer OOD stream over the same six benchmarks (version 3, in `datasets/`) |
-
-After downloading, the files used by the default configs and evaluation commands are:
-
-```text
-data/
-  mixed_train/train.jsonl
-  counterfactual_3peer/cf_{0,50,70,90}.jsonl
-  counterfactual_4peer/cf_{0,50,70,90}.jsonl
-  counterfactual_5peer/cf_{0,50,70,90}.jsonl
-  ood/test.jsonl
-```
-
-The six-peer streams (version 3, 2026-09) ship in this repository: `bash datasets/unpack.sh` restores
-`data/mixed_train_big6/train.jsonl`, `data/indist6/test.jsonl` and `data/ood6/test.jsonl` from `datasets/*.jsonl.gz`
-(see `datasets/README.md`). They keep `peer_0`–`peer_2` and add `peer_3` `meta-llama/Llama-3.1-8B-Instruct`,
-`peer_4` `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` and `peer_5` `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B`
-(the answer after its think block). They are the data behind `docs/memory_judge_design.md` sections 19–23 and
-`README_families.md`; the record is run along `indist6` and `ood6` read-before-write, `mixed_train_big6` fits the addresses.
-
-## 🚀 Evaluation
-
-### Base, Sigma-Mem, and joint G
-
-`tests.experiments.common.evaluate_sigma` is the shared evaluator. The three main
-arms differ only in the indicated flags. The following example evaluates one CF
-stream; replace `DATA` with the OOD stream to run the same methods OOD.
-
-```bash
-MODEL=models/Qwen3-0.6B
-CKPT=models/Sigma-Mem/Qwen3-0.6B
-DATA=data/counterfactual_3peer/cf_50.jsonl
-
-COMMON_ARGS=(
-  --config configs/symmetric_memory_candidate_yesno.yaml
-  --central_model "$MODEL"
-  --offline_data "$DATA"
-  --max_length 8192
-)
-
-# Base: central model evaluation without memory steering.
-python -m tests.experiments.common.evaluate_sigma \
-  "${COMMON_ARGS[@]}" \
-  --ablate_memory \
-  --output outputs/example/base
-
-# Sigma-Mem without G.
-python -m tests.experiments.common.evaluate_sigma \
-  "${COMMON_ARGS[@]}" \
-  --checkpoint "$CKPT" \
-  --graph_posterior off \
-  --output outputs/example/sigma
-
-# Sigma-Mem with joint G.
-python -m tests.experiments.common.evaluate_sigma \
-  "${COMMON_ARGS[@]}" \
-  --checkpoint "$CKPT" \
-  --graph_posterior ising \
-  --output outputs/example/sigma_joint_g
-```
-
-Each output directory contains:
-
-- `eval_metrics.json`: accuracy, run settings, feedback metadata, and peer-selection totals.
-- `selections.jsonl`: selected peer, per-peer scores, correctness, and feedback status for every event.
-
-To run Sigma-Mem without G over all four CF ratios:
-
-```bash
-TAG=q3_0.6b \
-MODEL=models/Qwen3-0.6B \
-GPU=0 \
-bash tests/experiments/counterfactual/run_sigma.sh
-```
-
-Override `CKPT`, `TEST_DIR`, `EVAL_ROOT`, or `LOG_ROOT` when using different paths.
-Use the shared evaluator above for the Base and joint-G arms.
-
-### Direct M readout and Beta B1 on CF streams
-
-M-Route derives reliability from the question and current `M` state without reading
-the peer answers. The Beta B1 baseline is model-independent.
-
-```bash
-python -m tests.experiments.counterfactual.m_route \
-  --profile q3_4b \
-  --data-dir data/counterfactual_3peer
-
-python -m tests.experiments.counterfactual.beta_b1 \
-  --warm-data data/mixed_train/train.jsonl \
-  --cf-dir data/counterfactual_3peer
-```
-
-M-Route writes `outputs/cf_memory_routing/<profile>/summary.json` by default. Beta
-B1 writes `outputs/cf_beta_b1/summary.json`.
-
-### OOD routing and voting
-
-Run the shared evaluator above with the OOD JSONL to obtain Base and full Sigma-Mem
-results. The following diagnostic computes Majority, M-Route, and M-Vote. It uses the
-center model only to encode the current question into `phi`; no peer response enters
-the routing readout.
-
-```bash
-python -m tests.experiments.selection_mechanisms.m_route_vote \
-  --profile q3_4b \
-  --offline-data data/ood/test.jsonl
-```
-
-Available profiles are `q3_0_6b`, `q3_4b`, `q3_8b`, `q35_4b`, and `q35_9b`.
-Each run writes `summary.json`, `records.jsonl`, `phis.npy`, and
-`phi_manifest.json` under the profile's configured `routing_output`.
-
-### Feedback availability
-
-The feedback ablation uses Qwen3.5-4B and Qwen3.5-9B at 5%, 10%, 20%, 50%, 80%,
-and 100% feedback with three seeds. First create the OOD phi caches for both models:
-
-```bash
-python -m tests.experiments.selection_mechanisms.m_route_vote --profile q35_4b
-python -m tests.experiments.selection_mechanisms.m_route_vote --profile q35_9b
-```
-
-Then run the direct-M replay, generate the Sigma score streams, and summarize the
-joint-G replay:
-
-```bash
-python -m tests.experiments.feedback_availability.m_route_vote
-
-python -m tests.experiments.feedback_availability.run_sigma \
-  --python "$(command -v python)" \
-  --gpus 0 1
-
-python -m tests.experiments.feedback_availability.summarize_sigma
-```
-
-The direct-M summary is written to `outputs/ood_feedback_sparsity/summary.json`.
-The combined Sigma-Mem summary is written to
-`outputs/ood_sigma_feedback_sparsity/summary.json`.
-
-### Generalization to more peers
-
-The four-/five-peer scheduler evaluates Base and Sigma-Mem with the runtime state
-resized to the requested peer count:
-
-```bash
-GPUS="0 1 2 3" \
-PY_SIGMA="$(command -v python)" \
-PY_SIGMA35=/path/to/qwen35/environment/bin/python \
-bash tests/experiments/peer_generalization/run_sigma.sh
-```
-
-Use `PEER_COUNTS="4"` or `SPLITS="cf_0 cf_90"` to run a subset. The scheduler skips
-completed outputs containing `eval_metrics.json`.
-
-## ❤️ Citation
-If you find our work is useful, please kindly cite:
-```bash
-@misc{feng2026sigmamemonlinereliabilitymemory,
-      title={$\Sigma$-Mem: An Online Reliability Memory for LLM-based Multi-Agent Systems}, 
-      author={Peilin Feng and Suorong Yang and Soujanya Poria},
-      year={2026},
-      eprint={2607.27958},
-      archivePrefix={arXiv},
-      primaryClass={cs.MA},
-      url={https://arxiv.org/abs/2607.27958}, 
-}
-```
+The earlier Σ-Mem method is no longer in this repository. It used symmetric memory matrices with joint G,
+M-Route and M-Vote, and counterfactual, peer-generalization and feedback-availability experiments. Its code is at
+the git tag `sigma-mem-final`.

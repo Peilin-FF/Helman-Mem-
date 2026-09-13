@@ -1,4 +1,4 @@
-"""JSONL dataset loading for Sigma-Mem training and evaluation."""
+"""JSONL dataset loading for Kalman Mem training and evaluation."""
 from __future__ import annotations
 
 import json

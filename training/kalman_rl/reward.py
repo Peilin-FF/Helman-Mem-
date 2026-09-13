@@ -2,7 +2,7 @@
 
 compute_score        the task verifier (math_equal / QA match / sandboxed code tests) when the prompt is
                      verified, the memory's reliability-weighted peer vote when it is not
-SigmaRewardManager   verl reward manager that grades a batch in parallel and returns per-sample
+KalmanRewardManager   verl reward manager that grades a batch in parallel and returns per-sample
                      extras (acc, verified, pseudo) for logging and validation metrics
 """
 from __future__ import annotations
@@ -85,7 +85,7 @@ def compute_score(data_source: str, solution_str: str, ground_truth, extra_info=
     return {"score": float(pr) if pr is not None else 0.0, "acc": acc, "verified": 0.0, "pseudo": 1.0 if pr is not None else 0.0}
 
 
-class SigmaRewardManager:
+class KalmanRewardManager:
     """Same contract as verl's NaiveRewardManager, graded with a thread pool (code tests run in
     sandboxed subprocesses, so threads give real parallelism)."""
 

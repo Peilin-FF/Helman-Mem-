@@ -2,7 +2,7 @@
 
 Never use hint selection, weighted votes, peer correctness or teacher targets.
 Verifier/data failures stop the batch; they are not fabricated incorrect answers.
-The legacy SigmaRewardManager remains available for OLD experiment configs.
+The legacy KalmanRewardManager remains available for OLD experiment configs.
 """
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ import torch
 
 from feedback_state.memory_generator import grade
 from feedback_state.tasks import code_extract_answer, get_task, task_type_of
-from training.sigma_rl.outcome_protocol import PROTOCOL
-from training.sigma_rl.reward import SigmaRewardManager, stdin_to_devnull
+from training.kalman_rl.outcome_protocol import PROTOCOL
+from training.kalman_rl.reward import KalmanRewardManager, stdin_to_devnull
 
 REFERENCE_KEYS = frozenset({
     "task_type", "problem", "question", "answer", "answer_aliases", "aliases",
@@ -89,8 +89,8 @@ def _score_in_code_worker(job: dict) -> dict:
     return compute_center_score(**job)
 
 
-class OutcomeRewardManager(SigmaRewardManager):
-    """Same DataProto interface as SigmaRewardManager, with strict outcome semantics.
+class OutcomeRewardManager(KalmanRewardManager):
+    """Same DataProto interface as KalmanRewardManager, with strict outcome semantics.
 
     Non-code verifiers run in a thread pool; code uses isolated Ray tasks like
     the repository's existing parallel trainer. Those tasks invoke the EXISTING

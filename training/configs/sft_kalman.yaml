@@ -18,8 +18,8 @@ data:
   balance_dp_token: False
   chat_template: null
   custom_cls:
-    path: null                # set by training/scripts/train_sft.sh to training/sigma_rl/dataset.py
-    name: SigmaSFTDataset
+    path: null                # set by training/scripts/train_sft.sh to training/kalman_rl/dataset.py
+    name: KalmanSFTDataset
   use_shm: False
 model:
   partial_pretrain: /mnt/data/peilin/HF_MODEL/Qwen3-4B

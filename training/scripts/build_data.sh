@@ -23,11 +23,11 @@ TRAIN_PROMPTS="${TRAIN_PROMPTS:-outputs/gen/$TAG/prompts_train_fixed.jsonl}"
 VAL_PROMPTS="${VAL_PROMPTS:-outputs/gen/$TAG/prompts_indist_shuffled0.jsonl}"
 mkdir -p "$OUT"
 for guided in memory hint_memory peers hint_label hint_random peers_labeled none; do
-  python -m training.sigma_rl.build_rl_data --prompts "$TRAIN_PROMPTS" --records data/mixed_train_big/train.jsonl \
+  python -m training.kalman_rl.build_rl_data --prompts "$TRAIN_PROMPTS" --records data/mixed_train_big/train.jsonl \
       --out "$OUT/train_$guided.parquet" --guided "$guided" "$@"
 done
-python -m training.sigma_rl.build_rl_data --prompts "$TRAIN_PROMPTS" --records data/mixed_train_big/train.jsonl \
+python -m training.kalman_rl.build_rl_data --prompts "$TRAIN_PROMPTS" --records data/mixed_train_big/train.jsonl \
     --out "$OUT/train_v30_memory.parquet" --guided memory --verified_fraction 0.3 "$@"
-python -m training.sigma_rl.build_rl_data --prompts "$VAL_PROMPTS" --records data/indist/test.jsonl \
+python -m training.kalman_rl.build_rl_data --prompts "$VAL_PROMPTS" --records data/indist/test.jsonl \
     --out "$OUT/val_indist.parquet" --guided none --every 8 --limit 512
 ls -la "$OUT"

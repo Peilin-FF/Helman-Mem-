@@ -26,7 +26,7 @@ bash datasets/unpack.sh                        # the six-peer streams ship in th
 Then point `models_root` in `training/configs/families.yaml` at the directory that holds the downloaded models
 (`Meta-Llama-3.1-8B-Instruct`, `Ministral-8B-Instruct-2410`, `Qwen2.5-7B-Instruct`, `phi-4`, one sub-directory each;
 or write absolute paths per model), run the smoke command above, then `bash run_families.sh`. Eight A100-80GB (or
-similar) GPUs; the driver uses every GPU listed under `gpus`. `SIGMA_ENV=<name>` if the conda env is not called `sigma`.
+similar) GPUs; the driver uses every GPU listed under `gpus`. `KALMAN_ENV=<name>` if the conda env is not called `sigma`.
 
 ## The pipeline
 

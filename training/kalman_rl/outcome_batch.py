@@ -16,7 +16,7 @@ from verl import DataProto
 from verl.trainer.ppo.core_algos import compute_grpo_outcome_advantage
 from verl.utils.model import compute_position_id_with_mask
 
-from training.sigma_rl.outcome_protocol import MAX_PROMPT_LENGTH, PolicyObservation, checked_prompt_ids
+from training.kalman_rl.outcome_protocol import MAX_PROMPT_LENGTH, PolicyObservation, checked_prompt_ids
 
 POLICY_TENSORS = ("input_ids", "attention_mask", "position_ids", "peer_evidence", "peer_mask")
 

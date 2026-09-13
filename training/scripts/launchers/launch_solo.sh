@@ -19,8 +19,8 @@ tests () {
   wait
 }
 echo "=== data: question-only training and validation streams (same events as full_peers / val_peers): $(date)"
-[ -f $D/full_solo.parquet ] || python -m training.sigma_rl.build_rl_data --prompts $P/prompts_train6_fixed.jsonl --records data/mixed_train_big6/train.jsonl --out $D/full_solo.parquet --guided none --prompt_source solo 2>&1 | grep -i 'build-rl-data\|rows\|error' | tail -3
-[ -f $D/val_solo.parquet ] || python -m training.sigma_rl.build_rl_data --prompts $P/prompts_indist6_shuffled0.jsonl --records data/indist6/test.jsonl --out $D/val_solo.parquet --guided none --prompt_source solo --every 8 --limit 512 2>&1 | grep -i 'build-rl-data\|rows\|error' | tail -3
+[ -f $D/full_solo.parquet ] || python -m training.kalman_rl.build_rl_data --prompts $P/prompts_train6_fixed.jsonl --records data/mixed_train_big6/train.jsonl --out $D/full_solo.parquet --guided none --prompt_source solo 2>&1 | grep -i 'build-rl-data\|rows\|error' | tail -3
+[ -f $D/val_solo.parquet ] || python -m training.kalman_rl.build_rl_data --prompts $P/prompts_indist6_shuffled0.jsonl --records data/indist6/test.jsonl --out $D/val_solo.parquet --guided none --prompt_source solo --every 8 --limit 512 2>&1 | grep -i 'build-rl-data\|rows\|error' | tail -3
 python - <<PY
 import pandas as pd
 for f in ["$D/full_solo.parquet", "$D/val_solo.parquet", "$D/full_peers.parquet"]:

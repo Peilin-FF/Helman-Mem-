@@ -63,7 +63,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             assert "tokenizer" in kwargs, "tokenizer or processor must be provided"
             warnings.warn("`tokenizer` is deprecated. use `processing_class` instead.", DeprecationWarning, stacklevel=2)
             processing_class = kwargs.pop("tokenizer")
-        # sigma: contents may be a subset (e.g. ['hf_model'] only); shards are written only when requested
+        # kalman: contents may be a subset (e.g. ['hf_model'] only); shards are written only when requested
         assert checkpoint_contents is not None and len(checkpoint_contents) > 0, f"checkpoint_contents must be a non-empty list, got {checkpoint_contents}"
 
         super().__init__(
@@ -178,7 +178,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 optim_path = os.path.join(local_path, f"optim_world_size_{self.world_size}_rank_{self.rank}.pt")
                 extra_path = os.path.join(local_path, f"extra_state_world_size_{self.world_size}_rank_{self.rank}.pt")
 
-                # sigma: honour checkpoint.contents; the fp32 model + optimizer shards (~63 GB for a 4B model) are only written when asked for
+                # kalman: honour checkpoint.contents; the fp32 model + optimizer shards (~63 GB for a 4B model) are only written when asked for
                 if "model" in self.checkpoint_contents:
                     print(f"[rank-{self.rank}]: Saving model to {os.path.abspath(model_path)}")
                     torch.save(model_state_dict, model_path)

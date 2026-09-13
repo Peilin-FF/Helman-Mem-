@@ -13,7 +13,7 @@ places, both pure functions of (record, prompt row, generated text):
             answers replaces the verifier reward.
 
 Shared by the single-GPU trainer (feedback_state.train_rlvr) and the multi-GPU stack
-(training/sigma_rl).
+(training/kalman_rl).
 """
 from __future__ import annotations
 

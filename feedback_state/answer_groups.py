@@ -4,7 +4,7 @@ Reliability-weighted voting (Nitzan-Paroush) needs to know which candidates
 agree.  Agreement is defined per task type with the repository's own graders so
 that a vote never uses information the evaluator does not have:
 
-* mcqa / boolqa / shortqa: the frozen OOD canonicalisation of ``ood_routing``;
+* mcqa / boolqa / shortqa: the frozen OOD canonicalisation (``canonical_answer`` below);
 * math: pairwise ``math_equal`` on the extracted final answers;
 * rag: SQuAD-normalised extracted short answers;
 * code: no agreement is measurable (every program is its own group).
@@ -13,11 +13,64 @@ Correctness labels are never consulted here.
 """
 from __future__ import annotations
 
-from typing import Any, Sequence
+import re
+from typing import Any, Mapping, Sequence
 
-from feedback_state.ood_routing import INVALID_ANSWER, canonical_answer
-from feedback_state.tasks import _normalize_qa, qa_extract_answer, task_type_of
+from feedback_state.tasks import (
+    _mcqa_pred_label,
+    _normalise_label,
+    _normalize_bool_label,
+    _normalize_qa,
+    _shortqa_norm,
+    boolqa_extract_answer,
+    qa_extract_answer,
+    shortqa_extract_answer,
+    task_type_of,
+)
 from feedback_state.utils import extract_final_answer, math_equal
+
+INVALID_ANSWER = "<invalid>"
+
+
+def _shortqa_declared_labels(record: Mapping[str, Any]) -> list[str]:
+    """Read BBH-style option labels without applying QA article removal.
+
+    The historical short-answer normalizer maps the standalone label ``A`` to an
+    empty string because it removes English articles.  Grouping still needs ``(A)``
+    to be the same option as ``A``.
+    """
+    labels = record.get("choice_labels") or []
+    if labels:
+        return [_normalise_label(label) for label in labels]
+    problem = str(record.get("problem", ""))
+    found = re.findall(r"\(([A-Z0-9])\)", problem)
+    return list(dict.fromkeys(_normalise_label(label) for label in found))
+
+
+def _shortqa_option_label(record: Mapping[str, Any], answer: Any) -> str:
+    raw = str(answer or "").strip().strip("`").strip().rstrip(".").strip()
+    match = re.fullmatch(r"\(?\s*([A-Za-z0-9]+)\s*\)?", raw)
+    if not match:
+        return ""
+    candidate = _normalise_label(match.group(1))
+    return f"opt:{candidate}" if candidate in _shortqa_declared_labels(record) else ""
+
+
+def canonical_answer(record: Mapping[str, Any], answer: Any) -> str:
+    """The task-aware canonical answer label of a response; unparsable responses map to INVALID_ANSWER."""
+    rec = dict(record)
+    task_type = task_type_of(rec)
+    text = str(answer or "")
+    if task_type == "mcqa":
+        value = _normalise_label(_mcqa_pred_label(text, rec))
+    elif task_type == "boolqa":
+        value = _normalize_bool_label(boolqa_extract_answer(text))
+    elif task_type == "shortqa":
+        extracted = shortqa_extract_answer(text)
+        value = _shortqa_option_label(rec, extracted) or _shortqa_norm(extracted)
+    else:
+        raise ValueError(f"canonical answers exist for mcqa, boolqa and shortqa records; got task_type={task_type!r}")
+    return value or INVALID_ANSWER
 
 
 def answer_groups(record: dict[str, Any], texts: Sequence[str]) -> list[int]:

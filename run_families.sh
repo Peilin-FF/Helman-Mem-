@@ -10,8 +10,8 @@
 # Results: outputs/gen/families/table.md (python scripts/families_table.py --by_task re-prints it).
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
-# environment: the conda env named in $SIGMA_ENV (default sigma; requirements_qwen3.txt / requirements_families_freeze.txt)
-ENV=${SIGMA_ENV:-sigma}
+# environment: the conda env named in $KALMAN_ENV (default sigma; requirements_qwen3.txt / requirements_families_freeze.txt)
+ENV=${KALMAN_ENV:-sigma}
 if [ "${CONDA_DEFAULT_ENV:-}" != "$ENV" ] && command -v conda > /dev/null 2>&1; then
   eval "$(conda shell.bash hook)" && conda activate "$ENV" || echo "could not activate conda env $ENV; using the current python: $(command -v python)"
 fi

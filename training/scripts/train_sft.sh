@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Multi-GPU full-parameter SFT (torchrun + FSDP) on a parquet built by training/sigma_rl/build_sft_data.py.
+# Multi-GPU full-parameter SFT (torchrun + FSDP) on a parquet built by training/kalman_rl/build_sft_data.py.
 #   rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_sft_hinted_memory TRAIN=outputs/rl/data/q3_4b/sft_hinted_memory.parquet bash training/scripts/train_sft.sh'
 # Hydra overrides may follow, e.g.  optim.lr=3e-6 trainer.total_epochs=2 data.max_length=6144
 set -euo pipefail
@@ -21,11 +21,11 @@ mkdir -p "$OUT"
 echo "[train_sft] exp=$EXP gpus=$GPUS model=$MODEL train=$TRAIN out=$OUT extra=$*"
 torchrun --standalone --nnodes=1 --nproc_per_node="$NGPU" --master_port="$PORT" \
   -m verl.trainer.fsdp_sft_trainer \
-  --config-path="$ROOT/training/configs" --config-name=sft_sigma \
+  --config-path="$ROOT/training/configs" --config-name=sft_kalman \
   data.train_files="$TRAIN" \
   data.val_files="$VAL" \
-  data.custom_cls.path="$ROOT/training/sigma_rl/dataset.py" \
-  data.custom_cls.name=SigmaSFTDataset \
+  data.custom_cls.path="$ROOT/training/kalman_rl/dataset.py" \
+  data.custom_cls.name=KalmanSFTDataset \
   model.partial_pretrain="$MODEL" \
   trainer.experiment_name="$EXP" \
   trainer.default_local_dir="$OUT" \

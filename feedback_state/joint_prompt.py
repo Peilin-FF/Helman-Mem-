@@ -1,4 +1,4 @@
-"""Pure prompt helpers for Sigma-Mem candidate judging and feedback records."""
+"""Pure prompt helpers for Kalman Mem candidate judging and feedback records."""
 from __future__ import annotations
 
 from typing import Sequence

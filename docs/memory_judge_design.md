@@ -1,4 +1,10 @@
-# Σ-Mem v2: a Kalman competence memory and a judge trained to read it
+# Kalman Mem: design notes and research log
+
+> **Repository note (2026-09-13).** The Σ-Mem method (symmetric memory matrices, joint G, M-Route / M-Vote, the
+> counterfactual, peer-generalization and feedback-availability experiments) and the selection judge of sections 2-15
+> (`memory_judge.py`, `train_memory_judge.py`, `evaluate_memory_judge.py`) were removed from the repository; only the
+> Kalman Mem method remains. Sections below are a dated research log and still name those files. The removed code is
+> at the git tag `sigma-mem-final`.
 
 Status: design + first measurements (2026-09-04). Code: `feedback_state/kalman_memory.py`,
 `feedback_state/kernel_memory.py`, `feedback_state/addresses.py`, `feedback_state/memory_runtime.py`,
@@ -627,7 +633,7 @@ answer, so the cost of annotation is replaced by the feedback loop, and the memo
 usable — it turns past post-hoc labels into a prior over which present, unlabeled solutions to trust.
 
 **Implementation** (`training/`, verl 0.3.1 from the ARPO repository, plain GRPO — group-mean baseline, PPO
-clip 0.2, no critic, no KL, full parameters — with one mechanism on top, `training/sigma_rl/trainer.py`):
+clip 0.2, no critic, no KL, full parameters — with one mechanism on top, `training/kalman_rl/trainer.py`):
 
 - The stream is visited in order (`data.shuffle: False`); the prompt file carries the memory's estimate for every
   peer at every event, computed by the exact recursion of §3 from the labels of earlier events only.
@@ -670,7 +676,7 @@ the many-threaded trainer actor it can hang before exec). Qwen3.5-4B cannot use 
 supports it (torch 2.8+) is installed in a separate env.
 
 **Addendum (review of the contributed strict layer).** A second implementation of the protocol was added to
-`training/sigma_rl/` (`outcome_protocol`, `outcome_batch`, `outcome_reward`, `audit_outcome_data`). It is label-private by construction — public prompts without reliability notes, a live episode wrapper
+`training/kalman_rl/` (`outcome_protocol`, `outcome_batch`, `outcome_reward`, `audit_outcome_data`). It is label-private by construction — public prompts without reliability notes, a live episode wrapper
 around `MemoryRuntime` that grades before it writes, a reward manager that refuses pseudo-rewards — but its
 trajectory guards require the rollout to return the memory as a tensor (`peer_evidence`), which no backend does, so
 it is a contract for a future tensor-memory path rather than a trainer. Its prohibitions of memory notes as text,
@@ -1053,7 +1059,7 @@ Spearman with correctness +0.14 / +0.18. The record: AUC 0.92, favourite right 9
 frozen model's content-only judgement is about a third of the way from chance to the record.
 
 Method A implementation (2026-09-11): `feedback_state/verdict.py` (instruction, parser, strip, agreement
-= 0.5(1 + Spearman) with tie-aware ranks), `training/sigma_rl/reward.py` (SigmaRewardManager adds
+= 0.5(1 + Spearman) with tie-aware ranks), `training/kalman_rl/reward.py` (KalmanRewardManager adds
 lambda * agreement on non-flat records, strips the line before grading; knobs memory.verdict_lambda /
 verdict_flat), `build_rl_data.py --verdict` (appends the instruction to peers prompts; question-only
 prompts untouched), `evaluate_memory_generator.py --verdict` (asks, strips, and reports verdict AUC vs

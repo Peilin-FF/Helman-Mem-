@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 : "${GPUS:?set GPUS=<comma-separated device ids> (check rproj gpu first)}"
 : "${EXP:?set EXP=<experiment name>}"
-: "${TRAIN:?set TRAIN=<train parquet from training/sigma_rl/build_rl_data.py>}"
+: "${TRAIN:?set TRAIN=<train parquet from training/kalman_rl/build_rl_data.py>}"
 : "${VAL:?set VAL=<validation parquet>}"
 MODEL="${MODEL:-/mnt/data/peilin/HF_MODEL/Qwen3-4B}"
 OUT="${OUT:-$ROOT/outputs/rl/$EXP}"
@@ -36,7 +36,7 @@ kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c";
 cleanup() { [ -n "$PY" ] && kill_tree "$PY"; }
 trap cleanup EXIT HUP INT TERM
 echo "[train_grpo] exp=$EXP gpus=$GPUS model=$MODEL train=$TRAIN val=$VAL out=$OUT extra=$*"
-python -m training.sigma_rl.main_grpo \
+python -m training.kalman_rl.main_grpo \
   trainer.experiment_name="$EXP" \
   trainer.default_local_dir="$OUT" \
   trainer.n_gpus_per_node="$NGPU" \

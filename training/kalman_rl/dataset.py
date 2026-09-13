@@ -32,7 +32,7 @@ def render(tokenizer, messages, thinking: bool = False) -> str:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
-def sigma_collate_fn(data_list: list[dict]) -> dict:
+def kalman_collate_fn(data_list: list[dict]) -> dict:
     """Like verl's collate_fn, but non-tensor fields always become 1-D object arrays (a batch of
     equal-length token lists must not silently turn into a 2-D integer array)."""
     tensors, non_tensors = defaultdict(list), defaultdict(list)
@@ -48,7 +48,7 @@ def sigma_collate_fn(data_list: list[dict]) -> dict:
     return out
 
 
-class SigmaRLDataset(RLHFDataset):
+class KalmanRLDataset(RLHFDataset):
     """RLHFDataset with (1) our prompt rendering and (2) an optional guided prompt per row.
 
     Row fields added on top of verl's: guided_input_ids / guided_attention_mask / guided_position_ids
@@ -101,7 +101,7 @@ class SigmaRLDataset(RLHFDataset):
     def _report_guided_budget(self, chunk: int = 512) -> None:
         """Nothing is truncated silently: say how many rows carry a guided prompt and how many lose it to the budget."""
         if self.guided_key not in self.dataframe.column_names:
-            print("[sigma-data] no guided prompts in this file")
+            print("[kalman-data] no guided prompts in this file")
             return
         tok, limit = self.tokenizer, self.max_prompt_length
         total = with_guidance = over = 0
@@ -115,7 +115,7 @@ class SigmaRLDataset(RLHFDataset):
                 lengths = [len(ids) for ids in tok(texts, add_special_tokens=False)["input_ids"]]
                 over += sum(n > limit for n in lengths)
                 longest = max(longest, max(lengths))
-        print(f"[sigma-data] rows={total} with_guided_prompt={with_guidance} over_budget({limit})={over} longest_guided_prompt={longest} tokens")
+        print(f"[kalman-data] rows={total} with_guided_prompt={with_guidance} over_budget({limit})={over} longest_guided_prompt={longest} tokens")
 
     def _encode(self, raw: str):
         enc = self.tokenizer(raw, return_tensors="pt", add_special_tokens=False)
@@ -171,7 +171,7 @@ class SigmaRLDataset(RLHFDataset):
         return row
 
 
-class SigmaSFTDataset(SFTDataset):
+class KalmanSFTDataset(SFTDataset):
     """Single-turn SFT rows: ``prompt`` (chat messages, or an already rendered string) and ``response`` (text).
 
     Loss on the response tokens only (verl's mask convention); prompts rendered like the RL prompts.

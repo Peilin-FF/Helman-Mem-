@@ -113,14 +113,14 @@ def _load_kernels():
     import vllm
     src = _patched_kernel_source()
     tag = hashlib.sha1((vllm.__version__ + src).encode()).hexdigest()[:12]
-    cache = Path(os.environ.get("SIGMA_KERNEL_CACHE", Path.home() / ".cache" / "sigma_vllm_bias"))
+    cache = Path(os.environ.get("KALMAN_KERNEL_CACHE", Path.home() / ".cache" / "kalman_vllm_bias"))
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"kernels_{tag}.py"
     if not path.exists():
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(src)
         os.replace(tmp, path)
-    name = f"sigma_vllm_bias_kernels_{tag}"
+    name = f"kalman_vllm_bias_kernels_{tag}"
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
@@ -242,8 +242,8 @@ def _attention_forward(self, layer, query, key, value, kv_cache, attn_metadata, 
     PagedAttention.write_to_paged_cache(key, value, key_cache, value_cache, attn_metadata.slot_mapping, self.kv_cache_dtype,
                                         layer._k_scale, layer._v_scale)
     bias_cache = _bias_cache(key_cache.shape[0], value_cache.shape[3], key.device)
-    token_bias = getattr(attn_metadata, "sigma_token_bias", None)
-    use_bias = bool(getattr(attn_metadata, "sigma_use_bias", False))
+    token_bias = getattr(attn_metadata, "kalman_token_bias", None)
+    use_bias = bool(getattr(attn_metadata, "kalman_use_bias", False))
     if token_bias is not None:
         bias_cache[attn_metadata.slot_mapping[:num_actual_tokens]] = token_bias[:num_actual_tokens]
     q, k, v, o = query[:num_actual_tokens], key[:num_actual_tokens], value[:num_actual_tokens], output[:num_actual_tokens]
@@ -268,10 +268,10 @@ def _wrap_prepare_inputs(orig):
         use = False
         for i, rid in enumerate(req_ids):
             st = self.requests[rid]
-            vec = getattr(st, "sigma_attn_bias", _MISSING)
+            vec = getattr(st, "kalman_attn_bias", _MISSING)
             if vec is _MISSING:
                 vec = lookup(st.prompt_token_ids)
-                st.sigma_attn_bias = vec
+                st.kalman_attn_bias = vec
             if vec is None:
                 continue
             use = True
@@ -279,8 +279,8 @@ def _wrap_prepare_inputs(orig):
             inside = pos < len(vec)
             seg = bias[starts[i]: starts[i] + counts[i]]
             seg[inside] = vec[pos[inside]]
-        attn_metadata.sigma_use_bias = use
-        attn_metadata.sigma_token_bias = torch.from_numpy(bias).to(self.device, non_blocking=True) if (use or _REGISTRY or _BIAS_CACHE is not None) else None
+        attn_metadata.kalman_use_bias = use
+        attn_metadata.kalman_token_bias = torch.from_numpy(bias).to(self.device, non_blocking=True) if (use or _REGISTRY or _BIAS_CACHE is not None) else None
         return out
     return _prepare_inputs
 
@@ -300,7 +300,7 @@ def _wrap_hash_request_tokens(orig, hash_block_tokens):
             prefix = vec[: (k + 1) * block_size]
             extra = h.extra_keys
             if prefix.any():
-                extra = tuple(extra or ()) + ("sigma_bias", hashlib.sha1(prefix.tobytes()).hexdigest())
+                extra = tuple(extra or ()) + ("kalman_bias", hashlib.sha1(prefix.tobytes()).hexdigest())
             nh = hash_block_tokens(hash_function, parent, list(h.token_ids), extra)
             out.append(nh)
             parent = nh.hash_value

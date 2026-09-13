@@ -30,7 +30,7 @@ pytest tests/unit/test_adversarial.py          # the acceptance test and the reg
 Then point `models_root` in `training/configs/adversarial.yaml` at the directory holding the **central model**
 (`Qwen3-4B`) and the **six peer models** (`gemma-3-4b-it`, `Phi-4-mini-instruct`, `Qwen2.5-Coder-7B-Instruct`,
 `Meta-Llama-3.1-8B-Instruct`, `DeepSeek-Coder-V2-Lite-Instruct`, `DeepSeek-R1-Distill-Qwen-7B`); `README.md` lists the
-Hugging Face ids. Eight A100-80GB or similar. `SIGMA_ENV=<name>` if the conda env is not called `sigma`.
+Hugging Face ids. Eight A100-80GB or similar. `KALMAN_ENV=<name>` if the conda env is not called `sigma`.
 
 **The peers' programs are executed to grade them.** `run_adversarial.sh` sets `FEEDBACK_CODE_EXEC_ALLOW=1`, which lets
 `data/builders/common/code_grading.py` run model-written Python in an isolated subprocess with a timeout and memory

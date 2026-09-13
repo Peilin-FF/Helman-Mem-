@@ -2,6 +2,13 @@
 
 *Σ-Mem v2, sigma-mem. Center models Qwen3-4B and Qwen3.5-4B, three peers (Gemma-3-4B, Phi-4-mini, Qwen2.5-Coder-7B). Written 2026-09-04. Code paths refer to the sigma-mem repository.*
 
+
+> **Repository note (2026-09-13).** The Σ-Mem method (symmetric memory matrices, joint G, M-Route / M-Vote, the
+> counterfactual, peer-generalization and feedback-availability experiments) and the selection judge of sections 2-15
+> (`memory_judge.py`, `train_memory_judge.py`, `evaluate_memory_judge.py`) were removed from the repository; only the
+> Kalman Mem method remains. Sections below are a dated research log and still name those files. The removed code is
+> at the git tag `sigma-mem-final`.
+
 ---
 
 ## 1. Problem

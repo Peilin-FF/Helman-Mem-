@@ -2,7 +2,7 @@
 
   phi   the paper's soft task-prototype address: cosine of the whitened, mean-pooled mid-layer question vector to the
         three training-task centroids (code / math / rag), softmax at tau = 0.1, fixed random projection to 16 dims,
-        L2-normalised (symmetric_memory.phi_of; the projection is random here instead of learned, which does not
+        L2-normalised (the phi_of of the removed Σ-Mem symmetric memory; the projection is random here instead of learned, which does not
         change the geometry: the address lives on a 2-simplex either way)
   psi   the new question+responses address: Projection (standardise + PCA-512 + global scale, fitted once on the
         2,963 mixed training events) of the candidate-judge hidden states averaged over candidates, plus a constant
@@ -139,7 +139,7 @@ def main():
             print(name, k, knn[f"{name}_k{k}"], flush=True)
     print("task-mean baseline", knn["task_mean_baseline"], flush=True)
     # --- the readouts the memories actually use, run prequentially along the stream (read before write, stream order):
-    #     raw-sum  r_p = x^T b_p            (Sigma-Mem's accumulation without decay, unnormalised)
+    #     raw-sum  r_p = x^T b_p            (the removed Σ-Mem's accumulation without decay, unnormalised)
     #     Kalman   r_p = x^T Lambda^{-1} b_p (the record; Lambda = lam I + sum x x^T)
     def prequential(X, lam):
         N, D = X.shape; P = labels.shape[1]

@@ -8,14 +8,14 @@ entropy machinery of the fork is not used.
 
 ```
 training/
-  sigma_rl/            our code on top of verl
+  kalman_rl/            our code on top of verl
     build_rl_data.py     prompt stream (+ memory state)  ->  train / val parquet
     build_sft_data.py    verified generations            ->  SFT parquet
-    dataset.py           SigmaRLDataset (question-only + hinted prompt per row), SigmaSFTDataset
+    dataset.py           KalmanRLDataset (question-only + hinted prompt per row), KalmanSFTDataset
     reward.py            verifier reward | memory pseudo-reward; parallel reward manager
-    trainer.py           SigmaRayPPOTrainer = verl GRPO + the memory hint pass
+    trainer.py           KalmanRayPPOTrainer = verl GRPO + the memory hint pass
     main_grpo.py         entry point (hydra)
-  configs/grpo_sigma.yaml, sft_sigma.yaml
+  configs/grpo_kalman.yaml, sft_kalman.yaml
   scripts/build_data.sh, train_grpo.sh, train_sft.sh, eval_hf.sh
   setup_env.sh         installs the missing packages into the `sigma` env (done once already)
   verl/                vendored verl 0.3.1 (see VENDOR.md; two one-line patches)
@@ -32,7 +32,7 @@ and evaluate: along the stream (`reward/acc_guided`) and afterwards alone, quest
 held-out streams (`eval_hf.sh`).  Previous methods learn from solutions annotated as correct
 *before* learning; that regime is the baseline here.
 
-Per step (`training/sigma_rl/trainer.py`, plain GRPO underneath):
+Per step (`training/kalman_rl/trainer.py`, plain GRPO underneath):
 
 1. n **solo** samples from the question-only prompt (exploration, and what is evaluated later);
 2. one **guided** sample from the guided prompt — the stream-time answer;
@@ -82,7 +82,7 @@ these findings:
 - **Adopted.** The 8192-token input budget (their `audit_outcome_data.py` on the training stream:
   question + all three unclipped peer responses is at most 3963 tokens, p99 2125, so nothing is ever
   dropped; the old 3000-character clipping touched 0.1% of responses), and a load-time report of how
-  many guided prompts would exceed the budget (`[sigma-data] ... over_budget=...`).
+  many guided prompts would exceed the budget (`[kalman-data] ... over_budget=...`).
 - **Equivalence note.** The live episode wrapper and the precomputed memory trajectory in the prompt
   files give identical observations: the memory's inputs are the peers' labels and frozen features,
   never the central model's outputs, and the prompt builder reads the memory before writing each
@@ -108,11 +108,11 @@ rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_grpo_v30    TRAIN=outputs/rl/data/q3_4b/tra
 rproj submit 'GPU=1 CKPT=outputs/rl/q3_4b_grpo_hint/hf/global_step_40 bash training/scripts/eval_hf.sh'
 
 # 4. optional SFT stage on memory-chosen hinted solutions (multi-GPU replacement of scripts/generate_hinted.py + train_memory_generator.py)
-rproj run 'PYTHONPATH=. python -m training.sigma_rl.build_sft_data --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl --records data/mixed_train_big/train.jsonl --generations outputs/gen/q3_4b/<hinted>/generations.jsonl --out outputs/rl/data/q3_4b/sft_hinted_memory.parquet'
+rproj run 'PYTHONPATH=. python -m training.kalman_rl.build_sft_data --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl --records data/mixed_train_big/train.jsonl --generations outputs/gen/q3_4b/<hinted>/generations.jsonl --out outputs/rl/data/q3_4b/sft_hinted_memory.parquet'
 rproj submit 'GPUS=0,1,2,3 EXP=q3_4b_sft_hinted_memory TRAIN=outputs/rl/data/q3_4b/sft_hinted_memory.parquet bash training/scripts/train_sft.sh'
 ```
 
-Every hydra key of `configs/grpo_sigma.yaml` can be appended to the launch command
+Every hydra key of `configs/grpo_kalman.yaml` can be appended to the launch command
 (`actor_rollout_ref.rollout.n=4`, `data.train_batch_size=32`, `trainer.total_training_steps=100`,
 `memory.hint_sampling=sample`, ...).
 
@@ -165,14 +165,13 @@ HF copies are cast to bf16 (8 GB) and kept for every save.
 Two lessons baked into the code: (1) vLLM's memory budget counts other users' processes, see
 above; (2) sandboxed code grading must not fork from the many-threaded trainer actor and must
 not inherit its stdin — it runs in Ray task workers with stdin on /dev/null
-(`training/sigma_rl/reward.py`), otherwise the reward step can hang forever.
+(`training/kalman_rl/reward.py`), otherwise the reward step can hang forever.
 
 ## LoRA
 
 Not on this stack: the GRPO and SFT trainers here train the full parameters (`lora_rank: 0`), which is
 what the internalisation objective asks for.  LoRA training is the single-GPU path
-(`feedback_state/train_memory_judge.py`, `feedback_state/train_memory_generator.py --lora_rank 16
-[--gated on]`), used for the 2026-09-04 results.
+(`feedback_state/train_memory_generator.py --lora_rank 16 [--gated on]`), used for the 2026-09-04 results.
 
 ## Models
 

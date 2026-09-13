@@ -5,7 +5,7 @@ Sources of responses, in this order of preference per row:
                   hint was chosen by the memory) or of any solo evaluation; kept when correct
   --prompts       the prompt file's ``target`` (peer / self-distilled targets), when no generation
 
-  PYTHONPATH=. python -m training.sigma_rl.build_sft_data --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl \
+  PYTHONPATH=. python -m training.kalman_rl.build_sft_data --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl \
       --records data/mixed_train_big/train.jsonl --generations outputs/gen/q3_4b/hinted_memory/generations.jsonl \
       --out outputs/rl/data/q3_4b/sft_hinted_memory.parquet
 """

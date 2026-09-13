@@ -1,4 +1,4 @@
-# Basic GRPO for the central model + the memory hooks (training/sigma_rl).
+# Basic GRPO for the central model + the memory hooks (training/kalman_rl).
 # Derived from the vendored verl 0.3.1 ppo_trainer.yaml; the agentic / entropy (ARPO, AEPO) knobs are removed.
 # Every key can be overridden on the command line (hydra), e.g.  memory.hint_rollouts=0  actor_rollout_ref.rollout.n=4
 
@@ -215,7 +215,7 @@ reward_model:
   ulysses_sequence_parallel_size: 1
   use_dynamic_bsz: ${critic.use_dynamic_bsz}
   forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
-  reward_manager: sigma                 # sigma = training/sigma_rl/reward.py (verifier, or memory pseudo-reward when unverified) | outcome = strict post-answer verifier only
+  reward_manager: kalman                # kalman = training/kalman_rl/reward.py (verifier, or memory pseudo-reward when unverified) | outcome = strict post-answer verifier only
   max_workers: 32                       # parallel graders (code tests run in sandboxed subprocesses)
   launch_reward_fn_async: False
   sandbox_fusion:
@@ -242,7 +242,7 @@ algorithm:
     reweight_method: pow
     weight_pow: 2.0
 
-# ---- the central model's stream-time answer and where the memory enters (training/sigma_rl/trainer.py)
+# ---- the central model's stream-time answer and where the memory enters (training/kalman_rl/trainer.py)
 # Regime is set by the data (build_rl_data --guided): memory / peers / hint_memory = labels only after the answer (ours),
 # hint_label / hint_random = labels before the answer (classical baseline), none = plain RLVR.
 memory:

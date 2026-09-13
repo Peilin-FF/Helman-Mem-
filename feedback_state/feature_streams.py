@@ -20,8 +20,8 @@ import torch
 from feedback_state.data import JsonlDataset
 from feedback_state.permutations import canonical_peer_view
 
-DATA_ROOT = Path(os.environ.get("SIGMA_DATA_ROOT", "data"))
-FEATURE_ROOT = Path(os.environ.get("SIGMA_FEATURE_ROOT", "outputs/context_features"))
+DATA_ROOT = Path(os.environ.get("KALMAN_DATA_ROOT", "data"))
+FEATURE_ROOT = Path(os.environ.get("KALMAN_FEATURE_ROOT", "outputs/context_features"))
 
 ADV = "_adv_"   # robustness streams: "<stream>_adv_<regime>" (README_adversarial.md)
 

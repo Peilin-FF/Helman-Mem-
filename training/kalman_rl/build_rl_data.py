@@ -1,6 +1,6 @@
 """Memory-annotated prompt stream  ->  verl parquet, one file per regime.
 
-  PYTHONPATH=. python -m training.sigma_rl.build_rl_data \
+  PYTHONPATH=. python -m training.kalman_rl.build_rl_data \
       --prompts outputs/gen/q3_4b/prompts_train_fixed.jsonl --records data/mixed_train_big/train.jsonl \
       --out outputs/rl/data/q3_4b/train_memory.parquet --guided memory
 
@@ -40,7 +40,7 @@ from feedback_state.attn_bias import peer_char_spans
 from feedback_state.data import JsonlDataset
 from feedback_state.memory_generator import build_messages, domain_note
 from feedback_state.memory_rl import choose_hint_slot, hint_messages, labeled_peer_messages, peer_texts_in_prompt_order
-from training.sigma_rl.outcome_protocol import PROTOCOL   # "peer_outcome_v1": the answer is graded only after it is given
+from training.kalman_rl.outcome_protocol import PROTOCOL   # "peer_outcome_v1": the answer is graded only after it is given
 
 LABELS_BEFORE_PROTOCOL = "labels_before_v1"
 GUIDED = ("memory", "peers", "hint_memory", "hint_label", "hint_random", "peers_labeled", "none")

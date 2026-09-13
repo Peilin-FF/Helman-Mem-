@@ -126,7 +126,7 @@ python scripts/build_generation_prompts.py --model q3_4b --fit-stream train6 --s
 # kernel check: the tilt inside vLLM equals the HF mask hook
 python scripts/check_vllm_tilt.py --stage vllm --out outputs/gen/q3_4b/tilt_check2 && python scripts/check_vllm_tilt.py --stage hf --out outputs/gen/q3_4b/tilt_check2
 # pilot data: peers prompt, 25% question-only, every 7th event; the peer blocks' spans ride in extra_info
-python -m training.sigma_rl.build_rl_data --prompts outputs/gen/q3_4b/prompts_train6_fixed.jsonl --records data/mixed_train_big6/train.jsonl --out outputs/rl/data/q3_4b_6peer/pilot_peers.parquet --guided none --prompt_source peers --solo_fraction 0.25 --every 7
+python -m training.kalman_rl.build_rl_data --prompts outputs/gen/q3_4b/prompts_train6_fixed.jsonl --records data/mixed_train_big6/train.jsonl --out outputs/rl/data/q3_4b_6peer/pilot_peers.parquet --guided none --prompt_source peers --solo_fraction 0.25 --every 7
 # the tilt arm (control: drop the attn_* overrides)
 GPUS=0,1,2,3,4,5,6,7 EXP=pilot_tilt TRAIN=outputs/rl/data/q3_4b_6peer/pilot_peers.parquet VAL=outputs/rl/data/q3_4b_6peer/val_peers.parquet bash training/scripts/train_grpo.sh \
   data.enable_thinking=True data.max_response_length=4096 data.max_prompt_length=4608 actor_rollout_ref.rollout.n=8 actor_rollout_ref.actor.use_kl_loss=True actor_rollout_ref.actor.kl_loss_coef=0.001 \

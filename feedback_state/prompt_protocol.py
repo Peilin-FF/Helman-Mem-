@@ -1,4 +1,4 @@
-"""Auditable prompt-protocol choices for Sigma candidate judging."""
+"""Auditable prompt-protocol choices for Kalman Mem candidate judging."""
 from __future__ import annotations
 
 from typing import Any

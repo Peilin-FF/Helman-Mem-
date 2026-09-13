@@ -1,4 +1,4 @@
-"""Prompt tokenization helpers for Sigma-Mem Yes/No candidate scoring."""
+"""Prompt tokenization helpers for Kalman Mem Yes/No candidate scoring."""
 from __future__ import annotations
 
 import torch

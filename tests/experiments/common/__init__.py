@@ -1,1 +1,1 @@
-"""Shared Sigma-Mem evaluation utilities."""
+"""Shared Kalman Mem evaluation utilities."""

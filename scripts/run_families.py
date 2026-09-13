@@ -73,7 +73,7 @@ def main() -> None:
     ap.add_argument("--smoke-suffix", default=None)
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config))
-    os.environ["SIGMA_FEATURE_ROOT"] = str(cfg["outputs"]["features"])   # read by feedback_state.feature_streams in the subprocesses
+    os.environ["KALMAN_FEATURE_ROOT"] = str(cfg["outputs"]["features"])   # read by feedback_state.feature_streams in the subprocesses
     from feedback_state.feature_streams import DATA_ROOT, FEATURE_ROOT, MODELS, STREAMS
 
     gpus = [int(x) for x in args.gpus.split(",")] if args.gpus else [int(g) for g in cfg["gpus"]]

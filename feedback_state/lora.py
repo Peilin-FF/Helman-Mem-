@@ -15,9 +15,25 @@ import math
 import torch
 import torch.nn as nn
 
-from feedback_state.symmetric_memory import _decoder_layers
-
 DEFAULT_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "in_proj_qkv", "in_proj_z", "out_proj")
+
+
+def _decoder_layers(model):
+    """Return the underlying decoder layer list through common model containers."""
+    seen = set()
+    stack = [model]
+    while stack:
+        cur = stack.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        if hasattr(cur, "layers"):
+            return cur.layers
+        for attr in ("model", "base_model"):
+            nxt = getattr(cur, attr, None)
+            if nxt is not None and nxt is not cur:
+                stack.append(nxt)
+    raise AttributeError("Could not locate decoder layers on central model")
 
 
 class LoRALinear(nn.Module):

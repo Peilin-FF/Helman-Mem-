@@ -7,16 +7,16 @@ examples are not.  The package is used through `PYTHONPATH=training/verl` (no in
 job snapshot carries its own copy.
 
 What we use: `verl.trainer.ppo.ray_trainer.RayPPOTrainer` (subclassed in
-`training/sigma_rl/trainer.py`), the FSDP actor/rollout workers, the vLLM spmd rollout
+`training/kalman_rl/trainer.py`), the FSDP actor/rollout workers, the vLLM spmd rollout
 (`rollout.mode=sync`), `verl.trainer.fsdp_sft_trainer`, `scripts/model_merger.py`.
 
 What we do not use: the ARPO / AEPO agentic machinery — `rollout.mode=sync_with_tool`
 (`workers/rollout/vllm_rollout/vllm_rollout_with_tools.py`), `workers/agent/`, `tools/`, the
 entropy-based branching knobs (`initial_rollouts`, `beam_size`, `branch_probability`,
 `entropy_weight`), the deep-research reward.  They stay in the tree untouched; our config
-(`training/configs/grpo_sigma.yaml`) simply never selects them.
+(`training/configs/grpo_kalman.yaml`) simply never selects them.
 
-## Local patches (grep `sigma:`)
+## Local patches (grep `kalman:`)
 
 1. `verl/workers/fsdp_workers.py`: the actor's and critic's `attn_implementation` come from
    `model.attn_implementation` (default `flash_attention_2`) instead of being hard-coded, so the

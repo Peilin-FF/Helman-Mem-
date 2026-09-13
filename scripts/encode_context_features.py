@@ -5,7 +5,7 @@ and without correctness labels, dataset names, or peer identities:
 
 * ``q_mean`` / ``q_last``: hidden states of the question text alone (three layers,
   mean-pooled and last-token).  These support response-free M-Route.
-* ``sem`` / ``spread`` / ``margins``: last-token hidden states of the Sigma-Mem
+* ``sem`` / ``spread`` / ``margins``: last-token hidden states of the Kalman Mem
   candidate Yes/No judge prompts, aggregated permutation-invariantly over peers
   (mean and std), plus the unsteered Yes-No log-odds per peer.
 """

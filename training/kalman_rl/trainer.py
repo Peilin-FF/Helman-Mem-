@@ -18,7 +18,7 @@ Per step, on top of verl's plain GRPO (group-mean baseline, PPO clip, no critic,
                    solo samples so the group baseline is shared.
 
 The memory enters only through the guided prompt (which solutions, with which reliability notes) and,
-when no verifier is available after the answer, through the pseudo-reward (training/sigma_rl/reward.py).
+when no verifier is available after the answer, through the pseudo-reward (training/kalman_rl/reward.py).
 Everything else (advantages, actor update, checkpoints, validation) is untouched verl.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ from verl.trainer.ppo.reward import compute_reward
 from verl.utils.metric import reduce_metrics
 from verl.utils.model import compute_position_id_with_mask
 
-from training.sigma_rl.dataset import GUIDED_NON_TENSOR_KEYS, GUIDED_TENSOR_KEYS
+from training.kalman_rl.dataset import GUIDED_NON_TENSOR_KEYS, GUIDED_TENSOR_KEYS
 
 
 def _take(extra: dict, idx) -> dict:
@@ -72,7 +72,7 @@ def hf_copy(src: str, dst: str, dtype: str = "bfloat16") -> None:
             shutil.copy2(os.path.join(src, name), dst)
 
 
-class SigmaRayPPOTrainer(RayPPOTrainer):
+class KalmanRayPPOTrainer(RayPPOTrainer):
     # ------------------------------------------------------------------ guided pass (the stream-time answer)
     def _memory_cfg(self) -> dict:
         m = self.config.get("memory", None)
@@ -228,7 +228,7 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
             if wb is not None:
                 wb.finish()
         except Exception as exc:
-            print(f"[sigma] wandb finish failed: {exc}")
+            print(f"[kalman] wandb finish failed: {exc}")
 
     def _append_metrics_file(self, metrics: dict) -> None:
         name = self.config.trainer.get("metrics_file", "metrics.jsonl")
@@ -247,12 +247,12 @@ class SigmaRayPPOTrainer(RayPPOTrainer):
         dst = os.path.join(self.config.trainer.default_local_dir, "hf", f"global_step_{self.global_steps}")
         if os.path.isdir(src) and any(f.endswith(".safetensors") for f in os.listdir(src)):
             hf_copy(src, dst, dtype=str(self.config.trainer.get("hf_checkpoint_dtype", "bfloat16")))
-            print(f"[sigma] HF checkpoint kept at {dst}")
+            print(f"[kalman] HF checkpoint kept at {dst}")
             if self.config.trainer.get("remove_fp32_hf_copy", True):   # the 16 GB fp32 copy is redundant once the bf16 one exists
                 for name in os.listdir(src):
                     if name.endswith(".safetensors") or name == "model.safetensors.index.json":
                         os.remove(os.path.join(src, name))
-                print(f"[sigma] fp32 weights removed from {src}")
+                print(f"[kalman] fp32 weights removed from {src}")
 
     @staticmethod
     def _shutdown_dataloader(iterator) -> None:

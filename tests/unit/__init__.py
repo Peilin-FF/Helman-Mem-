@@ -1,1 +1,1 @@
-"""Focused tests for core Sigma-Mem behavior."""
+"""Focused tests for core Kalman Mem behavior."""
