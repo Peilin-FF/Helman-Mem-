@@ -90,7 +90,8 @@ no peer answers, so `solo` is the same for every misleading share: it is read fr
 | 100% (81.0 / 91.9) | 63.4 | 61.5 | 60.5 | 53.2 | 47.0 | 67.8 |
 
 The record gives misleading answers a lower estimate than honest ones (AUC 0.70-0.72 in-distribution, 0.79-0.89 OOD),
-without being told which answers are misleading. Full table: `outputs/tables/misleading.md`.
+without being told which answers are misleading. Full table: `outputs/tables/misleading.md`. The full report, with
+cases, the analysis of the datasets and a known defect in DeepSeek-Coder-V2-Lite's answers: `docs/reports/misleading_peers.md`.
 
 ## Reading the table
 
