@@ -14,6 +14,9 @@ from typing import Iterable
 from feedback_state.tasks import get_task, task_type_of
 
 DEFAULT_MAX_TOKENS = {"math": 512, "rag": 256, "code": 768, "boolqa": 96, "mcqa": 96, "shortqa": 96}
+# A misleading answer argues for its conclusion: 96 tokens cut most arguments off before the final line (the
+# 2026-09-13 run had 37% of one peer's OOD answers rewritten for that reason), so the short-answer tasks get 256.
+MISLEADING_MAX_TOKENS = {**DEFAULT_MAX_TOKENS, "boolqa": 256, "mcqa": 256, "shortqa": 256}
 REASONING_MAX_TOKENS = 4096
 
 

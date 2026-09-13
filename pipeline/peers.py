@@ -35,7 +35,8 @@ def parse_args(argv=None):
     p.add_argument("--shard", type=int, default=0)
     p.add_argument("--max-examples", type=int, default=None, help="per shard")
     p.add_argument("--sources", default=None, help="comma-separated source datasets to keep")
-    p.add_argument("--max-tokens", default=None, help="per task, e.g. math=512,rag=256,code=768 (default: the released peers' budgets)")
+    p.add_argument("--max-tokens", default=None, help="per task, e.g. math=512,rag=256,code=768 (default: the released peers' budgets; "
+                   "misleading answers get 256 on the short-answer tasks)")
     p.add_argument("--reasoning", action="store_true", help="a thinking peer: 4096-token budget, graded after the last </think>")
     p.add_argument("--no-context", action="store_true", help="reading tasks without the passage")
     p.add_argument("--temperature", type=float, default=0.2, help="honest mode")
@@ -52,12 +53,12 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def budgets(spec: str | None) -> dict | None:
-    if not spec:
-        return None
-    from feedback_state.peer_generation import DEFAULT_MAX_TOKENS
+def budgets(spec: str | None, mode: str = "honest") -> dict:
+    from feedback_state.peer_generation import DEFAULT_MAX_TOKENS, MISLEADING_MAX_TOKENS
 
-    out = dict(DEFAULT_MAX_TOKENS)
+    out = dict(MISLEADING_MAX_TOKENS if mode == "misleading" else DEFAULT_MAX_TOKENS)
+    if not spec:
+        return out
     for part in spec.split(","):
         k, v = part.split("=")
         out[k.strip()] = int(v)
@@ -97,7 +98,7 @@ def main(argv=None) -> None:
         by_source[r["source"]][0] += 1; by_source[r["source"]][1] += r["correct"]
     summary = {"mode": args.mode, "model": args.model, "stream": str(args.stream), "n": len(rows),
                "generation_params": {"temperature": args.temperature if args.mode == "honest" else args.temperatures,
-                                     "top_p": args.top_p, "max_new_tokens": "reasoning 4096" if args.reasoning else (budgets(args.max_tokens) or "default"),
+                                     "top_p": args.top_p, "max_new_tokens": "reasoning 4096" if args.reasoning else budgets(args.max_tokens, args.mode),
                                      "context": not args.no_context, "reasoning": args.reasoning, "backend": "vllm"},
                "accuracy_pct": 100 * sum(r["correct"] for r in rows) / n,
                "by_source": {s: {"n": c, "accuracy_pct": 100 * k / c} for s, (c, k) in by_source.items()},
@@ -115,7 +116,7 @@ def honest(args, records, tok, llm):
     from feedback_state.peer_generation import grade_all, max_tokens, render
     from feedback_state.tasks import build_peer_prompt, task_type_of
 
-    b = budgets(args.max_tokens)
+    b = budgets(args.max_tokens, "honest")
     prompts = [render(tok, build_peer_prompt(r, with_context=not args.no_context)) for r in records]
     params = [SamplingParams(temperature=args.temperature, top_p=args.top_p, max_tokens=max_tokens(r, b, args.reasoning), seed=0) for r in records]
     texts = [o.outputs[0].text for o in llm.generate(prompts, params, use_tqdm=True)]
@@ -133,7 +134,7 @@ def misleading(args, records, tok, llm):
     from feedback_state.peer_generation import grade_all, max_tokens, render
     from feedback_state.tasks import task_type_of
 
-    b = budgets(args.max_tokens)
+    b = budgets(args.max_tokens, "misleading")
     temps = [float(x) for x in args.temperatures.split(",")] or [0.2]
     answer_of = (lambda t: strip_thinking(t)) if args.reasoning else (lambda t: t)
     done: dict[int, dict] = {}

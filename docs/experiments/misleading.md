@@ -25,6 +25,12 @@ announced the trick, some refused, some programs were tables of hard-coded outpu
 | retry | the failures again at temperature 0.7 then 1.0, told what was wrong; on the last attempt a math peer that keeps reaching the gold is given a wrong value (one of its own intermediate results) to arrive at |
 | rewrite | only if all that fails, for math / multiple choice / yes-no: the conclusion is replaced and re-graded, flagged `forced` |
 
+Budgets: misleading answers get the honest budgets (math 512, reading 256, code 768 tokens) except on the short-answer
+OOD tasks, where 96 tokens cut most arguments off before the final line; there they get 256 and are asked to argue in
+one or two sentences. They still come out longer than the honest answers (on one OOD shard of gemma-3-4b-it: 330 against
+170 characters on yes/no, 429 against 160 on multiple choice, 379 against 137 on short answer), a difference the central
+model could in principle pick up on.
+
 An event with no usable answer keeps the honest answer in every stream. On the 48-event smoke, 77-96% of each peer's
 events had a usable answer and none of the usable answers graded correct. `summary.shard*.json` of each peer reports the
 acceptance rate, forced count, attempts and why the rest were unusable.
