@@ -7,7 +7,6 @@ data:
   train_files: null             # set by pipeline.train (training/kalman_rl/build_rl_data.py parquets)
   val_files: null
   prompt_key: prompt            # chat messages: question + peers' answers, or the question alone
-  enable_thinking: False        # Qwen3 thinking mode for every prompt (then raise max_response_length to 4096+; the grader scores the answer after </think>)
   attn_gamma: 0.0               # the memory's attention tilt: gamma * log(p_i / max_j p_j) added to every attention score onto peer i's block (0 = off)
   attn_bias_form: logratio      # logratio (validated training-free) | logodds (gamma * (logit p_i - max_j logit p_j))
   reward_fn_key: data_source    # task type -> per-task validation metrics

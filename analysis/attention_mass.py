@@ -142,7 +142,7 @@ def main() -> None:
     with torch.no_grad():
         for k, r in enumerate(sample):
             rec = records[str(r["id"])]
-            prompt = render_prompt(tok, r["messages_peers"], thinking=False)
+            prompt = render_prompt(tok, r["messages_peers"])
             enc = tok(prompt, add_special_tokens=False, return_offsets_mapping=True)
             ids, offs = enc["input_ids"], enc["offset_mapping"]
             texts = peer_texts_in_prompt_order(rec, r["peer_order"])

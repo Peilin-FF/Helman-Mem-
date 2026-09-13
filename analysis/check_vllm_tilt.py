@@ -37,7 +37,6 @@ def parse_args():
     p.add_argument("--gamma", type=float, default=3.0)
     p.add_argument("--form", default="logratio")
     p.add_argument("--max_new_tokens", type=int, default=48)
-    p.add_argument("--thinking", choices=["on", "off"], default="off")
     return p.parse_args()
 
 
@@ -52,7 +51,7 @@ def select(args, tok):
         if max(probs) - min(probs) <= FLAT_SPREAD:
             continue
         rec = records[str(r["id"])]
-        prompt = render_prompt(tok, r["messages_peers"], thinking=args.thinking == "on")
+        prompt = render_prompt(tok, r["messages_peers"])
         ids, bias = prompt_token_bias(tok, prompt, peer_texts_in_prompt_order(rec, r["peer_order"]), probs, args.gamma, args.form)
         if not bias.any():
             continue

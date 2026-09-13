@@ -108,9 +108,9 @@ def test_smoke_uses_one_stream_one_shard_and_a_small_record(tmp_path):
 
 def test_a_stored_evaluation_with_other_settings_is_reported_not_reused(tmp_path):
     m = tmp_path / "eval_metrics.json"
-    m.write_text(json.dumps({"mode": "peers", "gamma": 3.0, "swap_record": False, "max_new_tokens": 768, "thinking": False,
+    m.write_text(json.dumps({"mode": "peers", "gamma": 3.0, "swap_record": False, "max_new_tokens": 768,
                              "record": "r.jsonl", "checkpoint": None, "accuracy": 0.5}))
-    same = {"mode": "peers", "gamma": 3.0, "swap_record": False, "max_new_tokens": 768, "thinking": False, "record": "r.jsonl", "checkpoint": None}
+    same = {"mode": "peers", "gamma": 3.0, "swap_record": False, "max_new_tokens": 768, "record": "r.jsonl", "checkpoint": None}
 
     assert stale(m, same) is None
     assert "gamma" in stale(m, dict(same, gamma=5.0))

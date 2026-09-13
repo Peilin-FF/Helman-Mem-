@@ -24,7 +24,7 @@ def check(model: str, rows: list[dict], records: dict, gamma: float) -> dict:
     for r in rows:
         rec = records[str(r["id"])]
         texts = peer_texts_in_prompt_order(rec, r["peer_order"])
-        prompt = render_prompt(tok, r["messages_peers"], thinking=False)
+        prompt = render_prompt(tok, r["messages_peers"])
         probs = [float(p) for p in r["memory_prob"]]
         ids, bias = prompt_token_bias(tok, prompt, texts, probs, gamma)
         n_tok.append(len(ids))

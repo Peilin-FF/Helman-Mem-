@@ -52,7 +52,6 @@ record:                                    # pipeline.record
 evaluation:                                # pipeline.evaluate
   engine: vllm
   max_new_tokens: 768
-  thinking: "off"
   gpu_memory_utilization: 0.85
   bias_form: logratio
 

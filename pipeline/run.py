@@ -181,11 +181,11 @@ class Plan:
                 engine = model_spec.get("engine", ev.get("engine", "vllm"))
                 args = (f"--model {model_spec['path']} --record {record} --stream {stream['path']} --condition {c} --mode {cd.get('mode', 'peers')} "
                         f"--gamma {float(cd.get('gamma', 0.0))}{' --swap' if cd.get('swap') else ''} --bias-form {ev.get('bias_form', 'logratio')} "
-                        f"--engine {engine} --thinking {ev.get('thinking', 'off')} --max-new-tokens {ev.get('max_new_tokens', 768)} "
+                        f"--engine {engine} --max-new-tokens {ev.get('max_new_tokens', 768)} "
                         f"--gpu-memory-utilization {ev.get('gpu_memory_utilization', 0.85)}"
                         + (f" --checkpoint {checkpoint}" if checkpoint else ""))
                 want = {"mode": cd.get("mode", "peers"), "gamma": float(cd.get("gamma", 0.0)), "swap_record": bool(cd.get("swap", False)),
-                        "max_new_tokens": int(ev.get("max_new_tokens", 768)), "thinking": ev.get("thinking", "off") == "on",
+                        "max_new_tokens": int(ev.get("max_new_tokens", 768)),
                         "record": str(record), "checkpoint": str(checkpoint) if checkpoint else None}
                 check = lambda out=out, want=want: stale(out / "eval_metrics.json", want)
                 pre = self.model_env(model_spec)

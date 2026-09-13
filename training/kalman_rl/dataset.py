@@ -1,6 +1,6 @@
 """The RL dataset for the vendored verl trainer.
 
-Prompts are rendered with ``enable_thinking=False`` so the policy sees exactly the prompt the evaluations use. With
+Prompts are rendered with thinking off, exactly as the evaluations render them. With
 ``data.attn_gamma > 0`` each row also carries the tilt over its prompt tokens (``attn_bias``), built from the record's
 estimates and the peer blocks' character spans stored by training/kalman_rl/build_rl_data.py.
 """
@@ -17,11 +17,11 @@ from verl.utils.model import compute_position_id_with_mask
 
 from feedback_state.attn_bias import bias_values, token_bias
 
-def render(tokenizer, messages, thinking: bool = False) -> str:
-    """Chat template with the generation prompt; Qwen3's thinking block is disabled unless ``thinking`` (same as feedback_state.memory_generator.render_prompt)."""
+def render(tokenizer, messages) -> str:
+    """Chat template with the generation prompt, thinking off (as feedback_state.memory_generator.render_prompt)."""
     messages = [dict(m) for m in messages]
     try:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=bool(thinking))
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
     except TypeError:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
@@ -46,7 +46,6 @@ class KalmanRLDataset(RLHFDataset):
     """RLHFDataset with our prompt rendering and the tilt tensor."""
 
     def __init__(self, data_files, tokenizer, config, processor=None):
-        self.thinking = bool(config.get("enable_thinking", False))   # Qwen3 thinking mode for every prompt of this run
         self.attn_gamma = float(config.get("attn_gamma", 0.0))         # the memory's attention tilt: gamma * log(p_i / max p) on peer i's block
         self.attn_bias_form = str(config.get("attn_bias_form", "logratio"))
         super().__init__(data_files=data_files, tokenizer=tokenizer, config=config, processor=processor)
@@ -78,10 +77,10 @@ class KalmanRLDataset(RLHFDataset):
         self.dataframe = datasets.concatenate_datasets(frames)
         print(f"dataset len: {len(self.dataframe)}")
         if self.filter_overlong_prompts:
-            tok, key, limit, think = self.tokenizer, self.prompt_key, self.max_prompt_length, self.thinking
+            tok, key, limit = self.tokenizer, self.prompt_key, self.max_prompt_length
 
             def fits(doc):
-                return len(tok.encode(render(tok, doc[key], think), add_special_tokens=False)) <= limit
+                return len(tok.encode(render(tok, doc[key]), add_special_tokens=False)) <= limit
 
             self.dataframe = self.dataframe.filter(fits, num_proc=self.num_workers, desc=f"Filtering prompts longer than {limit} tokens")
             print(f"filter dataset len: {len(self.dataframe)}")
@@ -109,7 +108,7 @@ class KalmanRLDataset(RLHFDataset):
     def __getitem__(self, item):
         row: dict = dict(self.dataframe[item])
         messages = row.pop(self.prompt_key)
-        raw = render(self.tokenizer, messages, self.thinking)
+        raw = render(self.tokenizer, messages)
         ids, att, pos = self._encode(raw)
         row["input_ids"], row["attention_mask"], row["position_ids"] = ids, att, pos
         row["raw_prompt_ids"] = self._raw_ids(raw)

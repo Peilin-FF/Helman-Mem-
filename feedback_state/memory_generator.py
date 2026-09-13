@@ -71,8 +71,8 @@ def has_chat_template(tokenizer) -> bool:
     return bool(getattr(tokenizer, "chat_template", None))
 
 
-def render_prompt(tokenizer, messages: list[dict], *, thinking: bool = False) -> str:
-    """Chat template with the generation prompt, thinking off unless ``thinking``.
+def render_prompt(tokenizer, messages: list[dict]) -> str:
+    """Chat template with the generation prompt; thinking is always off (enable_thinking=False for templates that know it).
 
     A tokenizer without a chat template (a base model) gets a plain layout: BOS, the system text, the user turn, then
     ``Answer:``; the peer blocks are the same text, so the tilt's character spans are unchanged.
@@ -82,7 +82,7 @@ def render_prompt(tokenizer, messages: list[dict], *, thinking: bool = False) ->
         user = "\n\n".join(m["content"] for m in messages if m.get("role") == "user")
         return f"{tokenizer.bos_token or ''}{system}\n\n{user}\n\nAnswer:"
     try:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=bool(thinking))
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
     except TypeError:
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 

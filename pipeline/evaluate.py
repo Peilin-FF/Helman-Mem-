@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-CONDITION_KEYS = ("condition", "mode", "gamma", "swap_record", "bias_form", "thinking", "max_new_tokens", "engine",
+CONDITION_KEYS = ("condition", "mode", "gamma", "swap_record", "bias_form", "max_new_tokens", "engine",
                   "central_model", "checkpoint", "record", "stream", "every", "max_examples")
 
 
@@ -45,7 +45,6 @@ def parse_args(argv=None):
     p.add_argument("--swap", action="store_true", help="control: the record permuted by rank (highest estimate on the least trusted peer)")
     p.add_argument("--bias-form", default="logratio", help="logratio | logodds (feedback_state.attn_bias)")
     p.add_argument("--engine", choices=["vllm", "hf"], default="vllm")
-    p.add_argument("--thinking", choices=["on", "off"], default="off")
     p.add_argument("--max-new-tokens", type=int, default=768)
     p.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     p.add_argument("--batch-size", type=int, default=8, help="HF engine only")
@@ -127,7 +126,7 @@ def main(argv=None) -> None:
         k, n = (int(x) for x in args.shard.split("/"))
         rows = rows[k::n]
         print(f"[evaluate] shard {k}/{n}: {len(rows)} events", flush=True)
-    prompts = [render_prompt(tok, r[f"messages_{args.mode}"], thinking=args.thinking == "on") for r in rows]
+    prompts = [render_prompt(tok, r[f"messages_{args.mode}"]) for r in rows]
     n_tok = [len(tok(p, add_special_tokens=False)["input_ids"]) for p in prompts[: min(len(prompts), 200)]]
     print(f"[evaluate] {args.condition or args.mode}: central model {args.model}"
           f"{f' checkpoint {args.checkpoint}' if args.checkpoint else ''}, "
@@ -237,7 +236,7 @@ def write_results(args, rows, records, outputs, t0) -> None:
         out_rows.append({"pos": r["pos"], "id": r["id"], "task_type": r["task_type"], "source": r["source"], "correct": int(ok),
                          "peer_correct": r["peer_correct"], "memory_prob": r.get("memory_prob"), "generation": text})
     metrics = {"condition": args.condition, "mode": args.mode, "gamma": args.gamma, "swap_record": bool(args.swap),
-               "bias_form": args.bias_form if args.gamma > 0 else None, "thinking": args.thinking == "on",
+               "bias_form": args.bias_form if args.gamma > 0 else None,
                "max_new_tokens": args.max_new_tokens, "engine": args.engine, "central_model": args.model,
                "checkpoint": str(args.checkpoint) if args.checkpoint else None, "record": str(args.record),
                "stream": str(args.stream), "every": args.every, "max_examples": args.max_examples, "shard": args.shard}
