@@ -61,16 +61,15 @@ def main() -> None:
     steps = args.steps or list(cfg["steps"])
     gen, fe, mem, ev, out, sm = cfg["generation"], cfg["features"], cfg["memory"], cfg["evaluation"], cfg["outputs"], cfg.get("smoke", {})
     suffix = args.smoke_suffix or sm.get("suffix", "_smoke")
-    from feedback_state.adversarial import regimes_from_config, sweep_specs
+    from feedback_state.adversarial import expand_run, regimes_from_config
 
-    known = regimes_from_config(cfg)
     asked = args.regimes or (list(sm.get("regimes", cfg["run"])) if args.smoke else list(cfg["run"]))
-    regimes: list[str] = []
-    for r in asked:                      # "sweep" stands for every rate of the sweep block, in order
-        regimes.extend(sweep_specs(cfg.get("sweep")) if r == "sweep" else [r])
+    regimes = expand_run(asked, cfg)     # "rates" = p000 ... p100, "counts" = k0 ... k6, "sweep" = both
+    known = regimes_from_config(cfg, regimes)   # p030 (30% of every peer's answers) and k2 (2 peers per event) need no config entry
     unknown = [r for r in regimes if r not in known]
     if unknown:
-        sys.exit(f"unknown regime(s) {unknown}; the config knows {sorted(known)}")
+        sys.exit(f"unknown regime(s) {unknown}; the config knows {sorted(known)}, "
+                 "and pNNN (a share of every peer's answers, p000-p100) or kN (N misleading peers per event) need no entry")
     tests = list(cfg["streams"]["test"])
     if args.smoke:
         tests = [t for t in tests if t == "indist6"] or tests[:1]

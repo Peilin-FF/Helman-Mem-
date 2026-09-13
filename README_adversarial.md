@@ -153,6 +153,11 @@ The rate is per peer, so with `peers: all` it is also the share of all peer answ
 `saboteurs2` is the other way to reach a given share: a few peers poisoned completely rather than every peer poisoned a
 little, which is a different experiment even at the same ratio.
 
+The other dial is the number of misleading peers **per event**: `k0` ... `k6` (`counts:` in the sweep block) put
+exactly that many of the six on every question. Any `pNNN` or `kN` works on the command line without a config entry;
+`--regimes rates`, `counts` and `sweep` expand the sweep block. How to generate the answers and build streams at a
+chosen ratio, step by step: `README_misleading_peers.md`.
+
 `run:` in the YAML lists the regimes to build and evaluate (default `all100`, `saboteurs2`, `all50`, with `sweep`
 standing for every rate of the sweep block); `--regimes flip` runs another one. Which (peer, event) pairs a regime selects is deterministic -- a hash of the regime, the peer and the
 event id -- so the stream can be rebuilt identically at any time, and `flip` is defined in the order the record walks

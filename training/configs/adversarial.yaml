@@ -72,9 +72,12 @@ sweep:                             # the dose-response curve: the same experimen
                                    # peers' refusals are subtracted -- and the selections nest, so a higher rate
                                    # poisons the events of the lower one plus more.
   prefix: p
+  counts: [0, 1, 2, 3, 4, 5, 6]   # the other dial -> k0 ... k6: exactly that many of the six peers misleading on every
+                                   # event, a different set each time (minority vs majority lying)
 
-run: [all100, saboteurs2, all50]   # the regimes to build and evaluate, in this order.  "sweep" here stands for every
-                                   # rate of the sweep block (p000 ... p100); flip and targeted are one flag away.
+run: [all100, saboteurs2, all50]   # the regimes to build and evaluate, in this order.  In a run list or --regimes,
+                                   # "rates" = p000 ... p100, "counts" = k0 ... k6, "sweep" = both; flip and targeted are
+                                   # one flag away, and any pNNN (e.g. p030) or kN (e.g. k2) works as is.
 steps: [peers, streams, features, prompts, eval, table]   # each step skips work already on disk, so a run can be resumed
 
 generation:                        # scripts/adversarial_peers.py

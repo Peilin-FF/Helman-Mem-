@@ -88,7 +88,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config)) if args.config.exists() else {}
-    regimes = regimes_from_config(cfg)
+    regimes = regimes_from_config(cfg, [args.regime])   # p030 / k2 work without being in the config
     if args.regime not in regimes:
         raise SystemExit(f"unknown regime {args.regime!r}; the config knows {sorted(regimes)}")
     regime: Regime = regimes[args.regime]
@@ -113,12 +113,17 @@ def main() -> None:
         usable = [bool(r and r.get("accepted") and (not args.drop_forced or not r.get("forced")))
                   for r in (rows.get(e["id"]) for e in events)]
         usable_row[m] = usable
-        masks[m] = regime.mask(p, events, positions=positions, honest=[e["honest"][p] for e in events], available=usable)
+        if regime.kind != "count":
+            masks[m] = regime.mask(p, events, positions=positions, honest=[e["honest"][p] for e in events], available=usable)
+    if regime.kind == "count":   # one joint choice per event: exactly `count` misleading peers
+        joint = regime.joint_masks(events, [usable_row[m] for m in names])
+        masks = {m: joint[p] for p, m in enumerate(names)}
 
     stat = {m: {"misled": 0, "forced": 0, "unavailable": 0, "selected": 0} for m in names}
     acc = {m: [0, 0, 0] for m in names}       # [events, honest right, right in the stream]
     lens = {m: ([], []) for m in names}       # honest / adversarial answer lengths
     by_task: dict = collections.defaultdict(lambda: collections.Counter())
+    per_event = collections.Counter()          # how many misleading peers each event ended up with
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w") as f, args.base.open() as src:
         for idx, line in enumerate(src):
@@ -154,6 +159,7 @@ def main() -> None:
                     by_task[task]["misled"] += 1
                 acc[m][2] += int(round(float(rec.get("peer_correct", {}).get(k, honest_right))))
                 by_task[task]["peer_events"] += 1
+            per_event[sum(bool(rec["peer_metadata"][k].get("misled")) for k in keys)] += 1
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     mean = lambda xs: float(statistics.fmean(xs)) if xs else None
@@ -163,8 +169,10 @@ def main() -> None:
             "index": i, "covered": regime.covers(i), "selected": stat[m]["selected"], "misled": stat[m]["misled"],
             "forced": stat[m]["forced"], "unavailable": stat[m]["unavailable"],
             "usable_answers": int(sum(usable_row[m])),
-            "requested_ratio": 100 * (float(regime.rate) if regime.covers(i) and regime.kind == "fraction" else
-                                      stat[m]["selected"] / max(1, n)),
+            "requested_ratio": 100 * (0.0 if not regime.covers(i) else
+                                      float(regime.rate) if regime.kind == "fraction" else
+                                      min(1.0, regime.count / max(1, sum(regime.covers(q) for q in range(len(names)))))
+                                      if regime.kind == "count" else stat[m]["selected"] / max(1, n)),
             "realised_ratio": 100 * stat[m]["misled"] / max(1, n),
             "accuracy_honest": 100 * acc[m][1] / max(1, acc[m][0]),
             "accuracy_in_stream": 100 * acc[m][2] / max(1, acc[m][0]),
@@ -173,11 +181,12 @@ def main() -> None:
     manifest = {
         "base": str(args.base), "out": str(args.out), "adversarial_answers": str(args.adv), "events": n,
         "order": args.order, "drop_forced": args.drop_forced,
-        "regime": {"name": regime.name, "kind": regime.kind, "rate": regime.rate, "exact": regime.exact,
+        "regime": {"name": regime.name, "kind": regime.kind, "rate": regime.rate, "exact": regime.exact, "count": regime.count,
                    "at": regime.at, "peers": list(regime.peers) if regime.peers is not None else "all",
                    "description": regime.describe(), "note": regime.note},
         "poisoned_answers": sum(v["misled"] for v in stat.values()),
         "poison_ratio": 100 * sum(v["misled"] for v in stat.values()) / max(1, n * len(names)),
+        "events_by_misleading_peers": {str(k): per_event[k] for k in range(len(names) + 1)},
         "peers": peers_manifest, "by_task": {t: dict(c) for t, c in sorted(by_task.items())},
     }
     (args.out.parent / "manifest.json").write_text(json.dumps(manifest, indent=1))
@@ -185,6 +194,8 @@ def main() -> None:
     print(f"[adv-stream] {manifest['poisoned_answers']}/{n * len(names)} peer answers replaced "
           f"({manifest['poison_ratio']:.1f}% of the stream, {sum(v['forced'] for v in stat.values())} forced, "
           f"{short} selected without a usable answer) -> {args.out}")
+    print("[adv-stream] events by number of misleading peers: "
+          + ", ".join(f"{k}: {per_event[k]}" for k in range(len(names) + 1)))
     for i, m in enumerate(names):
         v = peers_manifest[m]
         print(f"   peer_{i} {m:34s} ratio {v['requested_ratio']:5.1f}% asked -> {v['realised_ratio']:5.1f}% reached  "

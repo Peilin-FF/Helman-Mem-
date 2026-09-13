@@ -8,11 +8,14 @@ import numpy as np
 from feedback_state.adversarial import (
     Regime,
     accept,
+    adhoc_spec,
+    expand_run,
     force_wrong,
     load_regimes,
     misleading_prompt,
     plausible_wrong_number,
     record_positions,
+    regimes_from_config,
     sweep_specs,
     wrong_label,
 )
@@ -206,3 +209,37 @@ def test_an_adversarial_stream_resolves_like_any_other_stream():
     assert STREAMS["ood6_adv_flip"][0] == "ood6_adv_flip/test.jsonl"
     assert STREAMS["train6_adv_all100"][0] == "mixed_train_big6_adv_all100/train.jsonl"
     assert PEERS_PER_STREAM["ood6_adv_all50"] == 6
+
+
+def test_a_count_regime_puts_exactly_k_misleading_peers_on_every_event():
+    records = [{"id": f"e{i}"} for i in range(200)]
+    available = [[True] * 200 for _ in range(6)]
+    masks = Regime("k2", kind="count", count=2).joint_masks(records, available)
+
+    assert all(sum(masks[p][i] for p in range(6)) == 2 for i in range(200))
+    assert len({tuple(masks[p][i] for p in range(6)) for i in range(200)}) > 5      # a different pair each time
+
+
+def test_a_count_regime_only_picks_peers_that_have_a_usable_answer():
+    records = [{"id": f"e{i}"} for i in range(50)]
+    available = [[p != 0 for _ in range(50)] for p in range(6)]                 # peer 0 never got a usable answer
+    masks = Regime("k5", kind="count", count=5).joint_masks(records, available)
+
+    assert not any(masks[0])
+    assert all(sum(masks[p][i] for p in range(6)) == 5 for i in range(50))
+
+
+def test_any_ratio_can_be_named_without_a_config_entry():
+    regimes = regimes_from_config({}, ["p030", "k4", "not_a_regime"])
+
+    assert regimes["p030"].rate == 0.30 and regimes["p030"].exact
+    assert regimes["k4"].kind == "count" and regimes["k4"].count == 4
+    assert "not_a_regime" not in regimes and adhoc_spec("p150") is None
+
+
+def test_run_keywords_expand_to_the_sweep_s_regimes():
+    cfg = {"sweep": {"rates": [0.0, 0.5], "counts": [1, 3]}}
+
+    assert expand_run(["rates"], cfg) == ["p000", "p050"]
+    assert expand_run(["counts"], cfg) == ["k1", "k3"]
+    assert expand_run(["sweep", "all100"], cfg) == ["p000", "p050", "k1", "k3", "all100"]

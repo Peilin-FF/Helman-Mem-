@@ -393,7 +393,7 @@ def force_wrong(record: dict[str, Any], text: str) -> tuple[str, str | None]:
 # 4. The regimes: which (peer, event) pairs are adversarial
 # ---------------------------------------------------------------------------
 
-KINDS = ("fraction", "targeted", "flip")
+KINDS = ("fraction", "count", "targeted", "flip")
 
 
 @dataclass
@@ -408,6 +408,10 @@ class Regime:
               growing set of events rather than a different set each time.
     targeted  the peers in ``peers`` are misleading exactly on the events they answered correctly in the honest
               stream (thinned by ``rate``): the damage is maximal, because only the useful answers are destroyed.
+    count     on every event, exactly ``count`` of the peers in ``peers`` are misleading and the rest are honest; which
+              ones changes from event to event (hash of seed, event id and peer), taken among the peers that have a
+              usable adversarial answer there.  The other reading of "the ratio": a minority (1 or 2 of 6) or a
+              majority (4 or 5 of 6) lying on each question, rather than a share of each peer's answers.
     flip      the peers in ``peers`` are honest for the first ``at`` of the stream and misleading afterwards, in the
               order the record sees (``--order``): the memory must notice a peer that turns.
     """
@@ -418,6 +422,7 @@ class Regime:
     at: float = 0.5
     seed: int = 0
     exact: bool = False                       # fraction regimes: hit the rate in the stream, not only in the request
+    count: int = 0                            # count regimes: misleading peers per event
     note: str = ""
 
     def __post_init__(self) -> None:
@@ -425,6 +430,10 @@ class Regime:
             raise ValueError(f"unknown regime kind {self.kind!r} (known: {KINDS})")
         if self.peers is not None:
             self.peers = tuple(int(p) for p in self.peers)
+        if self.kind == "fraction" and not 0.0 <= float(self.rate) <= 1.0:
+            raise ValueError(f"regime {self.name}: rate must be in [0, 1], got {self.rate}")
+        if self.kind == "count" and int(self.count) < 0:
+            raise ValueError(f"regime {self.name}: count must be >= 0, got {self.count}")
 
     def covers(self, peer: int) -> bool:
         return self.peers is None or int(peer) in self.peers
@@ -434,6 +443,8 @@ class Regime:
         """``position`` is the event's place in the record's order, in [0, 1); ``honest_correct`` its honest label."""
         if not self.covers(peer):
             return False
+        if self.kind == "count":
+            raise ValueError("a count regime selects peers jointly per event: use joint_masks()")
         if self.kind == "flip":
             return position is not None and position >= float(self.at)
         if self.kind == "targeted" and not honest_correct:
@@ -467,8 +478,27 @@ class Regime:
                                position=None if positions is None else float(positions[i]),
                                honest_correct=None if honest is None else int(honest[i])) for i in range(n)]
 
+    def joint_masks(self, records: Sequence[dict[str, Any]], available: Sequence[Sequence[bool]]) -> list[list[bool]]:
+        """Masks of all peers at once (``available[peer][event]``): what a count regime needs, one choice per event.
+
+        Every other kind is independent per peer and simply delegates to :meth:`mask`.
+        """
+        n_peers, n = len(available), len(records)
+        if self.kind != "count":
+            return [self.mask(p, records, available=available[p]) for p in range(n_peers)]
+        out = [[False] * n for _ in range(n_peers)]
+        for i, rec in enumerate(records):
+            cands = [p for p in range(n_peers) if self.covers(p) and available[p][i]]
+            cands.sort(key=lambda p: _stable_frac(self.seed, "count", rec.get("id"), p))
+            for p in cands[: int(self.count)]:
+                out[p][i] = True
+        return out
+
     def describe(self) -> str:
         who = "every peer" if self.peers is None else "peers " + ",".join(str(p) for p in self.peers)
+        if self.kind == "count":
+            pool = "the six peers" if self.peers is None else who
+            return f"{self.count} of {pool} misleading on every event, a different {self.count} each time"
         if self.kind == "flip":
             return f"{who} honest for the first {100 * self.at:.0f}% of the stream, misleading afterwards"
         if self.kind == "targeted":
@@ -485,7 +515,7 @@ def load_regimes(cfg: dict[str, Any]) -> dict[str, Regime]:
         peers = spec.pop("peers", "all")
         peers = None if peers in (None, "all", "*") else tuple(int(p) for p in peers)
         out[name] = Regime(name=name, peers=peers, **{k: v for k, v in spec.items() if k in
-                                                      {"kind", "rate", "at", "seed", "exact", "note"}})
+                                                      {"kind", "rate", "at", "seed", "exact", "count", "note"}})
     return out
 
 
@@ -494,6 +524,7 @@ def sweep_specs(sweep: dict[str, Any] | None) -> dict[str, dict]:
 
     ``{rates: [0, 0.25, 0.5, 1.0], peers: all, exact: true, prefix: p}`` becomes the regimes p000, p025, p050, p100.
     Rate 0 is the honest stream rebuilt through the identical machinery, which is the control the curve starts from.
+    ``counts: [0, 1, 2, 3, 4, 5, 6]`` adds k0 ... k6: that many misleading peers on every event.
     """
     if not sweep:
         return {}
@@ -507,13 +538,49 @@ def sweep_specs(sweep: dict[str, Any] | None) -> dict[str, dict]:
             shared, kind="fraction", rate=rate, exact=exact,
             note=f"{round(rate * 100)}% of {who}'s answers are misleading"
                  + (" (the honest stream, rebuilt through the same steps)" if rate == 0 else ""))
+    for k in [int(c) for c in sweep.get("counts", [])]:
+        out[f"k{k}"] = dict(shared, kind="count", count=k,
+                            note=f"{k} of the peers misleading on every event" + (" (the honest stream)" if k == 0 else ""))
     return out
 
 
-def regimes_from_config(cfg: dict[str, Any]) -> dict[str, Regime]:
-    """Every regime a config defines: the named ones and the ones a ``sweep:`` block expands to."""
+_ADHOC_RATE = re.compile(r"^p(\d{3})$")
+_ADHOC_COUNT = re.compile(r"^k(\d+)$")
+
+
+def adhoc_spec(name: str) -> dict | None:
+    """A regime named on the command line without being in the config: ``p030`` = 30% of every peer's answers
+    misleading (exact), ``k2`` = two misleading peers on every event.  Any other name must be defined in the config."""
+    m = _ADHOC_RATE.match(str(name))
+    if m and int(m.group(1)) <= 100:
+        r = int(m.group(1))
+        return {"kind": "fraction", "rate": r / 100, "exact": True, "peers": "all",
+                "note": f"{r}% of every peer's answers are misleading"}
+    m = _ADHOC_COUNT.match(str(name))
+    if m:
+        return {"kind": "count", "count": int(m.group(1)), "peers": "all",
+                "note": f"{int(m.group(1))} of the peers misleading on every event"}
+    return None
+
+
+def expand_run(entries: Iterable[str], cfg: dict[str, Any]) -> list[str]:
+    """Regime names from a run list: ``rates`` = the sweep's pNNN, ``counts`` = its kN, ``sweep`` = both."""
+    spec = sweep_specs(cfg.get("sweep"))
+    rates = [n for n, v in spec.items() if v["kind"] == "fraction"]
+    counts = [n for n, v in spec.items() if v["kind"] == "count"]
+    out: list[str] = []
+    for e in entries:
+        out.extend({"rates": rates, "counts": counts, "sweep": rates + counts}.get(e, [e]))
+    return out
+
+
+def regimes_from_config(cfg: dict[str, Any], names: Iterable[str] = ()) -> dict[str, Regime]:
+    """Every regime a config defines (named ones, the sweep's), plus any of ``names`` given in the ad-hoc form."""
     specs = dict(cfg.get("regimes") or {})
     specs.update(sweep_specs(cfg.get("sweep")))
+    for n in names:
+        if n not in specs and adhoc_spec(n) is not None:
+            specs[n] = adhoc_spec(n)
     return load_regimes(specs)
 
 

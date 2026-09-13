@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from feedback_state.adversarial import regimes_from_config
+from feedback_state.adversarial import expand_run, regimes_from_config
 
 CONDS = ("tilt", "peers", "solo", "swap")
 STREAM_DIR = {"indist6": "indist", "ood6": "oodfull"}
@@ -126,8 +126,9 @@ def main() -> None:
     cfg = yaml.safe_load(open(args.config))
     out, mem = cfg["outputs"], cfg["memory"]
     tag = args.tag or str(cfg["central"]["tag"])
-    known = regimes_from_config(cfg)
-    regimes = args.regimes or [r for entry in cfg["run"] for r in (sorted(k for k in known if k.startswith(str(cfg.get("sweep", {}).get("prefix", "p")))) if entry == "sweep" else [entry])]
+    known = regimes_from_config(cfg, [r.replace("_smoke", "") for r in (args.regimes or [])])
+    regimes = args.regimes or expand_run(cfg["run"], cfg)
+    known.update(regimes_from_config(cfg, regimes))
     tests = [s for s in cfg["streams"]["test"]]
     evals, gen_dir = Path(out["evals"]) / tag, Path(out["prompts"]) / tag
     honest = Path(out["honest"]) if out.get("honest") and not args.smoke else None   # a 48-event smoke row next to the real honest rows would only mislead
