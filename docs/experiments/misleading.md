@@ -73,6 +73,27 @@ A peer cannot go beyond its usable share, so the top rates reach less than asked
 So p025 and p050 are exact on both streams and p075 on ood6. p075 on indist6 reaches 71.9% overall because the two
 DeepSeek peers stop at their usable share. p100 reaches 81.0% on indist6 and 91.9% on ood6, the most these answers allow.
 
+## Result (2026-09-13): frozen Qwen3-4B on the rate datasets
+
+Accuracy (%) of the central model with the six answers in the prompt, with (`tilt`) and without (`peers`) the record's
+attention tilt; the record is fit on each stream itself. Reference: the honest main-experiment rows (question only there:
+60.5 in-distribution, 67.8 OOD).
+
+| misleading share asked (reached: indist6 / ood6) | indist6 tilt | indist6 peers | tilt − peers | ood6 tilt | ood6 peers | tilt − peers |
+|---|---:|---:|---:|---:|---:|---:|
+| honest (main experiment) | 67.2 | 64.8 | +2.4 | 74.0 | 69.2 | +4.9 |
+| 0% | 67.3 | 64.8 | +2.6 | 74.0 | 69.2 | +4.8 |
+| 25% | 66.5 | 64.2 | +2.3 | 70.5 | 64.4 | +6.1 |
+| 50% | 66.1 | 64.1 | +2.0 | 68.5 | 59.2 | +9.3 |
+| 75% (71.9 / 75.0) | 64.8 | 62.8 | +2.0 | 63.5 | 52.2 | +11.4 |
+| 100% (81.0 / 91.9) | 63.4 | 61.5 | +1.9 | 53.2 | 47.0 | +6.3 |
+
+On OOD, where the central model leans on the peers, misleading answers cost the untilted model 22 points and the tilt
+recovers up to 11.4 of them (at 75%); at 100% almost no correct answer is left to up-weight and the gain shrinks. On the
+in-distribution stream the model solves most math and code itself, both conditions lose about 3 points and the tilt's
++2 holds throughout. The record gives misleading answers a lower estimate than honest ones (AUC 0.70-0.72 in-distribution,
+0.79-0.89 OOD), without being told which answers are misleading. Full table: `outputs/tables/misleading.md`.
+
 ## Reading the table
 
 `outputs/tables/misleading.md`: accuracy per regime under `tilt` (peers + memory) and `peers` (peers only), and their
