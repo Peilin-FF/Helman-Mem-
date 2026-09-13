@@ -89,6 +89,11 @@ class Layout:
     def quality_file(record_file: Path) -> Path:
         return record_file.with_name(record_file.name[: -len(".jsonl")] + ".quality.json")
 
+    def eval_dataset(self, dataset: str, condition: dict) -> str:
+        """The dataset whose result a condition reads: a question-only condition sees no peer answers, so every dataset built
+        on a stream (its misleading variants) shares the stream's result."""
+        return self.registry.stream_of(dataset)["name"] if condition.get("mode") == "solo" else dataset
+
     def eval_dir(self, model: str, stream: str, condition: str) -> Path:
         return self.outputs / "eval" / model / stream / condition
 

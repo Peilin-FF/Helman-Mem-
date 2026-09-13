@@ -155,14 +155,19 @@ class Plan:
 
     def eval_jobs(self, model_key: str, model_spec: dict, record_model: str, streams: list[str], checkpoint: Path | None = None) -> list[Job]:
         ev, conds = self.cfg.get("evaluation", {}), self.cfg.get("conditions", {})
-        jobs = []
-        for s in streams:
-            stream, record = self.L.stream(s), self.L.record_file(record_model, s)
+        jobs, seen = [], set()
+        for d in streams:
             for c in self.cfg.get("eval_conditions", list(conds)):
                 if c not in conds:
                     raise SystemExit(f"condition {c!r} is not defined under conditions:")
                 cd = conds[c]
+                s = self.L.eval_dataset(d, cd)            # question only: the base stream's result, shared by its variants
                 out = self.L.eval_dir(model_key, s, c)
+                if out in seen:
+                    continue
+                seen.add(out)
+                # the record fixes which events are evaluated, in which order; any record of the same events will do for solo
+                stream, record = self.L.stream(s), self.L.record_file(record_model, d)
                 engine = model_spec.get("engine", ev.get("engine", "vllm"))
                 args = (f"--model {model_spec['path']} --record {record} --stream {stream['path']} --condition {c} --mode {cd.get('mode', 'peers')} "
                         f"--gamma {float(cd.get('gamma', 0.0))}{' --swap' if cd.get('swap') else ''} --bias-form {ev.get('bias_form', 'logratio')} "
@@ -170,8 +175,9 @@ class Plan:
                         f"--gpu-memory-utilization {ev.get('gpu_memory_utilization', 0.85)}"
                         + (f" --checkpoint {checkpoint}" if checkpoint else ""))
                 want = {"mode": cd.get("mode", "peers"), "gamma": float(cd.get("gamma", 0.0)), "swap_record": bool(cd.get("swap", False)),
-                        "max_new_tokens": int(ev.get("max_new_tokens", 768)),
-                        "record": str(record), "checkpoint": str(checkpoint) if checkpoint else None}
+                        "max_new_tokens": int(ev.get("max_new_tokens", 768)), "checkpoint": str(checkpoint) if checkpoint else None}
+                if cd.get("mode", "peers") != "solo":           # the answers never see the record without peers
+                    want["record"] = str(record)
                 check = lambda out=out, want=want: stale(out / "eval_metrics.json", want)
                 pre = self.model_env(model_spec)
                 if engine == "vllm":

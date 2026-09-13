@@ -121,7 +121,8 @@ def build(cfg: dict, smoke: bool) -> str:
     head = ["row"] + [f"{s}: {c}" for s in base_streams for c in conds] + [f"{s}: {a} − {b}" for s in base_streams for a, b in deltas] + [f"{s}: record AUC / fav" for s in base_streams]
     lines = ["| " + " | ".join(head) + " |", "|---|" + "---:|" * (len(head) - 1)]
     for label, key, rec_model, smap, lay in rows:
-        m = {(s, c): load_json(lay.eval_dir(key, smap[s], c) / "eval_metrics.json") if s in smap else None for s in base_streams for c in conds}
+        m = {(s, c): load_json(lay.eval_dir(key, lay.eval_dataset(smap[s], cfg.get("conditions", {}).get(c, {})), c) / "eval_metrics.json")
+             if s in smap else None for s in base_streams for c in conds}
         if all(v is None for v in m.values()):
             continue
         cells = [pct(m[(s, c)]) for s in base_streams for c in conds]

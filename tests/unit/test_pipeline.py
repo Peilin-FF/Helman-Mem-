@@ -253,3 +253,19 @@ def test_a_failed_job_is_retried_once_before_it_counts_as_failed(tmp_path):
     broken = Job("x", "broken", "exit 3", gpus=0, done=tmp_path / "never")
     sched.run(broken)
     assert sched.failed == ["broken"] and "attempt 2" in L.log("t", "broken").read_text()
+
+
+def test_question_only_is_shared_by_a_stream_and_its_misleading_variants(tmp_path):
+    cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data",
+                                                 "datasets=[indist6_misleading_p025, indist6_misleading_p050]"])
+    plan = Plan(cfg, "misleading.yaml", smoke=False, gpus=[0])
+    ev = {j.name: j for j in plan.evaluate()}
+
+    assert sorted(n for n in ev if n.endswith("_solo")) == ["eval_q3_4b_indist6_solo"]          # one job, on the base stream
+    assert f"--stream {tmp_path}/data/indist6/test.jsonl " in ev["eval_q3_4b_indist6_solo"].cmd
+    assert "eval_q3_4b_indist6_misleading_p050_tilt" in ev and len(ev) == 2 * 2 + 1
+    stored = tmp_path / "out/eval/q3_4b/indist6/solo"
+    stored.mkdir(parents=True)
+    (stored / "eval_metrics.json").write_text(json.dumps({"mode": "solo", "gamma": 0.0, "swap_record": False, "max_new_tokens": 768,
+                                                          "checkpoint": None, "record": "outputs/record/q3_4b/indist6/shuffled0.fit-train6.jsonl"}))
+    assert ev["eval_q3_4b_indist6_solo"].check() is None                                     # the main experiment's result is reused
