@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Run an experiment of the Kalman Mem pipeline. Everything is in the config (configs/base.yaml + configs/experiments/*.yaml).
+# Run an experiment of the Kalman Mem pipeline. Everything is in the config (configs/base.yaml, configs/experiments/*.yaml,
+# and the datasets / models / peer sets registered in configs/datasets, configs/models, configs/peers).
 #   bash run.sh configs/experiments/main.yaml --dry-run        the jobs, and which are already done
 #   bash run.sh configs/experiments/main.yaml --smoke          48 events, every step, into outputs/smoke/ (run this first)
 #   bash run.sh configs/experiments/main.yaml                  the whole experiment (resumable: finished work is skipped)
-#   bash run.sh configs/experiments/misleading.yaml --steps peers --gpus 4,5,6,7 --set regimes_run=[sweep]
+#   bash run.sh configs/experiments/misleading.yaml --steps streams evaluate --set "datasets=[indist6_misleading_p050]"
 # Long runs: nohup bash run.sh configs/experiments/<name>.yaml > logs/<name>.out 2>&1 &    (or inside tmux)
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"

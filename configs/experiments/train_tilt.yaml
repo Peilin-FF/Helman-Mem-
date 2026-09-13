@@ -8,10 +8,10 @@ judge: q3_4b                        # the model whose record the training data c
 init: q3_4b                         # the model trained
 
 train_data:
-  stream: train6                    # the training events, in the record's fixed order
+  dataset: train6                   # the training events, in the record's fixed order
   order: fixed
 val_data:
-  stream: indist6                   # every 8th event of the in-distribution record, 512 events (as in the recipe: note that
+  dataset: indist6                  # every 8th event of the in-distribution record, 512 events (as in the recipe: note that
   order: shuffled0                  # this validation set is drawn from the stream the models are later evaluated on)
   every: 8
   limit: 512
@@ -25,7 +25,7 @@ tilt_overrides: [data.attn_gamma=3.0, actor_rollout_ref.model.attn_bias=True, ac
                  actor_rollout_ref.model.use_remove_padding=False, actor_rollout_ref.model.attn_implementation=sdpa]
 overrides: []                       # added to every arm (any key of configs/train/grpo.yaml): one epoch from Qwen3-4B by default
 
-eval_streams: [indist6, ood6]       # the final checkpoint of every arm, in these conditions
+datasets: [indist6, ood6]           # the final checkpoint of every arm, in these conditions
 eval_conditions: [tilt, peers, solo, swap]
 table:
   rows: runs
@@ -37,5 +37,5 @@ smoke:                              # --smoke: 2 GPUs, 2 steps, 48-event evaluat
   gpus_per_run: 2
   overrides: [trainer.total_training_steps=2, trainer.save_freq=2, trainer.test_freq=-1, data.train_batch_size=16,
               actor_rollout_ref.actor.ppo_mini_batch_size=8, trainer.val_before_train=False]
-  streams: [indist6]
+  datasets: [indist6]
   arms: [run3b_tilt]

@@ -2,7 +2,7 @@
 
     bash run.sh configs/experiments/main.yaml                     every step of the experiment
     bash run.sh configs/experiments/main.yaml --steps evaluate    one step
-    bash run.sh configs/experiments/misleading.yaml --smoke       48 events, every step, into outputs/smoke/
+    bash run.sh configs/experiments/misleading.yaml --smoke       48 events of one dataset, every step, into outputs/smoke/
     bash run.sh configs/experiments/main.yaml --dry-run           print the jobs and whether each is done
     bash run.sh configs/experiments/main.yaml --set evaluation.max_new_tokens=1024 --gpus 4,5,6,7
 
@@ -29,7 +29,7 @@ from pathlib import Path
 import yaml
 
 from pipeline.config import load, shown
-from pipeline.layout import ADV, Layout
+from pipeline.layout import Layout
 
 ORDER = ["peers", "streams", "features", "record", "train", "evaluate", "table"]
 
@@ -60,49 +60,40 @@ class Plan:
         self.exp = cfg["name"]
         sm = cfg.get("smoke", {})
         self.events = int(sm.get("events", 48)) if smoke else None
-        streams = cfg.get("eval_streams", ["indist6"])
-        self.base_streams = list(sm.get("streams", ["indist6"] if "indist6" in streams else streams[:1])) if smoke else list(streams)
+        asked = self.L.registry.expand(cfg.get("datasets", []))
+        self.datasets = self.L.registry.expand(sm["datasets"]) if smoke and "datasets" in sm else asked[:1] if smoke else asked
         self.shards = 1 if smoke else len(gpus)
 
-    # regimes and the streams they produce
-    def regimes(self) -> list[str]:
-        if "regimes_run" not in self.cfg:
-            return []
-        from feedback_state.adversarial import expand_run
+    def eval_datasets(self) -> list[str]:
+        """The datasets the central model is run on (answers datasets only feed the streams)."""
+        return [d for d in self.datasets if self.L.stream(d)["kind"] != "answers"]
 
-        asked = self.cfg.get("smoke", {}).get("regimes", self.cfg["regimes_run"]) if self.smoke else self.cfg["regimes_run"]
-        return expand_run(asked, self.cfg)
-
-    def regime_spec(self, name: str) -> dict:
-        from feedback_state.adversarial import adhoc_spec, sweep_specs
-
-        spec = dict(self.cfg.get("regimes", {})).get(name) or sweep_specs(self.cfg.get("sweep")).get(name) or adhoc_spec(name)
-        if spec is None:
-            raise SystemExit(f"regime {name!r} is not defined (regimes:, sweep:, or the pNNN / kN forms)")
-        return spec
-
-    def eval_streams(self) -> list[str]:
-        regimes = self.regimes()
-        if regimes:
-            return [f"{s}{ADV}{r}" for r in regimes for s in self.base_streams]
-        return list(self.base_streams)
+    def answer_datasets(self) -> list[str]:
+        """The answers datasets to generate: those named, and those the named misleading streams are built from."""
+        out = []
+        for d in self.datasets:
+            spec = self.L.stream(d)
+            a = d if spec["kind"] == "answers" else spec.get("answers") if spec["kind"] == "misleading" else None
+            if a and a not in out:
+                out.append(a)
+        return out
 
     def fit(self) -> str:
         return str(self.cfg.get("record", {}).get("fit", "self"))
 
     def model_env(self, spec: dict) -> str:
-        return f'eval "$(conda shell.bash hook)" && conda activate {spec["env"]} && ' if spec.get("env") else ""
+        return f'eval "$(conda shell.bash hook)" && conda activate {spec["conda_env"]} && ' if spec.get("conda_env") else ""
 
     # the steps
     def peers(self) -> list[Job]:
         gen = self.cfg.get("generation", {})
-        mode = self.cfg.get("peers_mode", "misleading")
         mis = gen.get("misleading", {})
         jobs = []
-        for s in self.base_streams:
-            stream = self.L.stream(s)
-            for p in self.L.peer_models():
-                out = self.L.peers_dir(s, mode, p["name"])
+        for a in self.answer_datasets():
+            answers = self.L.stream(a)
+            stream, mode = self.L.stream(answers["base"]), answers["mode"]
+            for p in self.L.peer_models(stream["peer_set"]):
+                out = answers["path"] / p["name"]
                 for k in range(self.shards):
                     cmd = (f"python -m pipeline.peers --mode {mode} --model {p['path']} --stream {stream['path']} --output {out} "
                            f"--shards {self.shards} --shard {k} --max-model-len {gen.get('max_model_len', 8192)} "
@@ -114,27 +105,21 @@ class Plan:
                     cmd += " --no-prefix-caching" if p.get("prefix_caching") is False else ""
                     cmd += " --trust-remote-code" if p.get("trust_remote_code") else ""
                     cmd += f" --max-examples {self.events}" if self.events else ""
-                    jobs.append(Job("peers", f"peers_{s}_{p['name']}_{k}", cmd, done=out / f"shard{k}of{self.shards}.jsonl",
-                                    group=out, group_size=self.shards, env={str(a): str(b) for a, b in (p.get("env_vars") or {}).items()}))
+                    jobs.append(Job("peers", f"peers_{a}_{p['name']}_{k}", cmd, done=out / f"shard{k}of{self.shards}.jsonl",
+                                    group=out, group_size=self.shards, env={str(x): str(y) for x, y in (p.get("env_vars") or {}).items()}))
         return jobs
 
     def streams(self) -> list[Job]:
-        mode = self.cfg.get("peers_mode", "misleading")
         jobs = []
-        for r in self.regimes():
-            spec = json.dumps(self.regime_spec(r))
-            for s in self.base_streams:
-                name = f"{s}{ADV}{r}"
-                out = self.L.stream(name)["path"]
-                cmd = (f"python -m pipeline.streams replace --base {self.L.stream(s)['path']} --answers {self.L.outputs / 'peers' / s / mode} "
-                       f"--regime {r} --regime-spec {shlex.quote(spec)} --order {self.cfg.get('record', {}).get('order', 'shuffled0')} --out {out}"
-                       + (f" --limit {self.events}" if self.events else ""))
-                jobs.append(Job("streams", f"stream_{name}", cmd, gpus=0, done=out))
+        for d in self.eval_datasets():
+            spec = self.L.stream(d)
+            if spec["kind"] != "misleading":
+                continue
+            jobs.append(Job("streams", f"stream_{d}", streams_command(self.L, d, self.events), gpus=0, done=spec["path"]))
         return jobs
 
     def feature_streams(self) -> list[str]:
-        streams = self.eval_streams()
-        return ([self.fit()] if self.fit() != "self" else []) + streams
+        return ([self.fit()] if self.fit() != "self" else []) + self.eval_datasets()
 
     def features(self) -> list[Job]:
         fe = self.cfg.get("features", {})
@@ -157,7 +142,7 @@ class Plan:
         jobs = []
         for m in self.cfg.get("central", []):
             spec = self.L.model(m)
-            for s in self.eval_streams():
+            for s in self.eval_datasets():
                 stream, out = self.L.stream(s), self.L.record_file(m, s)
                 fit = ""
                 if self.fit() != "self":
@@ -209,7 +194,7 @@ class Plan:
             return evaluate_runs(self)
         jobs = []
         for m in self.cfg.get("central", []):
-            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_streams())
+            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets())
         return jobs
 
     def train(self) -> list[Job]:
@@ -220,6 +205,23 @@ class Plan:
     def table(self) -> list[Job]:
         resolved = self.L.run_dir(self.exp) / "resolved.yaml"
         return [Job("table", "table", f"python -m pipeline.table --resolved {resolved}" + (" --smoke" if self.smoke else ""), gpus=0)]
+
+
+def streams_command(L: Layout, name: str, limit: int | None = None) -> str:
+    """The pipeline.streams command that builds a registered misleading stream."""
+    spec = L.stream(name)
+    regime = spec["regime"]
+    if isinstance(regime, str):
+        from feedback_state.adversarial import adhoc_spec
+
+        label, regime = regime, adhoc_spec(regime)
+    else:
+        label = name
+    answers = L.stream(spec["answers"])
+    dirs = ",".join(p["name"] for p in L.peer_models(spec["peer_set"]))
+    return (f"python -m pipeline.streams replace --base {L.stream(spec['base'])['path']} --answers {answers['path']} --peer-dirs {dirs} "
+            f"--regime {label} --regime-spec {shlex.quote(json.dumps(regime))} --order {spec.get('order', 'shuffled0')} --out {spec['path']}"
+            + (" --drop-forced" if spec.get("drop_forced") else "") + (f" --limit {limit}" if limit else ""))
 
 
 def stale(metrics: Path, want: dict) -> str | None:
@@ -322,7 +324,7 @@ def main(argv=None) -> None:
     (run_dir / "resolved.yaml").write_text(yaml.safe_dump({**cfg, "_smoke": args.smoke, "_gpus": gpus}, sort_keys=False))
     sched = Scheduler(gpus, plan.exp, plan.L, args.dry_run)
     print(f"[{stamp()}] {plan.exp}{' (smoke)' if args.smoke else ''}: steps {[s for s in ORDER if s in steps]}, GPUs {gpus}, "
-          f"streams {plan.eval_streams()}", flush=True)
+          f"datasets {plan.datasets}", flush=True)
     for step in ORDER:
         if step not in steps:
             continue

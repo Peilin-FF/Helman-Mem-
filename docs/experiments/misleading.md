@@ -1,15 +1,17 @@
 # misleading: the six peers answer with misleading but relevant solutions
 
 ```bash
-bash run.sh configs/experiments/misleading.yaml --smoke                          # 48 events, one regime, every step, ~20 min
-bash run.sh configs/experiments/misleading.yaml --steps peers                    # only the misleading answers (3-5 h, done once)
-bash run.sh configs/experiments/misleading.yaml                                  # all regimes in regimes_run
-bash run.sh configs/experiments/misleading.yaml --set regimes_run=[rates]        # the poison-ratio sweep p000 ... p100
+bash datasets/unpack.sh                                                          # the released answers and streams -> data/
+bash run.sh configs/experiments/misleading.yaml --smoke                          # 48 events of indist6_misleading_p050, every step
+bash run.sh configs/experiments/misleading.yaml                                  # the sweep: datasets [misleading_rates]
+bash run.sh configs/experiments/misleading.yaml --set "datasets=[ood6_misleading_p100]"   # one dataset
 ```
 
 Does the record survive peers that are wrong on purpose? Every peer answers every event with a confident, on-topic,
-verified-wrong solution once (`peers` step). A regime then chooses which of those answers replace the honest ones
-(`streams` step), and the main pipeline runs unchanged on each derived stream `<stream>_adv_<regime>`.
+verified-wrong solution once: the answers datasets `indist6_misleading` and `ood6_misleading` (`peers` step, 3-5 h on 8
+GPUs; released in `datasets/`, so it is skipped after unpacking). Each misleading dataset (`configs/datasets/`) names a
+base stream and a regime that chooses which of those answers replace the honest ones (`streams` step, seconds), and the
+main pipeline runs unchanged on the result.
 
 ## How a misleading answer is produced (`pipeline/peers.py --mode misleading`)
 
@@ -32,8 +34,8 @@ one or two sentences. They still come out longer than the honest answers (on one
 model could in principle pick up on.
 
 An event with no usable answer keeps the honest answer in every stream. On the 48-event smoke, 77-96% of each peer's
-events had a usable answer and none of the usable answers graded correct. `summary.shard*.json` of each peer reports the
-acceptance rate, forced count, attempts and why the rest were unusable.
+events had a usable answer and none of the usable answers graded correct. `data/<stream>_misleading/<peer>/summary.shard*.json`
+(and `datasets/manifest.json`) reports each peer's acceptance rate, forced count, attempts and why the rest were unusable.
 
 The weakest peer here is DeepSeek-Coder-V2-Lite-Instruct: told to argue for a wrong option it often returns an empty
 reply, a bare label or a loop ("Final anti anti anti ..."), where its honest answers on the same engine have none of
@@ -41,22 +43,23 @@ these. Those replies are rejected, so it ends with the lowest usable share; its 
 
 ## Regimes and the ratio
 
-Any name of these two forms works without a config entry, and the number is what the stream ends up with (only usable
-answers count; shares are rounded to whole events):
+A misleading dataset is a file in `configs/datasets/` that includes the template `_misleading.yaml` and sets `base` and
+`regime`. The regime is one of two short forms, where the number is what the stream ends up with (only usable answers
+count; shares are rounded to whole events):
 
 - `pNNN`: that share of every peer's answers is misleading, a different set of events per peer, nested across rates
   (p050 poisons p025's events plus more). `p000` is the honest stream rebuilt through the same steps.
 - `kN`: exactly N of the six peers are misleading on every event, a different set each time (a lying minority k1-k2
   against a lying majority k4-k5).
 
-Named regimes in the config: `all100` (every answer), `saboteurs2` (peers 1 and 4 always lie), `all50`, `flip` (peers 1
-and 4 turn misleading halfway through the record's order), `targeted` (every peer misleading exactly where it was right).
-`regimes_run` also accepts the keywords `rates`, `counts` and `sweep` (both) for the `sweep:` block. Each derived stream
-has a `manifest.json` with the requested and realised ratio per peer, events by number of misleading peers, forced and
-unavailable counts, and accuracy before and after.
+or a mapping: `{kind: fraction, rate: 1.0, peers: [1, 4]}` (Phi-4-mini and DeepSeek-Coder always lie, four peers honest),
+`{kind: flip, at: 0.5, peers: [1, 4]}` (they turn misleading halfway through the record's order), `{kind: targeted, rate:
+1.0}` (every peer misleading exactly where it was right). `drop_forced: true` leaves out answers whose conclusion was
+rewritten. The released ones are the rates `p000`, `p025`, `p050`, `p075`, `p100` on both streams (group
+`misleading_rates`). Each built stream has a `manifest.json` with the requested and realised ratio per peer, events by
+number of misleading peers, forced and unavailable counts, and accuracy before and after.
 
-A peer cannot go beyond its usable share, so the top rates reach less than asked. The generation of 2026-09-13
-(`--set "regimes_run=[rates]"`):
+A peer cannot go beyond its usable share, so the top rates reach less than asked. The generation of 2026-09-13:
 
 | peer | usable, indist6 | usable, ood6 | rewritten (of usable), indist6 / ood6 |
 |---|---:|---:|---:|
@@ -80,16 +83,17 @@ loss `tilt − peers` recovers, with `swap` at or below `peers`.
 
 ## Notes
 
-- The record is fit on each adversarial stream itself (`record.fit: self`), label-free, as it would be in deployment.
-- DeepSeek-Coder-V2-Lite-Instruct runs with `VLLM_USE_V1=0` (set in `configs/base.yaml`): its MLA attention has no working
+- The record is fit on each misleading stream itself (`record.fit: self`), label-free, as it would be in deployment.
+- DeepSeek-Coder-V2-Lite-Instruct runs with `VLLM_USE_V1=0` (set in `configs/models/deepseek_coder_v2_lite.yaml`): its MLA attention has no working
   chunked-prefill path in vLLM 0.8.5's V1 engine on A100.
 - Some misleading reading answers are partly right: the grader counts a correct fragment of a long gold answer as wrong
   when its word overlap is under 0.5.
-- Time on 8 A100s: the answers 3-5 h for both streams (once); then per regime features ~40 min, record ~10 min per stream,
+- Time on 8 A100s: the answers 3-5 h for both streams (once); then per dataset features ~40 min, record ~10 min,
   evaluation ~30 min.
 
 Before 2026-09-13 this experiment ran as `bash run_adversarial.sh` (README_adversarial.md, README_misleading_peers.md).
-The same work is now `bash run.sh configs/experiments/misleading.yaml`; `--regimes X` became `--set regimes_run=[X]`,
+The same work is now `bash run.sh configs/experiments/misleading.yaml`; a regime became a dataset file,
 `scripts/adversarial_peers.py` became `pipeline/peers.py --mode misleading`, `scripts/build_adversarial_stream.py` became
 `pipeline/streams.py replace`, and results moved from `outputs/peer_adv/` and `outputs/gen/adversarial/` to
-`outputs/peers/<stream>/misleading/` and `outputs/eval/<model>/<stream>_adv_<regime>/`.
+`data/<stream>_misleading/<peer>/`, `data/<stream>_misleading_<regime>/` and `outputs/eval/<model>/<stream>_misleading_<regime>/`
+(for a few hours on 2026-09-13 they were `outputs/peers/<stream>/misleading/` and `data/<stream>_adv_<regime>/`).

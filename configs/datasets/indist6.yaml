@@ -1,0 +1,5 @@
+# In-distribution test stream: GSM8K test, SQuAD dev and APPS test (with the hidden tests), six peers.
+path: indist6/test.jsonl
+peers: six
+events: 4319
+release: indist6.test.jsonl.gz

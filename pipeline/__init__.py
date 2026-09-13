@@ -1,12 +1,13 @@
 """The Kalman Mem pipeline: one entry point per stage, driven by the experiment YAMLs in configs/ through pipeline.run.
 
     peers     a peer model's answers on a stream (honest, or verified misleading)
-    streams   a derived stream: peers added, or answers replaced under a regime
+    streams   a misleading stream built from a stream and its peers' misleading answers under a regime
     features  the frozen judge's hidden states that address the record
     record    the Bayesian record along a stream, read before write, and its quality
     evaluate  the central model answers each event under a condition (tilt, peers, solo, swap)
     train     GRPO of the central model (arm data, then the phases)
     table     the experiment's result table
 
-Every stage takes explicit input and output paths; pipeline.run derives them from the config (configs/base.yaml).
+Every stage takes explicit input and output paths; pipeline.run derives them from the experiment config and the registered
+datasets, models and peer sets (pipeline.registry, configs/{datasets,models,peers}/).
 """

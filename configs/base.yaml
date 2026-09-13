@@ -1,35 +1,15 @@
 # Shared settings for every experiment. An experiment file names `base: ../base.yaml` and overrides what it needs.
 # Run one with:  bash run.sh configs/experiments/<name>.yaml [--steps ...] [--gpus 0,1] [--smoke] [--dry-run] [--set key=value]
+# Datasets, models and peer sets are registered one file each in configs/datasets/, configs/models/, configs/peers/
+# (python -m pipeline.registry lists them); experiments name them.
 
 paths:
   models_root: /mnt/data/peilin/HF_MODEL   # the directory holding the downloaded models (one sub-directory each)
-  data: data                               # streams: bash datasets/unpack.sh fills it
+  data: data                               # datasets: bash datasets/unpack.sh fills it; the pipeline adds built ones
   outputs: outputs
   logs: logs
 
 gpus: [0, 1, 2, 3, 4, 5, 6, 7]             # check nvidia-smi first on a shared machine; one job per GPU at a time
-
-# --- registries ------------------------------------------------------------------------------------------------------
-streams:                                   # name -> file under paths.data; derived streams "<name>_adv_<regime>" live next to it
-  train6:  {path: mixed_train_big6/train.jsonl, peers: 6}   # 17,709 events: GSM8K, SQuAD, APPS
-  indist6: {path: indist6/test.jsonl, peers: 6}             # 4,319 events: GSM8K test, SQuAD dev, APPS test
-  ood6:    {path: ood6/test.jsonl, peers: 6}                # 17,403 events: yes/no, multiple-choice, short-answer tasks
-
-models:                                    # tag -> directory under models_root (or {path, engine, env, shards, batch_size})
-  q3_4b: Qwen3-4B
-  llama31: Meta-Llama-3.1-8B-Instruct
-  ministral: Ministral-8B-Instruct-2410
-  qwen25: Qwen2.5-7B-Instruct
-  phi4: phi-4
-
-peers:                                     # the six peers of the streams, in peer_0 ... peer_5 order
-  - {index: 0, name: gemma-3-4b-it}
-  - {index: 1, name: Phi-4-mini-instruct}
-  - {index: 2, name: Qwen2.5-Coder-7B-Instruct}
-  - {index: 3, name: Meta-Llama-3.1-8B-Instruct}
-  - {index: 4, name: DeepSeek-Coder-V2-Lite-Instruct, env_vars: {VLLM_USE_V1: 0}}   # its MLA attention has no working
-                                                                                    # chunked-prefill path in vLLM 0.8.5 V1 on A100
-  - {index: 5, name: DeepSeek-R1-Distill-Qwen-7B, reasoning: true}                  # thinks first; graded after </think>
 
 # --- stage defaults ----------------------------------------------------------------------------------------------------
 generation:                                # pipeline.peers

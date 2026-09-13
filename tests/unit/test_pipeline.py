@@ -10,7 +10,8 @@ import yaml
 
 from pipeline.config import deep_merge, load
 from pipeline.layout import Layout
-from pipeline.run import Plan, stale
+from pipeline.registry import load_registry
+from pipeline.run import Plan, stale, streams_command
 
 EXPERIMENTS = Path(__file__).resolve().parents[2] / "configs" / "experiments"
 
@@ -19,8 +20,7 @@ def test_a_config_inherits_its_base_and_overrides_win():
     cfg = load(EXPERIMENTS / "main.yaml", ["evaluation.max_new_tokens=1024", "eval_conditions=[tilt]"])
 
     assert cfg["name"] == "main"
-    assert cfg["eval_streams"] == ["indist6", "ood6"]
-    assert "evaluate" not in cfg["streams"]                             # experiment keys never leak into a registry          # the experiment's own value
+    assert cfg["datasets"] == ["indist6", "ood6"]                         # the experiment's own value
     assert cfg["record"]["dim"] == 256                                   # inherited from base.yaml
     assert cfg["evaluation"]["max_new_tokens"] == 1024                   # the override
     assert cfg["evaluation"]["engine"] == "vllm"                         # merged, not replaced
@@ -42,18 +42,49 @@ def test_every_experiment_config_loads_and_expands(tmp_path):
             assert jobs, f"{f.name}: step {step} expands to no jobs"
 
 
-def test_derived_streams_live_next_to_their_base_and_smoke_is_isolated(tmp_path):
+def test_the_registry_is_consistent_and_groups_expand():
+    reg = load_registry()
+
+    assert reg.problems() == []
+    assert "_misleading" not in reg.datasets                              # a template is not a dataset
+    rates = reg.expand(["misleading_rates"])
+    assert len(rates) == 10 and rates[0] == "indist6_misleading_p000" and rates[-1] == "ood6_misleading_p100"
+    assert reg.expand(["indist6", "misleading_rates", "indist6"]) == ["indist6"] + rates   # in order, each once
+    assert reg.dataset("ood6_misleading_p025")["answers"] == "ood6_misleading"            # {base} filled from the template
+    assert reg.peer_set("six") == ["gemma3_4b", "phi4_mini", "qwen25_coder_7b", "llama31", "deepseek_coder_v2_lite", "r1_distill_qwen_7b"]
+    with pytest.raises(KeyError, match="did you mean"):
+        reg.dataset("indist6_misleading_p05")
+
+
+def test_the_registry_reports_broken_references(tmp_path):
+    for sub in ("datasets", "models", "peers"):
+        (tmp_path / sub).mkdir()
+    (tmp_path / "models/m.yaml").write_text("path: M\n")
+    (tmp_path / "peers/two.yaml").write_text("models: [m, ghost]\n")
+    (tmp_path / "datasets/s.yaml").write_text("path: s/test.jsonl\npeers: two\n")
+    (tmp_path / "datasets/s_bad.yaml").write_text("kind: misleading\nbase: s\nanswers: nowhere\nregime: p150\n")
+    problems = "\n".join(load_registry(tmp_path).problems())
+
+    assert "ghost" in problems and "nowhere" in problems and "regime must be pNNN" in problems
+
+
+def test_registered_datasets_resolve_to_data_and_smoke_builds_are_isolated(tmp_path):
     cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.data={tmp_path}/data", f"paths.outputs={tmp_path}/out"])
     real, smoke = Layout(cfg), Layout(cfg, smoke=True)
 
     assert real.stream("indist6")["path"] == tmp_path / "data/indist6/test.jsonl"
-    assert real.stream("indist6_adv_p050")["path"] == tmp_path / "data/indist6_adv_p050/test.jsonl"
-    assert real.stream("train6_adv_all100")["path"] == tmp_path / "data/mixed_train_big6_adv_all100/train.jsonl"
-    assert smoke.stream("indist6_adv_p050")["path"] == tmp_path / "out/smoke/data/indist6_adv_p050/test.jsonl"
+    assert real.stream("train6")["path"] == tmp_path / "data/mixed_train_big6/train.jsonl"
+    p050 = real.stream("indist6_misleading_p050")
+    assert p050["path"] == tmp_path / "data/indist6_misleading_p050/test.jsonl"
+    assert (p050["kind"], p050["base"], p050["answers"], p050["regime"], p050["peers"]) == ("misleading", "indist6", "indist6_misleading", "p050", 6)
+    assert real.stream("indist6_misleading")["path"] == tmp_path / "data/indist6_misleading"
+    assert smoke.stream("indist6_misleading_p050")["path"] == tmp_path / "out/smoke/data/indist6_misleading_p050/test.jsonl"
     assert smoke.stream("indist6")["path"] == real.stream("indist6")["path"]          # the released stream is read, never written
     assert str(smoke.eval_dir("q3_4b", "indist6", "tilt")).startswith(str(tmp_path / "out/smoke"))
     with pytest.raises(KeyError):
         real.stream("nope")
+    with pytest.raises(KeyError, match="group"):
+        real.stream("misleading_rates")
 
 
 def test_the_record_file_names_its_fit_and_any_non_default_setting(tmp_path):
@@ -79,28 +110,53 @@ def test_main_expands_to_the_reference_pipeline(tmp_path):
     assert "--mode solo --gamma 0.0" in ev["eval_q3_4b_indist6_solo"].cmd
 
 
-def test_misleading_expands_regimes_into_streams_and_evaluations(tmp_path):
-    cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.outputs={tmp_path}/out", "regimes_run=[all100, k2]"])
+def test_misleading_expands_datasets_into_answers_streams_and_evaluations(tmp_path):
+    cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                 "datasets=[indist6_misleading_p050, ood6_misleading_p100]"])
     plan = Plan(cfg, "misleading.yaml", smoke=False, gpus=[0])
 
-    assert plan.eval_streams() == ["ood6_adv_all100", "indist6_adv_all100", "ood6_adv_k2", "indist6_adv_k2"]
+    assert plan.eval_datasets() == ["indist6_misleading_p050", "ood6_misleading_p100"]
+    assert plan.answer_datasets() == ["indist6_misleading", "ood6_misleading"]
     streams = {j.name: j for j in plan.streams()}
-    assert '"kind": "count"' in streams["stream_indist6_adv_k2"].cmd
+    cmd = streams["stream_indist6_misleading_p050"].cmd
+    assert '"kind": "fraction"' in cmd and "--regime p050 " in cmd and f"--answers {tmp_path}/data/indist6_misleading " in cmd
+    assert ("--peer-dirs gemma-3-4b-it,Phi-4-mini-instruct,Qwen2.5-Coder-7B-Instruct,Meta-Llama-3.1-8B-Instruct,"
+            "DeepSeek-Coder-V2-Lite-Instruct,DeepSeek-R1-Distill-Qwen-7B ") in cmd
     assert all(j.gpus == 0 for j in streams.values())
     peers = plan.peers()
-    assert len(peers) == 2 * 6                                            # two base streams, six peers, one shard each
+    assert len(peers) == 2 * 6                                            # two answers datasets, six peers, one shard each
     r1 = [j for j in peers if "DeepSeek-R1" in j.name][0]
-    assert "--reasoning" in r1.cmd
+    assert "--reasoning" in r1.cmd and "--model /models/DeepSeek-R1-Distill-Qwen-7B " in r1.cmd
+    assert r1.done == tmp_path / "data/indist6_misleading/DeepSeek-R1-Distill-Qwen-7B/shard0of1.jsonl"
     coder = [j for j in peers if "DeepSeek-Coder" in j.name][0]
     assert coder.env == {"VLLM_USE_V1": "0"}
     assert all("--fit-features" not in j.cmd for j in plan.record())      # fit: self
 
 
-def test_smoke_uses_one_stream_one_shard_and_a_small_record(tmp_path):
+def test_a_new_regime_is_a_new_dataset_file(tmp_path):
+    root = Path(__file__).resolve().parents[2] / "configs"
+    for sub in ("models", "peers"):
+        (tmp_path / sub).symlink_to(root / sub)
+    (tmp_path / "datasets").mkdir()
+    for f in ("_misleading.yaml", "indist6.yaml", "indist6_misleading.yaml"):
+        (tmp_path / "datasets" / f).write_text((root / "datasets" / f).read_text())
+    (tmp_path / "datasets/indist6_saboteurs.yaml").write_text(
+        "include: _misleading.yaml\nbase: indist6\nregime: {kind: fraction, rate: 1.0, peers: [1, 4]}\ndrop_forced: true\n")
+    cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.registry={tmp_path}", f"paths.data={tmp_path}/data", "datasets=[indist6_saboteurs]"])
+    L = Layout(cfg)
+
+    assert L.registry.problems() == []
+    cmd = streams_command(L, "indist6_saboteurs")
+    assert '"peers": [1, 4]' in cmd and "--regime indist6_saboteurs " in cmd and "--drop-forced" in cmd
+    assert Plan(cfg, "misleading.yaml", smoke=False, gpus=[0]).answer_datasets() == ["indist6_misleading"]
+
+
+def test_smoke_uses_one_dataset_one_shard_and_a_small_record(tmp_path):
     cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.outputs={tmp_path}/out"])
     plan = Plan(cfg, "misleading.yaml", smoke=True, gpus=[0, 1, 2, 3])
 
-    assert plan.eval_streams() == ["indist6_adv_p050"]
+    assert plan.eval_datasets() == ["indist6_misleading_p050"]
+    assert all(str(j.done).startswith(str(tmp_path / "out/smoke/data/indist6_misleading/")) for j in plan.peers())
     assert all("--shards 1" in j.cmd and "--max-examples 48" in j.cmd for j in plan.features())
     assert all("--dim 32" in j.cmd for j in plan.record())
     assert all("--limit 48" in j.cmd for j in plan.streams())
@@ -175,7 +231,7 @@ def test_the_central_prompts_are_the_ones_every_stored_result_used():
 def test_paths_written_into_outputs_are_relative_to_the_repository():
     from pipeline.config import REPO, shown
 
-    assert shown(REPO / "data" / "ood6_adv_p050" / "test.jsonl") == "data/ood6_adv_p050/test.jsonl"
+    assert shown(REPO / "data" / "ood6_misleading_p050" / "test.jsonl") == "data/ood6_misleading_p050/test.jsonl"
     assert shown("/models/Qwen3-4B") == "/models/Qwen3-4B"
     assert shown(None) is None
     assert shown("/mnt/data/peilin/.rproj-jobs/sigma-mem/20260913-162846/data/ood6/test.jsonl") == "data/ood6/test.jsonl"

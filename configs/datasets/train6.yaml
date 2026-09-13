@@ -1,0 +1,5 @@
+# Training stream: GSM8K, SQuAD and APPS with six peers. Fits the record's addresses (label-free); RL training data.
+path: mixed_train_big6/train.jsonl        # under paths.data (bash datasets/unpack.sh restores it)
+peers: six
+events: 17709
+release: mixed_train_big6.train.jsonl.gz

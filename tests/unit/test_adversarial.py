@@ -9,14 +9,11 @@ from feedback_state.adversarial import (
     Regime,
     accept,
     adhoc_spec,
-    expand_run,
     force_wrong,
     load_regimes,
     misleading_prompt,
     plausible_wrong_number,
     record_positions,
-    regimes_from_config,
-    sweep_specs,
     wrong_label,
 )
 
@@ -182,16 +179,7 @@ def test_an_exact_rate_falls_short_only_when_there_are_too_few_usable_answers():
     assert sum(mask) == 30
 
 
-def test_a_sweep_block_expands_to_one_regime_per_rate():
-    specs = sweep_specs({"rates": [0.0, 0.25, 1.0], "peers": "all", "exact": True, "prefix": "p"})
-    regimes = load_regimes(specs)
-
-    assert list(specs) == ["p000", "p025", "p100"]
-    assert regimes["p025"].rate == 0.25 and regimes["p025"].exact
-    assert "honest stream" in specs["p000"]["note"]
-
-
-def test_regimes_are_read_from_the_config_block():
+def test_regimes_are_read_from_a_mapping():
     regimes = load_regimes({"all100": {"kind": "fraction", "rate": 1.0, "peers": "all", "note": "x"},
                             "sab": {"kind": "fraction", "rate": 1.0, "peers": [1, 4]}})
 
@@ -218,20 +206,12 @@ def test_a_count_regime_only_picks_peers_that_have_a_usable_answer():
     assert all(sum(masks[p][i] for p in range(6)) == 5 for i in range(50))
 
 
-def test_any_ratio_can_be_named_without_a_config_entry():
-    regimes = regimes_from_config({}, ["p030", "k4", "not_a_regime"])
+def test_the_short_regime_forms_expand_to_their_specs():
+    regimes = load_regimes({n: adhoc_spec(n) for n in ["p030", "k4"]})
 
     assert regimes["p030"].rate == 0.30 and regimes["p030"].exact
     assert regimes["k4"].kind == "count" and regimes["k4"].count == 4
-    assert "not_a_regime" not in regimes and adhoc_spec("p150") is None
-
-
-def test_run_keywords_expand_to_the_sweep_s_regimes():
-    cfg = {"sweep": {"rates": [0.0, 0.5], "counts": [1, 3]}}
-
-    assert expand_run(["rates"], cfg) == ["p000", "p050"]
-    assert expand_run(["counts"], cfg) == ["k1", "k3"]
-    assert expand_run(["sweep", "all100"], cfg) == ["p000", "p050", "k1", "k3", "all100"]
+    assert adhoc_spec("not_a_regime") is None and adhoc_spec("p150") is None
 
 
 def test_a_looping_generation_is_never_accepted():

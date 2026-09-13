@@ -11,14 +11,15 @@ Everything else is identical to the main experiment (the six peers and their ans
 record's equations, the tilt, the grading), so a family's rows are the counterpart of the frozen Qwen3-4B rows, which
 the table adds as the reference.
 
-Add a model: put it in `models:` of `configs/base.yaml` and in `central:` of this file. The tilt is exact reweighting of
+Add a model: register it as `configs/models/<name>.yaml` (`hf_id`, `path` under `paths.models_root`, `engine`) and put
+the name in `central:` of this file. The tilt is exact reweighting of
 softmax attention, `softmax(s + b) = Norm(A ⊙ c)`, so it applies to any softmax-attention model (MHA or GQA, RoPE, any head
 size); the only model-specific work, locating each peer block's tokens under the model's own tokenizer and chat template,
 is automatic (`feedback_state/attn_bias.py`). `python -m analysis.family_prompt_check --models <dir>` checks it on CPU
 before any GPU time. Not covered: linear-attention layers (no softmax over keys) and ALiBi / iRoPE.
 
-A model vLLM 0.8.5 cannot run takes the HF engine: in `models:` write `{path: <dir>, engine: hf, env: <conda env>,
-shards: 8, batch_size: 8}`; each evaluation is then sharded over the GPUs and merged.
+A model vLLM 0.8.5 cannot run takes the HF engine: in its model file write `engine: hf`, `conda_env: <env>`, `shards: 8`,
+`batch_size: 8`; each evaluation is then sharded over the GPUs and merged.
 
 Notes:
 - Features: about 0.5 s per event for an 8B model (0.7 s for phi-4), about 6 GB of caches per model; the encoder needs

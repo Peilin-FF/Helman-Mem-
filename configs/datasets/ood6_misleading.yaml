@@ -1,0 +1,6 @@
+# Every peer of ood6 answering every event with a verified misleading answer (pipeline.peers --mode misleading).
+# One directory per peer under paths.data/ood6_misleading/; the ood6_misleading_pNNN streams pick from these answers.
+kind: answers
+base: ood6
+mode: misleading
+release: ood6.misleading.jsonl.gz

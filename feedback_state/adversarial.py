@@ -22,7 +22,7 @@ import collections
 import hashlib
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -535,7 +535,7 @@ class Regime:
 
 
 def load_regimes(cfg: dict[str, Any]) -> dict[str, Regime]:
-    """Build the regimes of a YAML ``regimes:`` block (peers: all | [0, 3])."""
+    """Regimes from {name: spec} (peers: all | [0, 3]), e.g. a misleading dataset's ``regime:`` mapping."""
     out: dict[str, Regime] = {}
     for name, spec in (cfg or {}).items():
         spec = dict(spec or {})
@@ -546,38 +546,13 @@ def load_regimes(cfg: dict[str, Any]) -> dict[str, Regime]:
     return out
 
 
-def sweep_specs(sweep: dict[str, Any] | None) -> dict[str, dict]:
-    """The regimes of a ``sweep:`` block: the same experiment at a series of poison ratios, 0 to whatever is reachable.
-
-    ``{rates: [0, 0.25, 0.5, 1.0], peers: all, exact: true, prefix: p}`` becomes the regimes p000, p025, p050, p100.
-    Rate 0 is the honest stream rebuilt through the identical machinery, which is the control the curve starts from.
-    ``counts: [0, 1, 2, 3, 4, 5, 6]`` adds k0 ... k6: that many misleading peers on every event.
-    """
-    if not sweep:
-        return {}
-    prefix = str(sweep.get("prefix", "p"))
-    shared = {k: v for k, v in sweep.items() if k in {"peers", "seed"}}
-    exact = bool(sweep.get("exact", True))
-    out: dict[str, dict] = {}
-    for rate in [float(r) for r in sweep.get("rates", [])]:
-        who = "every peer" if sweep.get("peers", "all") in (None, "all", "*") else f"peers {sweep['peers']}"
-        out[f"{prefix}{round(rate * 100):03d}"] = dict(
-            shared, kind="fraction", rate=rate, exact=exact,
-            note=f"{round(rate * 100)}% of {who}'s answers are misleading"
-                 + (" (the honest stream, rebuilt through the same steps)" if rate == 0 else ""))
-    for k in [int(c) for c in sweep.get("counts", [])]:
-        out[f"k{k}"] = dict(shared, kind="count", count=k,
-                            note=f"{k} of the peers misleading on every event" + (" (the honest stream)" if k == 0 else ""))
-    return out
-
-
 _ADHOC_RATE = re.compile(r"^p(\d{3})$")
 _ADHOC_COUNT = re.compile(r"^k(\d+)$")
 
 
 def adhoc_spec(name: str) -> dict | None:
-    """A regime named on the command line without being in the config: ``p030`` = 30% of every peer's answers
-    misleading (exact), ``k2`` = two misleading peers on every event.  Any other name must be defined in the config."""
+    """The short regime forms a dataset file can name: ``p030`` = 30% of every peer's answers misleading (exact),
+    ``k2`` = two misleading peers on every event.  Anything else is written out as a mapping in the dataset file."""
     m = _ADHOC_RATE.match(str(name))
     if m and int(m.group(1)) <= 100:
         r = int(m.group(1))
@@ -588,27 +563,6 @@ def adhoc_spec(name: str) -> dict | None:
         return {"kind": "count", "count": int(m.group(1)), "peers": "all",
                 "note": f"{int(m.group(1))} of the peers misleading on every event"}
     return None
-
-
-def expand_run(entries: Iterable[str], cfg: dict[str, Any]) -> list[str]:
-    """Regime names from a run list: ``rates`` = the sweep's pNNN, ``counts`` = its kN, ``sweep`` = both."""
-    spec = sweep_specs(cfg.get("sweep"))
-    rates = [n for n, v in spec.items() if v["kind"] == "fraction"]
-    counts = [n for n, v in spec.items() if v["kind"] == "count"]
-    out: list[str] = []
-    for e in entries:
-        out.extend({"rates": rates, "counts": counts, "sweep": rates + counts}.get(e, [e]))
-    return out
-
-
-def regimes_from_config(cfg: dict[str, Any], names: Iterable[str] = ()) -> dict[str, Regime]:
-    """Every regime a config defines (named ones, the sweep's), plus any of ``names`` given in the ad-hoc form."""
-    specs = dict(cfg.get("regimes") or {})
-    specs.update(sweep_specs(cfg.get("sweep")))
-    for n in names:
-        if n not in specs and adhoc_spec(n) is not None:
-            specs[n] = adhoc_spec(n)
-    return load_regimes(specs)
 
 
 def record_positions(n_events: int, order: str) -> np.ndarray:

@@ -1,15 +1,16 @@
 """Where everything lives: the one mapping from (stage, model, stream, condition) to paths, shared by run and table.
 
-    data/<stream>/<split>.jsonl                                   released and derived streams
-    outputs/peers/<stream>/<honest|misleading>/<peer>/            a peer's answers (pipeline.peers)
+    data/<dataset>/                                               registered datasets (configs/datasets/): released
+                                                                  streams, peers' generated answers (<dataset>/<peer>/),
+                                                                  misleading streams (+ manifest.json)
     outputs/features/<model>/<stream>/shard<k>.pt                 the judge's features (pipeline.features)
     outputs/record/<model>/<stream>/<order>.fit-<fit>.jsonl       the record along the stream (+ .quality.json)
     outputs/eval/<model or run>/<stream>/<condition>/             an evaluation (pipeline.evaluate)
-    outputs/train/<run>/phase<k>/                                 a training run (pipeline.train); data in outputs/train/data/
+    outputs/train/<run>/                                          a training run (pipeline.train); data in outputs/train/data/
     outputs/tables/<experiment>.md, outputs/runs/<experiment>/    the result table, the resolved config and commands
     logs/<experiment>/<job>.log
 
-A smoke run (--smoke) uses outputs/smoke/ and logs/smoke/ for everything it writes, derived streams included, so it can
+A smoke run (--smoke) uses outputs/smoke/ and logs/smoke/ for everything it writes, built datasets included, so it can
 never be mistaken for, or skip, a real run.
 """
 from __future__ import annotations
@@ -17,8 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pipeline.config import REPO
-
-ADV = "_adv_"
+from pipeline.registry import load_registry
 
 
 class Layout:
@@ -33,48 +33,46 @@ class Layout:
         self.logs = logs / "smoke" if smoke else logs
         self.derived = self.outputs / "data" if smoke else self.data
         self.models_root = Path(paths.get("models_root", "models"))
+        self.registry = load_registry(paths.get("registry"))
 
     def _abs(self, p: str | Path) -> Path:
         p = Path(p)
         return p if p.is_absolute() else self.repo / p
 
-    # --- registries -------------------------------------------------------------------------------------------------
+    # --- registered names -> paths --------------------------------------------------------------------------------
     def model(self, tag: str) -> dict:
-        spec = self.cfg.get("models", {}).get(tag)
-        if spec is None:
-            raise KeyError(f"model {tag!r} is not in the models registry (configs/base.yaml)")
-        spec = {"path": spec} if isinstance(spec, str) else dict(spec)
+        spec = dict(self.registry.model(tag))
         path = Path(spec["path"])
         spec["path"] = path if path.is_absolute() else self.models_root / path
         return spec
 
-    def peer_models(self) -> list[dict]:
+    def peer_models(self, peer_set: str) -> list[dict]:
+        """The models of a peer set in peer_0 ... order; `name` is the model directory, which names its answers."""
         out = []
-        for p in self.cfg.get("peers", []):
-            p = dict(p)
-            path = Path(p.get("path", p["name"]))
-            p["path"] = path if path.is_absolute() else self.models_root / path
-            out.append(p)
+        for i, tag in enumerate(self.registry.peer_set(peer_set)):
+            spec = self.model(tag)
+            out.append(dict(spec, tag=tag, index=i, name=spec["path"].name))
         return out
 
     def stream(self, name: str) -> dict:
-        """{'path', 'peers', 'base'}; '<base>_adv_<regime>' streams are derived next to their base."""
-        reg = self.cfg.get("streams", {})
-        if name in reg:
-            spec = dict(reg[name])
-            return {"path": self._abs(Path(self.cfg.get("paths", {}).get("data", "data")) / spec["path"]), "peers": int(spec.get("peers", 6)), "base": None}
-        if ADV in name:
-            base, _, _regime = name.partition(ADV)
-            if base in reg:
-                b = self.stream(base)
-                rel = Path(reg[base]["path"])
-                return {"path": self.derived / f"{rel.parent}{ADV}{_regime}" / rel.name, "peers": b["peers"], "base": base}
-        raise KeyError(f"stream {name!r} is not in the streams registry (configs/base.yaml)")
+        """A registered dataset: {'name', 'kind', 'path', 'peers' (count), 'peer_set', 'base', 'answers', 'regime', ...}.
+
+        A released stream is read from paths.data; what the pipeline builds (answers, misleading streams) goes to
+        paths.data too, or to outputs/smoke/data in a smoke run, so a smoke run never writes next to real data.
+        """
+        d = dict(self.registry.dataset(name))
+        base = self.registry.stream_of(name)
+        d["peer_set"] = base["peers"]
+        d["peers"] = len(self.registry.peer_set(base["peers"]))
+        if d["kind"] == "stream":
+            d["path"] = self._abs(Path(self.cfg.get("paths", {}).get("data", "data")) / d["path"])
+        elif d["kind"] == "answers":
+            d["path"] = self.derived / d.get("path", name)
+        else:
+            d["path"] = self.derived / d.get("path", f"{name}/{Path(base['path']).name}")
+        return d
 
     # --- artifacts --------------------------------------------------------------------------------------------------
-    def peers_dir(self, stream: str, mode: str, peer: str) -> Path:
-        return self.outputs / "peers" / stream / mode / peer
-
     def features_dir(self, model: str, stream: str) -> Path:
         return self.outputs / "features" / model / stream
 

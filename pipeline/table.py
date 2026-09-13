@@ -3,8 +3,9 @@
     python -m pipeline.table --resolved outputs/runs/<experiment>/resolved.yaml [--smoke]
     (pipeline.run writes the resolved config and calls this as the `table` step)
 
-The experiment's `table:` block chooses the rows: `models` (one row per central model), `regimes` (one row per
-misleading-peer regime, for the experiment's model) or `runs` (one row per trained run). `reference:` adds rows for
+The experiment's `table:` block chooses the rows: `models` (one row per central model, one column group per dataset),
+`regimes` (one row per misleading regime, one column group per base stream, for the experiment's model) or `runs` (one
+row per trained run). `reference:` adds rows for
 models evaluated elsewhere on the base streams (the frozen Qwen3-4B of the main experiment). Cells are accuracy in percent
 per stream and condition, then the requested differences, then the record's AUC / favourite-right per stream.
 With `misleading_probe: true` two more tables follow: what the record makes of the misleading answers, and the peers.
@@ -20,7 +21,7 @@ from pathlib import Path
 import yaml
 
 from pipeline.config import deep_merge
-from pipeline.layout import ADV, Layout
+from pipeline.layout import Layout
 
 
 def auc(pairs):
@@ -87,22 +88,32 @@ def build(cfg: dict, smoke: bool) -> str:
     tb = cfg.get("table", {})
     conds = list(cfg.get("eval_conditions", list(cfg.get("conditions", {}))))
     deltas = [tuple(d) for d in tb.get("deltas", [])]
-    base_streams = list(cfg.get("smoke", {}).get("streams", ["indist6"])) if smoke else list(cfg.get("eval_streams", []))
+    reg = L.registry
+    sm = cfg.get("smoke", {})
+    asked = reg.expand(cfg.get("datasets", []))
+    datasets = reg.expand(sm["datasets"]) if smoke and "datasets" in sm else asked[:1] if smoke else asked
+    datasets = [d for d in datasets if reg.dataset(d)["kind"] != "answers"]
+    kind = tb.get("rows", "models")
+    by_regime: dict[str, dict[str, str]] = {}   # regime -> {base stream: dataset}
+    if kind == "regimes":
+        for d in datasets:
+            spec = reg.dataset(d)
+            label = spec["regime"] if isinstance(spec.get("regime"), str) else d
+            by_regime.setdefault(label, {})[spec.get("base", d)] = d
+        base_streams = list(dict.fromkeys(b for m in by_regime.values() for b in m))
+    else:
+        base_streams = datasets
     rows = []   # (label, eval model key, record model, {base stream: evaluated stream}, layout for the record)
     ref_cfg = deep_merge(cfg, {"record": {"fit": tb.get("reference_fit", "train6")}})
     for m in tb.get("reference", []) if not smoke else []:
         rows.append((f"{m} (reference)", m, m, {s: s for s in base_streams}, Layout(ref_cfg, False)))
-    kind = tb.get("rows", "models")
     if kind == "models":
         for m in cfg.get("central", []):
             rows.append((m, m, m, {s: s for s in base_streams}, L))
     elif kind == "regimes":
-        from feedback_state.adversarial import expand_run
-
         m = cfg["central"][0]
-        regimes = expand_run(cfg.get("smoke", {}).get("regimes", cfg.get("regimes_run", [])) if smoke else cfg.get("regimes_run", []), cfg)
-        for r in regimes:
-            rows.append((r, m, m, {s: f"{s}{ADV}{r}" for s in base_streams}, L))
+        for r, smap in by_regime.items():
+            rows.append((r, m, m, smap, L))
     elif kind == "runs":
         keep = cfg.get("smoke", {}).get("arms") if smoke else None
         for run in [r for r in cfg.get("arms", {}) if keep is None or r in keep]:
@@ -110,12 +121,12 @@ def build(cfg: dict, smoke: bool) -> str:
     head = ["row"] + [f"{s}: {c}" for s in base_streams for c in conds] + [f"{s}: {a} − {b}" for s in base_streams for a, b in deltas] + [f"{s}: record AUC / fav" for s in base_streams]
     lines = ["| " + " | ".join(head) + " |", "|---|" + "---:|" * (len(head) - 1)]
     for label, key, rec_model, smap, lay in rows:
-        m = {(s, c): load_json(lay.eval_dir(key, smap[s], c) / "eval_metrics.json") for s in base_streams for c in conds}
+        m = {(s, c): load_json(lay.eval_dir(key, smap[s], c) / "eval_metrics.json") if s in smap else None for s in base_streams for c in conds}
         if all(v is None for v in m.values()):
             continue
         cells = [pct(m[(s, c)]) for s in base_streams for c in conds]
         cells += [delta(m.get((s, a)), m.get((s, b))) for s in base_streams for a, b in deltas]
-        cells += [quality_cell(lay, rec_model, smap[s]) for s in base_streams]
+        cells += [quality_cell(lay, rec_model, smap[s]) if s in smap else "-" for s in base_streams]
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
     notes = []
     for c in conds:
@@ -133,14 +144,16 @@ def build(cfg: dict, smoke: bool) -> str:
             if label.endswith("(reference)"):
                 continue
             for s, name in smap.items():
-                stream = L.stream(name)["path"]
+                spec = L.stream(name)
+                stream = spec["path"]
                 probe = misleading_probe(L.record_file(m, name), stream)
                 if probe:
                     plines.append(f"| {label} · {s} | {probe['mean_prob_honest']:.2f} | {probe['mean_prob_misleading']:.2f} | "
                                   f"{probe['auc_honest_over_misleading']:.2f} | {probe['favourite_misleading_pct']:.0f}% |")
                 man = load_json(stream.parent / "manifest.json")
                 for peer, v in sorted((man or {}).get("peers", {}).items(), key=lambda kv: kv[1]["index"]):
-                    sums = [json.load(open(f)) for f in glob.glob(str(L.peers_dir(s, cfg.get("peers_mode", "misleading"), peer) / "summary.shard*.json"))]
+                    answers = L.stream(spec["answers"])["path"] / peer if spec.get("answers") else None
+                    sums = [json.load(open(f)) for f in glob.glob(str(answers / "summary.shard*.json"))] if answers else []
                     usable = f"{100 * sum(x.get('accepted', 0) for x in sums) / max(1, sum(x['n'] for x in sums)):.0f}%" if sums else "-"
                     peer_lines.append(f"| {label} · {s} | peer_{v['index']} {peer} | {v['requested_ratio']:.0f}% | {v['realised_ratio']:.1f}% | "
                                       f"{v['accuracy_honest']:.1f} | {v['accuracy_in_stream']:.1f} | {v['forced']} | {usable} |")

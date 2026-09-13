@@ -1,0 +1,4 @@
+# peer_0 of the six-peer streams.
+hf_id: google/gemma-3-4b-it
+path: gemma-3-4b-it
+engine: vllm

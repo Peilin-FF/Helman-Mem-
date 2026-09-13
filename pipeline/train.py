@@ -37,13 +37,13 @@ def train_jobs(plan) -> list:
     jobs, rec_files = [], {}
     for key, spec in (("train", td), ("val", vd)):   # wave 0: the records in the orders the data needs
         lay = Layout(deep_merge(cfg, {"record": {"order": spec["order"]}}), plan.smoke)
-        stream = lay.stream(spec["stream"])
-        out = lay.record_file(judge, spec["stream"])
+        stream = lay.stream(spec["dataset"])
+        out = lay.record_file(judge, spec["dataset"])
         rec_files[key] = (out, stream)
         fit = rec.get("fit", "train6")
         fit_args = "" if fit == "self" else f" --fit-stream {lay.stream(fit)['path']} --fit-features {lay.features_dir(judge, fit)}"
-        jobs.append(Job("train", f"record_{judge}_{spec['stream']}_{spec['order']}",
-                        f"python -m pipeline.record --stream {stream['path']} --features {lay.features_dir(judge, spec['stream'])}{fit_args} "
+        jobs.append(Job("train", f"record_{judge}_{spec['dataset']}_{spec['order']}",
+                        f"python -m pipeline.record --stream {stream['path']} --features {lay.features_dir(judge, spec['dataset'])}{fit_args} "
                         f"--peers {stream['peers']} --order {spec['order']} --dim {dim} --lam {rec.get('lam', 100.0)} --out {out}"
                         + (f" --limit {plan.events}" if plan.events and key == "train" else ""), done=out, wave=0))
     data_dir = L.outputs / "train" / "data"
@@ -53,9 +53,9 @@ def train_jobs(plan) -> list:
     (rec_t, st_t), (rec_v, st_v) = rec_files["train"], rec_files["val"]
     for arm, spec in arms(plan).items():
         prompt, sf = spec.get("prompt", "peers"), float(spec.get("solo_fraction", 0.0))
-        stem = f"{judge}_{td['stream']}_{prompt}" + (f"_solo{int(round(100 * sf))}" if prompt == "peers" and sf else "")
+        stem = f"{judge}_{td['dataset']}_{prompt}" + (f"_solo{int(round(100 * sf))}" if prompt == "peers" and sf else "")
         train_pq = data_dir / f"{stem}.parquet"
-        val_pq = data_dir / f"{judge}_{vd['stream']}_{prompt}_val_every{vd.get('every', 1)}_limit{vd.get('limit', 'all')}.parquet"
+        val_pq = data_dir / f"{judge}_{vd['dataset']}_{prompt}_val_every{vd.get('every', 1)}_limit{vd.get('limit', 'all')}.parquet"
         jobs.append(Job("train", f"data_{stem}", f"python -m training.kalman_rl.build_rl_data --record {rec_t} --stream {st_t['path']} "
                         f"--prompt {prompt} --solo-fraction {sf} --out {train_pq}", gpus=0, done=train_pq, wave=1))
         jobs.append(Job("train", f"data_val_{arm}", f"python -m training.kalman_rl.build_rl_data --record {rec_v} --stream {st_v['path']} "
@@ -80,5 +80,5 @@ def evaluate_runs(plan) -> list:
                 print(f"[dry-run] evaluate {arm}: its checkpoint appears when the train step has run")
                 continue
             raise SystemExit(f"{arm}: no checkpoint under {L.train_dir(arm)}/hf (run the train step first)")
-        jobs += plan.eval_jobs(arm, L.model(cfg["init"]), cfg["judge"], plan.eval_streams(), checkpoint=ck)
+        jobs += plan.eval_jobs(arm, L.model(cfg["init"]), cfg["judge"], plan.eval_datasets(), checkpoint=ck)
     return jobs

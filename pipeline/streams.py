@@ -2,11 +2,12 @@
 
     add       append new peers (their pipeline.peers answers) as peer_<k>; events missing an answer are dropped
     replace   put a peer's misleading answers in place of its honest ones, on the events a regime selects
+    build     build registered misleading datasets (configs/datasets/) by name, e.g. after bash datasets/unpack.sh
+    digest    a content digest of a stream (ids, answers, correctness, misled flags), as datasets/manifest.json lists
 
-    PYTHONPATH=. python -m pipeline.streams add --base data/indist6/test.jsonl \
-        --answers outputs/peers/indist6/honest --peer Mistral-7B-Instruct-v0.3 --out data/indist7/test.jsonl
+    PYTHONPATH=. python -m pipeline.streams build misleading_rates
     PYTHONPATH=. python -m pipeline.streams replace --base data/indist6/test.jsonl \
-        --answers outputs/peers/indist6/misleading --regime p050 --out data/indist6_adv_p050/test.jsonl
+        --answers data/indist6_misleading --regime p050 --out data/indist6_misleading_p050/test.jsonl
 
 A regime is a name the ad-hoc forms cover (pNNN = that share of every peer's answers, exactly; kN = N misleading peers on
 every event) or a JSON spec (--regime-spec, see feedback_state.adversarial.Regime). Besides the stream, manifest.json
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import collections
 import glob
+import hashlib
 import json
 import statistics
 from pathlib import Path
@@ -101,7 +103,10 @@ def cmd_replace(args) -> None:
         rec = json.loads(line)
         if not keys:
             keys = sorted(rec.get("peer_responses", {}), key=lambda k: int(k.split("_")[1]))
-            names = [str(rec.get("peer_metadata", {}).get(k, {}).get("model", k)).split("/")[-1] for k in keys]
+            names = (args.peer_dirs.split(",") if args.peer_dirs else   # the peer set's model directories, in peer order
+                     [str(rec.get("peer_metadata", {}).get(k, {}).get("model", k)).split("/")[-1] for k in keys])
+            if len(names) != len(keys):
+                raise SystemExit(f"--peer-dirs names {len(names)} peers, the stream has {len(keys)}")
         soft, hard = rec.get("peer_correct") or {}, rec.get("correctness_by_peer") or {}
         events.append({"id": str(rec["id"]), "honest": [int(round(float(soft.get(k, hard.get(k, 0))))) for k in keys]})
     n = len(events)
@@ -177,6 +182,43 @@ def cmd_replace(args) -> None:
               f"accuracy {v['accuracy_honest']:5.1f}% -> {v['accuracy_in_stream']:5.1f}%")
 
 
+def digest(path: Path) -> str:
+    """sha256 over what a stream is: per event its id, answers, correctness and misled flags, in file order.
+
+    Model names in peer_metadata are left out: the released streams name the Hugging Face ids, a local copy may name paths.
+    """
+    h = hashlib.sha256()
+    for line in path.open():
+        r = json.loads(line)
+        meta = r.get("peer_metadata") or {}
+        h.update(json.dumps([r.get("id"), r.get("peer_responses"), r.get("peer_correct"), r.get("correctness_by_peer"),
+                             {k: [m.get("misled"), m.get("adversarial_forced")] for k, m in sorted(meta.items()) if isinstance(m, dict)}],
+                            sort_keys=True, ensure_ascii=False).encode())
+    return h.hexdigest()
+
+
+def cmd_build(args) -> None:
+    import subprocess
+
+    from pipeline.config import load
+    from pipeline.layout import Layout
+    from pipeline.run import streams_command
+
+    L = Layout(load(args.config, [f"paths.data={args.data}"] if args.data else []))
+    names = L.registry.expand(args.names) if args.names else [n for n, d in L.registry.datasets.items() if d["kind"] == "misleading"]
+    for n in names:
+        spec = L.stream(n)
+        if spec["kind"] != "misleading":
+            continue
+        if not (L.stream(spec["answers"])["path"]).is_dir():
+            print(f"[streams] skip  {n}: no answers at {L.stream(spec['answers'])['path']}")
+            continue
+        if spec["path"].exists() and not args.force:
+            print(f"[streams] keep  {n} ({spec['path']})")
+            continue
+        subprocess.run(streams_command(L, n), shell=True, check=True)
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -188,14 +230,27 @@ def main(argv=None) -> None:
     r = sub.add_parser("replace")
     r.add_argument("--base", type=Path, required=True)
     r.add_argument("--answers", type=Path, required=True, help="the directory holding each peer's misleading answers, by model name")
+    r.add_argument("--peer-dirs", default=None, help="comma-separated answer directories under --answers for peer_0, peer_1, ... "
+                   "(default: the model names in the stream's peer_metadata)")
     r.add_argument("--regime", required=True)
     r.add_argument("--regime-spec", default=None, help="JSON, e.g. '{\"kind\": \"fraction\", \"rate\": 1.0, \"peers\": [1, 4]}'")
     r.add_argument("--order", default="shuffled0", help="the order the record walks the stream (the flip regime depends on it)")
     r.add_argument("--drop-forced", action="store_true", help="never use an answer whose conclusion was rewritten")
     r.add_argument("--limit", type=int, default=None, help="only the first N events")
     r.add_argument("--out", type=Path, required=True)
+    b = sub.add_parser("build")
+    b.add_argument("names", nargs="*", help="registered dataset or group names (default: every misleading dataset)")
+    b.add_argument("--config", default="configs/base.yaml")
+    b.add_argument("--data", default=None, help="another paths.data (default: the config's)")
+    b.add_argument("--force", action="store_true", help="rebuild even if the stream exists")
+    d = sub.add_parser("digest")
+    d.add_argument("paths", nargs="+", type=Path)
     args = ap.parse_args(argv)
-    (cmd_add if args.cmd == "add" else cmd_replace)(args)
+    if args.cmd == "digest":
+        for p in args.paths:
+            print(digest(p), p)
+        return
+    {"add": cmd_add, "replace": cmd_replace, "build": cmd_build}[args.cmd](args)
 
 
 if __name__ == "__main__":

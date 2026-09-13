@@ -3,7 +3,7 @@ base: ../base.yaml
 name: families
 steps: [features, record, evaluate, table]
 central: [llama31, ministral, qwen25, phi4]
-eval_streams: [ood6, indist6]
+datasets: [ood6, indist6]
 eval_conditions: [tilt, peers, solo]
 evaluation: {gpu_memory_utilization: 0.85}   # 0.35 for an 8B model on a shared GPU, 0.5 for phi-4
 table:

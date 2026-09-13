@@ -3,7 +3,7 @@ base: ../base.yaml
 name: main
 steps: [features, record, evaluate, table]
 central: [q3_4b]                 # the model that answers (and whose own hidden states address the record)
-eval_streams: [indist6, ood6]
+datasets: [indist6, ood6]             # registered in configs/datasets/
 eval_conditions: [tilt, peers, solo, swap]
 table:
   rows: models

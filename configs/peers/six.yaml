@@ -1,0 +1,2 @@
+# The six peers of the released streams, in order: models[k] wrote peer_k's answers.
+models: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]

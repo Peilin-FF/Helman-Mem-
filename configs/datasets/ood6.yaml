@@ -1,0 +1,5 @@
+# OOD test stream: yes/no, multiple-choice and short-answer tasks (PIQA, MMLU, OpenBookQA, SciQ, BBH, SuperGLUE), six peers.
+path: ood6/test.jsonl
+peers: six
+events: 17403
+release: ood6.test.jsonl.gz

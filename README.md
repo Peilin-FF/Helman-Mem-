@@ -50,35 +50,37 @@ git clone https://github.com/Peilin-FF/Helman-Mem-.git sigma-mem && cd sigma-mem
 conda create -n sigma python=3.12 && conda activate sigma
 pip install -r requirements_qwen3.txt          # torch 2.6.0 (CUDA 12.4), transformers 4.56.2, vLLM 0.8.5 (exact)
 bash training/setup_env.sh                     # only for training: hydra, tensordict, flash-attn for the vendored verl
-bash datasets/unpack.sh                        # the six-peer streams -> data/
+bash datasets/unpack.sh                        # the released datasets -> data/ (streams, misleading answers, misleading streams)
 pytest tests/unit                              # CPU only: the rules, the record, the configs and job expansion
 ```
 
 vLLM must be exactly 0.8.5: the tilt's attention kernels are patched from its source. Set `paths.models_root` in
 `configs/base.yaml` to the directory holding the models (one sub-directory each): the central model `Qwen/Qwen3-4B`, and,
-to generate new peer answers, the six peers:
+to generate new peer answers, the six peers (the peer set `configs/peers/six.yaml`):
 
-| slot | peer |
-|---|---|
-| `peer_0` | `google/gemma-3-4b-it` |
-| `peer_1` | `microsoft/Phi-4-mini-instruct` |
-| `peer_2` | `Qwen/Qwen2.5-Coder-7B-Instruct` |
-| `peer_3` | `meta-llama/Llama-3.1-8B-Instruct` |
-| `peer_4` | `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` |
-| `peer_5` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B` |
+| slot | peer | registered as |
+|---|---|---|
+| `peer_0` | `google/gemma-3-4b-it` | `gemma3_4b` |
+| `peer_1` | `microsoft/Phi-4-mini-instruct` | `phi4_mini` |
+| `peer_2` | `Qwen/Qwen2.5-Coder-7B-Instruct` | `qwen25_coder_7b` |
+| `peer_3` | `meta-llama/Llama-3.1-8B-Instruct` | `llama31` |
+| `peer_4` | `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` | `deepseek_coder_v2_lite` |
+| `peer_5` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B` | `r1_distill_qwen_7b` |
 
 Code answers are graded by executing them (a subprocess with limits, not a sandbox): use a disposable machine.
 
 ## Data
 
-| stream | events | tasks |
+| dataset | events | content |
 |---|---:|---|
 | `train6`: `data/mixed_train_big6/train.jsonl` | 17,709 | GSM8K, SQuAD, APPS |
 | `indist6`: `data/indist6/test.jsonl` | 4,319 | GSM8K test, SQuAD dev, APPS test |
 | `ood6`: `data/ood6/test.jsonl` | 17,403 | yes/no, multiple-choice and short-answer tasks never seen in training |
+| `indist6_misleading`, `ood6_misleading` | | every peer's verified misleading answer to every event |
+| `indist6_misleading_p000` … `_p100`, `ood6_misleading_p000` … `_p100` (group `misleading_rates`) | | the streams with 0, 25, 50, 75, 100% of every peer's answers misleading |
 
 Each event carries the question, the gold answer, the six peers' answers and their verified correctness
-(`datasets/README.md`). The pipeline starts from these released streams.
+(`datasets/README.md`). The pipeline starts from these released datasets.
 
 ## Running experiments
 
@@ -113,16 +115,39 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 Each entry point is a plain command with explicit paths (`python -m pipeline.<stage> --help`); `pipeline/run.py` derives
 the paths from the config and schedules the jobs on the GPUs, one GPU each (a training run takes `gpus_per_run`).
 
+### Registering datasets and models
+
+Datasets, models and peer sets are registered one YAML file each, and experiments refer to them by file name, so
+adding one is adding a file (`python -m pipeline.registry` lists everything and checks every reference):
+
+```
+configs/datasets/<name>.yaml   kind stream: {path, peers}; kind answers: {base, mode}; kind misleading: {base, answers, regime};
+                               or a group: {group: [names]}. `include: _misleading.yaml` pulls in a template.
+configs/models/<name>.yaml     {hf_id, path (under paths.models_root), engine, env_vars, reasoning, ...}
+configs/peers/<name>.yaml      {models: [...]}: peer_0, peer_1, ... of the streams that name this set
+```
+
+For example a new regime, two peers that always lie, is `configs/datasets/indist6_saboteurs.yaml`:
+
+```yaml
+include: _misleading.yaml
+base: indist6
+regime: {kind: fraction, rate: 1.0, peers: [1, 4]}
+```
+
+and `--set "datasets=[indist6_saboteurs]"` runs it (the streams step builds it from the answers already generated).
+
 ### Adding an experiment
 
 Copy the closest file in `configs/experiments/` and change what differs. What a file can set:
 
 - `steps`: any of peers, streams, features, record, train, evaluate, table.
-- `central`: the models that answer (registry `models:` in `configs/base.yaml`; add a model there).
-- `eval_streams` and `eval_conditions` (conditions are defined once under `conditions:`; a new setting, e.g. another γ,
-  gets a new name, because results are stored by condition name).
-- `record`: design, dim, lam, order, fit (a stream name, or `self`).
-- `regimes`, `sweep`, `regimes_run`: misleading-peer regimes (docs/experiments/misleading.md).
+- `central`: the models that answer (registered names).
+- `datasets`: registered datasets or groups. The steps follow from their kinds: `peers` generates the answers datasets
+  the named misleading datasets need, `streams` builds those, and features, record and evaluate run on each.
+- `eval_conditions` (conditions are defined once under `conditions:`; a new setting, e.g. another γ, gets a new name,
+  because results are stored by condition name).
+- `record`: design, dim, lam, order, fit (a dataset name, or `self`).
 - `arms`, `overrides`, `tilt_overrides`, `train_data`, `val_data`: training (docs/experiments/train_tilt.md; any key of
   `configs/train/grpo.yaml` can be overridden).
 - `table`: rows (`models`, `regimes` or `runs`), `reference` models, `deltas`.
@@ -133,14 +158,13 @@ runner stops with a clear message instead of silently reusing a result made with
 ### Where results go
 
 ```
+data/<dataset>/                                        registered datasets: released, generated answers (<peer>/), built streams
 outputs/features/<model>/<stream>/                     the judge's features
 outputs/record/<model>/<stream>/<order>.fit-<fit>.jsonl  the record (+ .quality.json)
 outputs/eval/<model or run>/<stream>/<condition>/       generations.jsonl + eval_metrics.json
-outputs/peers/<stream>/<honest|misleading>/<peer>/      generated peer answers
 outputs/train/<run>/                                   training runs; outputs/train/data/ their parquets
 outputs/tables/<experiment>.md                         result tables
 outputs/runs/<experiment>/                             the resolved config and every command
-data/<stream>_adv_<regime>/                            derived streams (+ manifest.json)
 logs/<experiment>/<job>.log
 ```
 
@@ -151,7 +175,8 @@ that needs it.
 
 ```
 run.sh               the one command
-configs/             base.yaml (paths, registries, defaults), experiments/*.yaml, train/grpo.yaml
+configs/             base.yaml (paths, defaults, conditions), datasets/, models/, peers/ (the registries), experiments/,
+                     train/grpo.yaml
 pipeline/            the stages, the runner (run.py), config loading and the output layout
 feedback_state/      the method: kalman_memory.py (the record), addresses.py, memory_runtime.py, attn_bias.py +
                      vllm_attn_bias.py (the tilt), judge_prompt.py, memory_generator.py (prompts, grading), tasks.py,

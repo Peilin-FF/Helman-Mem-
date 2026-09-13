@@ -1,0 +1,6 @@
+# Every peer of indist6 answering every event with a verified misleading answer (pipeline.peers --mode misleading).
+# One directory per peer under paths.data/indist6_misleading/; the indist6_misleading_pNNN streams pick from these answers.
+kind: answers
+base: indist6
+mode: misleading
+release: indist6.misleading.jsonl.gz
