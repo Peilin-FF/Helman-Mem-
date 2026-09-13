@@ -237,7 +237,8 @@ def stale(metrics: Path, want: dict) -> str | None:
 
 # --- scheduling -----------------------------------------------------------------------------------------------------------
 class Scheduler:
-    def __init__(self, gpus: list[int], exp: str, layout: Layout, dry: bool):
+    def __init__(self, gpus: list[int], exp: str, layout: Layout, dry: bool, retries: int = 1):
+        self.retries = retries             # a failed job runs again this many times (a killed process, a busy GPU) before it counts as failed
         self.free = list(gpus)
         self.total = len(gpus)
         self.cv = threading.Condition()
@@ -290,10 +291,17 @@ class Scheduler:
             print(f"[{stamp()}] start {job.name}" + (f" on GPU {','.join(map(str, got))}" if need else ""), flush=True)
             with open(self.commands, "a") as c:
                 c.write(f"# {stamp()} {job.name}\n{' '.join(f'{k}={v}' for k, v in job.env.items())} {job.cmd}\n")
-            with open(log, "w") as f:
-                rc = subprocess.call(job.cmd, shell=True, executable="/bin/bash", stdout=f, stderr=subprocess.STDOUT, env=env)
-            ok = rc == 0 and (job.done is None or job.done.exists())
-            print(f"[{stamp()}] {'done ' if ok else 'FAILED'} {job.name}" + ("" if ok else f" (see {log})"), flush=True)
+            for attempt in range(1 + self.retries):
+                with open(log, "w" if attempt == 0 else "a") as f:
+                    if attempt:
+                        f.write(f"\n# ---- attempt {attempt + 1} ----\n")
+                        f.flush()
+                    rc = subprocess.call(job.cmd, shell=True, executable="/bin/bash", stdout=f, stderr=subprocess.STDOUT, env=env)
+                ok = rc == 0 and (job.done is None or job.done.exists())
+                if ok or attempt == self.retries:
+                    break
+                print(f"[{stamp()}] retry {job.name} (exit {rc}{', killed by a signal' if rc > 128 or rc < 0 else ''})", flush=True)
+            print(f"[{stamp()}] {'done ' if ok else 'FAILED'} {job.name}" + ("" if ok else f" (exit {rc}; see {log})"), flush=True)
             if not ok:
                 self.failed.append(job.name)
         finally:
@@ -322,7 +330,7 @@ def main(argv=None) -> None:
     run_dir = plan.L.run_dir(plan.exp)
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "resolved.yaml").write_text(yaml.safe_dump({**cfg, "_smoke": args.smoke, "_gpus": gpus}, sort_keys=False))
-    sched = Scheduler(gpus, plan.exp, plan.L, args.dry_run)
+    sched = Scheduler(gpus, plan.exp, plan.L, args.dry_run, retries=int(cfg.get("retries", 1)))
     print(f"[{stamp()}] {plan.exp}{' (smoke)' if args.smoke else ''}: steps {[s for s in ORDER if s in steps]}, GPUs {gpus}, "
           f"datasets {plan.datasets}", flush=True)
     for step in ORDER:

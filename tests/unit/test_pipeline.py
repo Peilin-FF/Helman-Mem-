@@ -236,3 +236,20 @@ def test_paths_written_into_outputs_are_relative_to_the_repository():
     assert shown(None) is None
     assert shown("/mnt/data/peilin/.rproj-jobs/sigma-mem/20260913-162846/data/ood6/test.jsonl") == "data/ood6/test.jsonl"
     assert shown("outputs/record/q3_4b/ood6/shuffled0.jsonl") == "outputs/record/q3_4b/ood6/shuffled0.jsonl"
+
+
+def test_a_failed_job_is_retried_once_before_it_counts_as_failed(tmp_path):
+    from pipeline.run import Job, Scheduler
+
+    cfg = load(EXPERIMENTS / "main.yaml", [f"paths.outputs={tmp_path}/out", f"paths.logs={tmp_path}/logs"])
+    L = Layout(cfg)
+    L.run_dir("t").mkdir(parents=True)
+    flag, out = tmp_path / "tried", tmp_path / "result"
+    flaky = Job("x", "flaky", f"if [ -e {flag} ]; then touch {out}; else touch {flag}; kill -9 $$; fi", gpus=0, done=out)
+    sched = Scheduler([0], "t", L, dry=False)
+    sched.run(flaky)
+    assert out.exists() and sched.failed == []
+
+    broken = Job("x", "broken", "exit 3", gpus=0, done=tmp_path / "never")
+    sched.run(broken)
+    assert sched.failed == ["broken"] and "attempt 2" in L.log("t", "broken").read_text()
