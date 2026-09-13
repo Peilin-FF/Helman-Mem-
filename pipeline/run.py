@@ -28,7 +28,7 @@ from pathlib import Path
 
 import yaml
 
-from pipeline.config import load
+from pipeline.config import load, shown
 from pipeline.layout import ADV, Layout
 
 ORDER = ["peers", "streams", "features", "record", "train", "evaluate", "table"]
@@ -227,8 +227,8 @@ def stale(metrics: Path, want: dict) -> str | None:
         return None
     have = json.load(open(metrics))
     diff = {k: (have.get(k), v) for k, v in want.items() if k in have and have.get(k) != v}
-    for k in ("record", "checkpoint"):   # paths: equal if they point to the same place (a job snapshot reaches outputs/ by symlink)
-        if k in diff and None not in diff[k] and Path(str(diff[k][0])).resolve() == Path(str(diff[k][1])).resolve():
+    for k in ("record", "checkpoint", "stream"):   # paths: equal if they name the same place in the project, from any snapshot
+        if k in diff and None not in diff[k] and shown(diff[k][0]) == shown(diff[k][1]):
             diff.pop(k)
     return None if not diff else "stored results used other settings: " + ", ".join(f"{k} {a!r} (asked {b!r})" for k, (a, b) in diff.items())
 

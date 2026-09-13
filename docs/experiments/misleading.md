@@ -55,6 +55,21 @@ and 4 turn misleading halfway through the record's order), `targeted` (every pee
 has a `manifest.json` with the requested and realised ratio per peer, events by number of misleading peers, forced and
 unavailable counts, and accuracy before and after.
 
+A peer cannot go beyond its usable share, so the top rates reach less than asked. The generation of 2026-09-13
+(`--set "regimes_run=[rates]"`):
+
+| peer | usable, indist6 | usable, ood6 | rewritten (of usable), indist6 / ood6 |
+|---|---:|---:|---:|
+| gemma-3-4b-it | 79.8% | 92.5% | 19.6% / 5.6% |
+| Phi-4-mini-instruct | 90.3% | 95.6% | 7.0% / 4.8% |
+| Qwen2.5-Coder-7B-Instruct | 89.2% | 98.3% | 2.4% / 4.0% |
+| Meta-Llama-3.1-8B-Instruct | 95.5% | 98.2% | 0.7% / 0.5% |
+| DeepSeek-Coder-V2-Lite-Instruct | 63.8% | 75.8% | 2.6% / 36.9% |
+| DeepSeek-R1-Distill-Qwen-7B | 67.3% | 91.1% | 15.8% / 10.6% |
+
+So p025 and p050 are exact on both streams and p075 on ood6. p075 on indist6 reaches 71.9% overall because the two
+DeepSeek peers stop at their usable share. p100 reaches 81.0% on indist6 and 91.9% on ood6, the most these answers allow.
+
 ## Reading the table
 
 `outputs/tables/misleading.md`: accuracy per regime (tilt, peers, solo, swap and their differences) against the honest

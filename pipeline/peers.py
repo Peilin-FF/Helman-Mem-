@@ -22,6 +22,8 @@ import os
 import time
 from pathlib import Path
 
+from pipeline.config import shown
+
 FORCEABLE = {"math", "mcqa", "boolqa"}   # tasks whose conclusion can be rewritten without rewriting the argument
 
 
@@ -96,7 +98,7 @@ def main(argv=None) -> None:
     by_source = collections.defaultdict(lambda: [0, 0])
     for r in rows:
         by_source[r["source"]][0] += 1; by_source[r["source"]][1] += r["correct"]
-    summary = {"mode": args.mode, "model": args.model, "stream": str(args.stream), "n": len(rows),
+    summary = {"mode": args.mode, "model": args.model, "stream": shown(args.stream), "n": len(rows),
                "generation_params": {"temperature": args.temperature if args.mode == "honest" else args.temperatures,
                                      "top_p": args.top_p, "max_new_tokens": "reasoning 4096" if args.reasoning else budgets(args.max_tokens, args.mode),
                                      "context": not args.no_context, "reasoning": args.reasoning, "backend": "vllm"},

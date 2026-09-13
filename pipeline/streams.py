@@ -22,6 +22,8 @@ import json
 import statistics
 from pathlib import Path
 
+from pipeline.config import shown
+
 
 def peer_text(response: str) -> str:
     """The peer-block text of a response: the answer after a think block; an unfinished think block is cut at 3,000 chars."""
@@ -79,7 +81,7 @@ def cmd_add(args) -> None:
                 keys.append(k)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             n_out += 1
-    manifest = {"kind": "add", "base": str(args.base), "out": str(args.out), "peers": [p[0] for p in peers],
+    manifest = {"kind": "add", "base": shown(args.base), "out": shown(args.out), "peers": [p[0] for p in peers],
                 "events_in": n_in, "events_out": n_out, "dropped_for_missing_answers": dict(dropped)}
     (args.out.parent / "manifest.json").write_text(json.dumps(manifest, indent=1))
     print(f"[streams] {n_in} events in, {n_out} out, dropped {dict(dropped)} -> {args.out}")
@@ -159,7 +161,7 @@ def cmd_replace(args) -> None:
                  "realised_ratio": 100 * stat[m]["misled"] / max(1, n),
                  "accuracy_honest": 100 * acc[m][0] / max(1, n), "accuracy_in_stream": 100 * acc[m][1] / max(1, n),
                  "mean_chars_honest": mean(lens[m][0]), "mean_chars_misleading": mean(lens[m][1])} for i, m in enumerate(names)}
-    manifest = {"kind": "replace", "base": str(args.base), "out": str(args.out), "answers": str(args.answers), "events": n,
+    manifest = {"kind": "replace", "base": shown(args.base), "out": shown(args.out), "answers": shown(args.answers), "events": n,
                 "order": args.order, "drop_forced": args.drop_forced,
                 "regime": {"name": regime.name, "kind": regime.kind, "rate": regime.rate, "exact": regime.exact, "count": regime.count,
                            "at": regime.at, "peers": list(regime.peers) if regime.peers is not None else "all",

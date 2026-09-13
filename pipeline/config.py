@@ -9,12 +9,42 @@ YAML, applied last.
 from __future__ import annotations
 
 import copy
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def shown(path: str | Path | None) -> str | None:
+    """A path as written into a manifest or metrics file: relative to the repository when inside it.
+
+    Jobs run from a per-job code snapshot, so an absolute path would name that snapshot rather than the project.
+    """
+    if path is None:
+        return None
+    p = str(path)
+    if not Path(p).is_absolute():
+        return p
+    p = _SNAPSHOT_RE.sub("", p)   # a path written by an older job, inside its snapshot
+    for root in _roots():
+        if p.startswith(root + "/"):
+            return p[len(root) + 1:]
+    return p
+
+
+_SNAPSHOT_RE = re.compile(r"^.*/\.rproj-jobs/[^/]+/[^/]+/")
+
+
+def _roots() -> list[str]:
+    """The repository, and the live project its outputs/ symlink points to when running from a snapshot."""
+    roots = [str(REPO)]
+    live = (REPO / "outputs").resolve().parent
+    if str(live) not in roots:
+        roots.append(str(live))
+    return roots
 
 
 def deep_merge(base: dict, over: dict) -> dict:

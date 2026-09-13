@@ -27,6 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
+from pipeline.config import shown
+
 CONDITION_KEYS = ("condition", "mode", "gamma", "swap_record", "bias_form", "max_new_tokens", "engine",
                   "central_model", "checkpoint", "record", "stream", "every", "max_examples")
 
@@ -238,8 +240,8 @@ def write_results(args, rows, records, outputs, t0) -> None:
     metrics = {"condition": args.condition, "mode": args.mode, "gamma": args.gamma, "swap_record": bool(args.swap),
                "bias_form": args.bias_form if args.gamma > 0 else None,
                "max_new_tokens": args.max_new_tokens, "engine": args.engine, "central_model": args.model,
-               "checkpoint": str(args.checkpoint) if args.checkpoint else None, "record": str(args.record),
-               "stream": str(args.stream), "every": args.every, "max_examples": args.max_examples, "shard": args.shard}
+               "checkpoint": shown(args.checkpoint) if args.checkpoint else None, "record": shown(args.record),
+               "stream": shown(args.stream), "every": args.every, "max_examples": args.max_examples, "shard": args.shard}
     metrics.update(summarise(out_rows, args.windows))
     with (args.output / "generations.jsonl").open("w") as f:
         for row in out_rows:

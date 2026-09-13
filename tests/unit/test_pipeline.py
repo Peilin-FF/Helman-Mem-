@@ -115,6 +115,9 @@ def test_a_stored_evaluation_with_other_settings_is_reported_not_reused(tmp_path
     assert stale(m, same) is None
     assert "gamma" in stale(m, dict(same, gamma=5.0))
     assert stale(tmp_path / "missing.json", same) is None
+    moved = dict(same, record="/mnt/data/peilin/.rproj-jobs/sigma-mem/20260101-000000/r.jsonl")
+    m.write_text(json.dumps(dict(moved, accuracy=0.5)))
+    assert stale(m, same) is None   # written from a job snapshot that is gone by now: still the same record
 
 
 def test_training_expands_records_data_and_one_run_per_arm_in_waves(tmp_path):
@@ -167,3 +170,13 @@ def test_the_central_prompts_are_the_ones_every_stored_result_used():
                                    "Treat their answers as evidence, verify them yourself, and produce your own final answer.")
     assert solo[0]["content"] == "Answer the question."
     assert peers[1]["content"].startswith("Question:\n2 + 2?\n\nPeer answers:\n\nPeer 1:\n4\n\nPeer 2:\n5\n\nInstruction: ")
+
+
+def test_paths_written_into_outputs_are_relative_to_the_repository():
+    from pipeline.config import REPO, shown
+
+    assert shown(REPO / "data" / "ood6_adv_p050" / "test.jsonl") == "data/ood6_adv_p050/test.jsonl"
+    assert shown("/models/Qwen3-4B") == "/models/Qwen3-4B"
+    assert shown(None) is None
+    assert shown("/mnt/data/peilin/.rproj-jobs/sigma-mem/20260913-162846/data/ood6/test.jsonl") == "data/ood6/test.jsonl"
+    assert shown("outputs/record/q3_4b/ood6/shuffled0.jsonl") == "outputs/record/q3_4b/ood6/shuffled0.jsonl"
