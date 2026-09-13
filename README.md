@@ -98,6 +98,7 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 | `main` | the frozen Qwen3-4B with its record on the in-distribution and OOD streams (the reference rows) | [docs/experiments/main.md](docs/experiments/main.md) |
 | `families` | does the record help other central models (Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4), each with its own record | [docs/experiments/families.md](docs/experiments/families.md) |
 | `misleading` | does it survive peers that are misleading on purpose, at any poison ratio | [docs/experiments/misleading.md](docs/experiments/misleading.md) |
+| `misleading_families` | the same misleading datasets for Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4 and Qwen3-14B, each with its own record (a guide for running it elsewhere) | [docs/experiments/misleading_families.md](docs/experiments/misleading_families.md) |
 | `train_tilt` | GRPO of the central model with and without the tilt | [docs/experiments/train_tilt.md](docs/experiments/train_tilt.md) |
 
 ### The stages

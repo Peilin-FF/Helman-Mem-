@@ -270,3 +270,42 @@ def test_question_only_is_shared_by_a_stream_and_its_misleading_variants(tmp_pat
     (stored / "eval_metrics.json").write_text(json.dumps({"mode": "solo", "gamma": 0.0, "swap_record": False, "max_new_tokens": 768,
                                                           "checkpoint": None, "record": "outputs/record/q3_4b/indist6/shuffled0.fit-train6.jsonl"}))
     assert ev["eval_q3_4b_indist6_solo"].check() is None                                     # the main experiment's result is reused
+
+
+def test_the_families_experiment_evaluates_every_model_with_its_own_record(tmp_path):
+    cfg = load(EXPERIMENTS / "misleading_families.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
+    plan = Plan(cfg, "misleading_families.yaml", smoke=False, gpus=[0, 1])
+
+    assert cfg["central"] == ["llama31", "ministral", "qwen25", "phi4", "qwen3_14b"]
+    assert "peers" not in cfg["steps"]                                                     # nothing is generated
+    ev = {j.name: j for j in plan.evaluate()}
+    assert len(ev) == 5 * (10 * 2 + 2)                                                     # tilt + peers per dataset, solo per base stream
+    job = ev["eval_qwen3_14b_ood6_misleading_p050_tilt"]
+    assert "--model /models/Qwen3-14B " in job.cmd and "/record/qwen3_14b/ood6_misleading_p050/shuffled0.fit-self.jsonl" in job.cmd
+    assert all("--fit-features" not in j.cmd for j in plan.record())
+
+
+def test_a_regime_table_has_one_block_per_central_model(tmp_path):
+    from pipeline.table import build
+
+    cfg = load(EXPERIMENTS / "misleading_families.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data",
+                                                          "central=[llama31, qwen25]", "datasets=[indist6_misleading_p050]"])
+    L = Layout(cfg)
+    for m, acc in (("llama31", 0.61), ("qwen25", 0.58)):
+        for c in ("tilt", "peers"):
+            d = L.eval_dir(m, "indist6_misleading_p050", c)
+            d.mkdir(parents=True)
+            (d / "eval_metrics.json").write_text(json.dumps({"accuracy": acc}))
+    text = build(cfg, smoke=False)
+
+    assert "| llama31 · p050 |  61.0 |  61.0 |" in text and "| qwen25 · p050 |  58.0 |  58.0 |" in text
+
+
+def test_a_families_smoke_run_reads_the_released_datasets_and_writes_to_smoke(tmp_path):
+    cfg = load(EXPERIMENTS / "misleading_families.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "central=[qwen25]"])
+    plan = Plan(cfg, "misleading_families.yaml", smoke=True, gpus=[0, 1])
+
+    assert plan.eval_datasets() == ["indist6_misleading_p050"]
+    feats = plan.features()
+    assert all(f"--stream {tmp_path}/data/indist6_misleading_p050/test.jsonl " in j.cmd and "--max-examples 48" in j.cmd for j in feats)
+    assert all(str(j.done).startswith(str(tmp_path / "out/smoke/")) for j in feats + plan.record() + plan.evaluate())

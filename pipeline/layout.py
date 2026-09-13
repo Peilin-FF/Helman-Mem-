@@ -11,7 +11,8 @@
     logs/<experiment>/<job>.log
 
 A smoke run (--smoke) uses outputs/smoke/ and logs/smoke/ for everything it writes, built datasets included, so it can
-never be mistaken for, or skip, a real run.
+never be mistaken for, or skip, a real run. An experiment that only evaluates released datasets sets
+`smoke: {use_released_data: true}`: its smoke run reads them from paths.data and never builds any.
 """
 from __future__ import annotations
 
@@ -31,7 +32,8 @@ class Layout:
         logs = self._abs(paths.get("logs", "logs"))
         self.outputs = outputs / "smoke" if smoke else outputs
         self.logs = logs / "smoke" if smoke else logs
-        self.derived = self.outputs / "data" if smoke else self.data
+        # built datasets: a smoke run builds its own under outputs/smoke/data, unless the experiment only reads released ones
+        self.derived = self.outputs / "data" if smoke and not cfg.get("smoke", {}).get("use_released_data") else self.data
         self.models_root = Path(paths.get("models_root", "models"))
         self.registry = load_registry(paths.get("registry"))
 

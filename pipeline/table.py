@@ -110,10 +110,11 @@ def build(cfg: dict, smoke: bool) -> str:
     if kind == "models":
         for m in cfg.get("central", []):
             rows.append((m, m, m, {s: s for s in base_streams}, L))
-    elif kind == "regimes":
-        m = cfg["central"][0]
-        for r, smap in by_regime.items():
-            rows.append((r, m, m, smap, L))
+    elif kind == "regimes":   # one block of regime rows per central model
+        central = cfg.get("central", [])
+        for m in central:
+            for r, smap in by_regime.items():
+                rows.append((r if len(central) == 1 else f"{m} · {r}", m, m, smap, L))
     elif kind == "runs":
         keep = cfg.get("smoke", {}).get("arms") if smoke else None
         for run in [r for r in cfg.get("arms", {}) if keep is None or r in keep]:
@@ -136,27 +137,30 @@ def build(cfg: dict, smoke: bool) -> str:
     text = f"# {cfg['name']}{' (smoke)' if smoke else ''}\n\n" + "\n".join(lines) + "\n\n" + "; ".join(notes) + ".\n"
 
     if tb.get("misleading_probe"):
-        m = cfg["central"][0]
         plines = ["| regime · stream | honest answers: mean estimate | misleading answers | AUC honest over misleading | favourite is misleading |",
                   "|---|---:|---:|---:|---:|"]
         peer_lines = ["| regime · stream | peer | ratio asked | reached | accuracy honest | in stream | forced | usable misleading answers |",
                       "|---|---|---:|---:|---:|---:|---:|---:|"]
+        seen = set()   # the peers are the same for every central model: listed once per dataset
         for label, key, rec_model, smap, lay in rows:
             if label.endswith("(reference)"):
                 continue
             for s, name in smap.items():
                 spec = L.stream(name)
                 stream = spec["path"]
-                probe = misleading_probe(L.record_file(m, name), stream)
+                probe = misleading_probe(L.record_file(rec_model, name), stream)
                 if probe:
                     plines.append(f"| {label} · {s} | {probe['mean_prob_honest']:.2f} | {probe['mean_prob_misleading']:.2f} | "
                                   f"{probe['auc_honest_over_misleading']:.2f} | {probe['favourite_misleading_pct']:.0f}% |")
+                if name in seen:
+                    continue
+                seen.add(name)
                 man = load_json(stream.parent / "manifest.json")
                 for peer, v in sorted((man or {}).get("peers", {}).items(), key=lambda kv: kv[1]["index"]):
                     answers = L.stream(spec["answers"])["path"] / peer if spec.get("answers") else None
                     sums = [json.load(open(f)) for f in glob.glob(str(answers / "summary.shard*.json"))] if answers else []
                     usable = f"{100 * sum(x.get('accepted', 0) for x in sums) / max(1, sum(x['n'] for x in sums)):.0f}%" if sums else "-"
-                    peer_lines.append(f"| {label} · {s} | peer_{v['index']} {peer} | {v['requested_ratio']:.0f}% | {v['realised_ratio']:.1f}% | "
+                    peer_lines.append(f"| {label.split(' · ')[-1]} · {s} | peer_{v['index']} {peer} | {v['requested_ratio']:.0f}% | {v['realised_ratio']:.1f}% | "
                                       f"{v['accuracy_honest']:.1f} | {v['accuracy_in_stream']:.1f} | {v['forced']} | {usable} |")
         text += "\n## What the record makes of the misleading answers\n\n" + "\n".join(plines) + "\n"
         text += "\n## The peers\n\n" + "\n".join(peer_lines) + "\n"

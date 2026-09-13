@@ -1,6 +1,6 @@
 {
  "version": 4,
- "date": "2026-09-13",
+ "date": "2026-09-14",
  "files": [
   {
    "dataset": "indist6",
@@ -35,8 +35,8 @@
    "kind": "answers",
    "archive": "indist6.misleading.jsonl.gz",
    "unpacks_to": "data/indist6_misleading",
-   "bytes_gz": 9135604,
-   "sha256_gz": "4896938e89c2d0bdb1e9a5705b6465f3754b2e3ceb54cabe3456f3e6e125d8e9",
+   "bytes_gz": 9031117,
+   "sha256_gz": "795555e18e085c29dd55c329c66bf4ad47a24db81ea9f851a491b601c866833d",
    "rows": 25914,
    "base": "indist6",
    "mode": "misleading",
@@ -58,19 +58,21 @@
       },
       "context": true,
       "reasoning": false,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 3447,
-     "accepted_pct": 79.81014123639731,
-     "forced": 676,
-     "mean_attempts": 1.9291502662653393,
+     "accepted": 3081,
+     "accepted_pct": 71.33595739754573,
+     "forced": 671,
+     "mean_attempts": 2.110673767075712,
      "unusable_reasons": {
-      "still_correct": 841,
-      "degenerate": 19,
-      "format": 12,
-      "empty": 2
+      "still_correct": 1201,
+      "degenerate": 17,
+      "ungrounded": 2,
+      "format": 14,
+      "empty": 6
      }
     },
     "Phi-4-mini-instruct": {
@@ -155,19 +157,20 @@
       },
       "context": true,
       "reasoning": false,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 4123,
-     "accepted_pct": 95.46191247974068,
-     "forced": 27,
-     "mean_attempts": 1.3790229219726788,
+     "accepted": 4043,
+     "accepted_pct": 93.60963185922667,
+     "forced": 30,
+     "mean_attempts": 1.437138226441306,
      "unusable_reasons": {
-      "still_correct": 185,
-      "format": 9,
-      "empty": 1,
-      "ungrounded": 1
+      "still_correct": 257,
+      "format": 15,
+      "ungrounded": 4,
+      "empty": 1
      }
     },
     "DeepSeek-Coder-V2-Lite-Instruct": {
@@ -187,23 +190,22 @@
       },
       "context": true,
       "reasoning": false,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 2757,
-     "accepted_pct": 63.834220884463996,
-     "forced": 72,
-     "mean_attempts": 2.541560546422783,
+     "accepted": 2963,
+     "accepted_pct": 68.60384348228757,
+     "forced": 473,
+     "mean_attempts": 2.2579300764065757,
      "unusable_reasons": {
-      "format": 446,
-      "still_correct": 41,
-      "degenerate": 447,
-      "empty": 480,
-      "ungrounded": 167,
-      "leak": 43,
-      "refusal": 3,
-      "gold_leak": 4
+      "still_correct": 1250,
+      "leak": 100,
+      "format": 73,
+      "empty": 11,
+      "degenerate": 2,
+      "gold_leak": 3
      }
     },
     "DeepSeek-R1-Distill-Qwen-7B": {
@@ -216,22 +218,23 @@
       "max_new_tokens": "reasoning 4096",
       "context": true,
       "reasoning": true,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 2907,
-     "accepted_pct": 67.30724704792776,
-     "forced": 459,
-     "mean_attempts": 2.4012502894188468,
+     "accepted": 2870,
+     "accepted_pct": 66.45056726094003,
+     "forced": 538,
+     "mean_attempts": 2.4294975688816858,
      "unusable_reasons": {
-      "still_correct": 654,
-      "format": 740,
-      "leak": 66,
-      "degenerate": 14,
-      "gold_leak": 97,
-      "ungrounded": 20,
-      "empty": 2
+      "still_correct": 682,
+      "format": 736,
+      "leak": 69,
+      "gold_leak": 86,
+      "ungrounded": 29,
+      "degenerate": 9,
+      "empty": 1
      }
     }
    }
@@ -256,7 +259,7 @@
    "regime": "p025",
    "events": 4319,
    "poison_ratio": 25.005788376939105,
-   "digest": "f690001401f675e6d41ad9475f4b3b3793fca3d03203185b52be101424a2e432"
+   "digest": "6b6599f09c64bd470fa9dddfc3e5c11fcfd251b550497b50d838ff9b94f0b961"
   },
   {
    "dataset": "indist6_misleading_p050",
@@ -267,7 +270,7 @@
    "regime": "p050",
    "events": 4319,
    "poison_ratio": 50.01157675387821,
-   "digest": "a9db2b90f1ef7781c0bb0d10687d3a7b83bb1592b24e2006706a4a54992b7003"
+   "digest": "8bb3f91de6120462b62ffb8ca3125dce917a15c616938dbfc363a4360b00f279"
   },
   {
    "dataset": "indist6_misleading_p075",
@@ -277,8 +280,8 @@
    "answers": "indist6_misleading",
    "regime": "p075",
    "events": 4319,
-   "poison_ratio": 71.8530524041059,
-   "digest": "a5655b78fb8ec640ec5462ac5e655825c44973aba67a89473ca448f7acad051e"
+   "poison_ratio": 71.89550050165934,
+   "digest": "f2843153e8231d79115582914d573dbd0952c3122866895171a7f9b54da2c62f"
   },
   {
    "dataset": "indist6_misleading_p100",
@@ -288,8 +291,8 @@
    "answers": "indist6_misleading",
    "regime": "p100",
    "events": 4319,
-   "poison_ratio": 80.97167554217798,
-   "digest": "8489e7d7057da97fcfc3150262e67f7fcaef54dc4a211a07e2ec55a0f611d3b5"
+   "poison_ratio": 79.90275526742302,
+   "digest": "31836c6106f75ed9972de913b4bcfabef697ed60fd7964fec9b76080dd8dc898"
   },
   {
    "dataset": "ood6",
@@ -332,8 +335,8 @@
    "kind": "answers",
    "archive": "ood6.misleading.jsonl.gz",
    "unpacks_to": "data/ood6_misleading",
-   "bytes_gz": 22238744,
-   "sha256_gz": "ffcc4e2cb9405a8ba046262f544f9d8943c27b4e1685544fc0ff9330bc2254ff",
+   "bytes_gz": 21926714,
+   "sha256_gz": "1a46a6a1972fbb9b941bb50e8be2aaadacd0a984df1ff1fa7918c5620170cdae",
    "rows": 104418,
    "base": "ood6",
    "mode": "misleading",
@@ -355,18 +358,21 @@
       },
       "context": true,
       "reasoning": false,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 16090,
-     "accepted_pct": 92.45532379474803,
-     "forced": 901,
-     "mean_attempts": 1.3440211457794633,
+     "accepted": 16014,
+     "accepted_pct": 92.01861747974488,
+     "forced": 1340,
+     "mean_attempts": 1.4483135091650865,
      "unusable_reasons": {
-      "leak": 3,
-      "still_correct": 1305,
-      "format": 5
+      "off_topic": 19,
+      "degenerate": 2,
+      "format": 5,
+      "still_correct": 1364,
+      "leak": 1
      }
     },
     "Phi-4-mini-instruct": {
@@ -449,16 +455,19 @@
       },
       "context": true,
       "reasoning": false,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 17095,
-     "accepted_pct": 98.23019019709245,
-     "forced": 93,
-     "mean_attempts": 1.1850255703039705,
+     "accepted": 17018,
+     "accepted_pct": 97.78773774636556,
+     "forced": 102,
+     "mean_attempts": 1.1895075561684767,
      "unusable_reasons": {
-      "still_correct": 299,
+      "still_correct": 373,
+      "leak": 3,
+      "off_topic": 2,
       "format": 9
      }
     },
@@ -479,22 +488,19 @@
       },
       "context": true,
       "reasoning": false,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 13193,
-     "accepted_pct": 75.8087686031144,
-     "forced": 4867,
-     "mean_attempts": 2.4362466241452623,
+     "accepted": 16438,
+     "accepted_pct": 94.4549790266046,
+     "forced": 1031,
+     "mean_attempts": 1.431707176923519,
      "unusable_reasons": {
-      "empty": 2586,
-      "format": 1498,
-      "still_correct": 70,
-      "degenerate": 243,
-      "gold_leak": 48,
-      "leak": 3,
-      "refusal": 1
+      "still_correct": 945,
+      "format": 23,
+      "off_topic": 3
      }
     },
     "DeepSeek-R1-Distill-Qwen-7B": {
@@ -507,20 +513,21 @@
       "max_new_tokens": "reasoning 4096",
       "context": true,
       "reasoning": true,
-      "backend": "vllm"
+      "backend": "vllm",
+      "prompt": "chat template as token ids, no special tokens added"
      },
      "max_attempts": 3,
      "forced_allowed": true,
-     "accepted": 15857,
-     "accepted_pct": 91.11647417111992,
-     "forced": 1673,
-     "mean_attempts": 1.8397402746652876,
+     "accepted": 15824,
+     "accepted_pct": 90.92685169223697,
+     "forced": 1827,
+     "mean_attempts": 1.8644486582773085,
      "unusable_reasons": {
-      "still_correct": 1369,
-      "gold_leak": 249,
-      "format": 70,
-      "leak": 19,
-      "degenerate": 1
+      "still_correct": 1351,
+      "gold_leak": 312,
+      "leak": 32,
+      "format": 85,
+      "off_topic": 3
      }
     }
    }
@@ -545,7 +552,7 @@
    "regime": "p025",
    "events": 17403,
    "poison_ratio": 25.00143653393093,
-   "digest": "8ba742397d2309fdd6feca060a36b6a083af397471a0d1e5488d1203addf8559"
+   "digest": "d1edf69fe2baa46ea21d72d349bf9d186c6c7c77464bc2b56d862d8988790931"
   },
   {
    "dataset": "ood6_misleading_p050",
@@ -556,7 +563,7 @@
    "regime": "p050",
    "events": 17403,
    "poison_ratio": 50.00287306786186,
-   "digest": "aa7b8146f4ee09c20961a18fc0cad264a422f6fd1b24b7b492e58979629ad51b"
+   "digest": "7a65ca016b781aa2bd6efde15c2bcb5568c56d0e0a6699ef4d0c93804afda6f7"
   },
   {
    "dataset": "ood6_misleading_p075",
@@ -567,7 +574,7 @@
    "regime": "p075",
    "events": 17403,
    "poison_ratio": 74.99856346606907,
-   "digest": "2e8f1f011d21a7a6173fbe8fa56fe1cc1405af11063534c766a1d4e42075d114"
+   "digest": "608b15cdec2fd79a0dbca243ca4f37eb48f1621860eb57b3089cb4594be67b39"
   },
   {
    "dataset": "ood6_misleading_p100",
@@ -577,8 +584,8 @@
    "answers": "ood6_misleading",
    "regime": "p100",
    "events": 17403,
-   "poison_ratio": 91.91135627956865,
-   "digest": "6c8dfceb8bfc5d55ec55f3733c2876ced2c395d6140c163501bab3e603424d6e"
+   "poison_ratio": 94.84092780938153,
+   "digest": "58ae921987bb56187b146f3189e76742537b89859cddb2288c9baeba621d323f"
   },
   {
    "dataset": "train6",
