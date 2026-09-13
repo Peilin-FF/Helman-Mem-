@@ -1,4 +1,4 @@
-# peer_4 of the six-peer streams.
+# peer_4 of the released streams.
 hf_id: deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct
 path: DeepSeek-Coder-V2-Lite-Instruct
 engine: vllm

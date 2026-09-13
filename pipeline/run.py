@@ -92,7 +92,7 @@ class Plan:
         for a in self.answer_datasets():
             answers = self.L.stream(a)
             stream, mode = self.L.stream(answers["base"]), answers["mode"]
-            for p in self.L.peer_models(stream["peer_set"]):
+            for p in self.L.peer_models(stream["peer_names"]):
                 out = answers["path"] / p["name"]
                 for k in range(self.shards):
                     cmd = (f"python -m pipeline.peers --mode {mode} --model {p['path']} --stream {stream['path']} --output {out} "
@@ -224,7 +224,7 @@ def streams_command(L: Layout, name: str, limit: int | None = None) -> str:
     else:
         label = name
     answers = L.stream(spec["answers"])
-    dirs = ",".join(p["name"] for p in L.peer_models(spec["peer_set"]))
+    dirs = ",".join(p["name"] for p in L.peer_models(spec["peer_names"]))
     return (f"python -m pipeline.streams replace --base {L.stream(spec['base'])['path']} --answers {answers['path']} --peer-dirs {dirs} "
             f"--regime {label} --regime-spec {shlex.quote(json.dumps(regime))} --order {spec.get('order', 'shuffled0')} --out {spec['path']}"
             + (" --drop-forced" if spec.get("drop_forced") else "") + (f" --limit {limit}" if limit else ""))

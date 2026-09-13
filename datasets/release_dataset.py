@@ -40,7 +40,7 @@ def sha256(path: Path) -> str:
 
 def pack_stream(L: Layout, name: str, dst: Path) -> dict:
     spec = L.stream(name)
-    hf = {m["name"]: m.get("hf_id", m["name"]) for m in L.peer_models(spec["peer_set"])}
+    hf = {m["name"]: m.get("hf_id", m["name"]) for m in L.peer_models(spec["peer_names"])}
     rows, sources, tasks, peers = 0, collections.Counter(), collections.Counter(), {}
     with spec["path"].open() as fin, gzip.open(dst, "wt", compresslevel=6) as fout:
         for line in fin:
@@ -62,7 +62,7 @@ def pack_answers(L: Layout, name: str, dst: Path) -> dict:
     spec = L.stream(name)
     rows, summaries = 0, {}
     with gzip.open(dst, "wt", compresslevel=6) as fout:
-        for p in L.peer_models(L.stream(spec["base"])["peer_set"]):
+        for p in L.peer_models(L.stream(spec["base"])["peer_names"]):
             d = spec["path"] / p["name"]
             shards = sorted(glob.glob(str(d / "shard*.jsonl")))
             if not (d / "complete.json").exists():

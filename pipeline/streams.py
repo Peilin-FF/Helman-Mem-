@@ -103,7 +103,7 @@ def cmd_replace(args) -> None:
         rec = json.loads(line)
         if not keys:
             keys = sorted(rec.get("peer_responses", {}), key=lambda k: int(k.split("_")[1]))
-            names = (args.peer_dirs.split(",") if args.peer_dirs else   # the peer set's model directories, in peer order
+            names = (args.peer_dirs.split(",") if args.peer_dirs else   # the stream's peers' model directories, in peer order
                      [str(rec.get("peer_metadata", {}).get(k, {}).get("model", k)).split("/")[-1] for k in keys])
             if len(names) != len(keys):
                 raise SystemExit(f"--peer-dirs names {len(names)} peers, the stream has {len(keys)}")

@@ -1,4 +1,4 @@
-# peer_1 of the six-peer streams.
+# peer_1 of the released streams.
 hf_id: microsoft/Phi-4-mini-instruct
 path: Phi-4-mini-instruct
 engine: vllm

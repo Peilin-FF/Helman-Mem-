@@ -56,7 +56,7 @@ pytest tests/unit                              # CPU only: the rules, the record
 
 vLLM must be exactly 0.8.5: the tilt's attention kernels are patched from its source. Set `paths.models_root` in
 `configs/base.yaml` to the directory holding the models (one sub-directory each): the central model `Qwen/Qwen3-4B`, and,
-to generate new peer answers, the six peers (the peer set `configs/peers/six.yaml`):
+to generate new peer answers, the six peers (each registered in `configs/peers/`):
 
 | slot | peer | registered as |
 |---|---|---|
@@ -118,14 +118,15 @@ the paths from the config and schedules the jobs on the GPUs, one GPU each (a tr
 
 ### Registering datasets and models
 
-Datasets, models and peer sets are registered one YAML file each, and experiments refer to them by file name, so
+Datasets, models and peers are registered one YAML file each, and experiments refer to them by file name, so
 adding one is adding a file (`python -m pipeline.registry` lists everything and checks every reference):
 
 ```
-configs/datasets/<name>.yaml   kind stream: {path, peers}; kind answers: {base, mode}; kind misleading: {base, answers, regime};
+configs/datasets/<name>.yaml   kind stream: {path, peers: [peer names, in peer_0 ... order]}; kind answers: {base, mode};
+                               kind misleading: {base, answers, regime};
                                or a group: {group: [names]}. `include: _misleading.yaml` pulls in a template.
-configs/models/<name>.yaml     {hf_id, path (under paths.models_root), engine, env_vars, reasoning, ...}
-configs/peers/<name>.yaml      {models: [...]}: peer_0, peer_1, ... of the streams that name this set
+configs/models/<name>.yaml     {hf_id, path (under paths.models_root), engine, env_vars, prefix_caching, ...}
+configs/peers/<name>.yaml      {model: a registered model, reasoning, ...}: one peer; a new peer is a new file
 ```
 
 For example a new regime, two peers that always lie, is `configs/datasets/indist6_saboteurs.yaml`:

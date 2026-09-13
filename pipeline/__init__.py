@@ -9,5 +9,5 @@
     table     the experiment's result table
 
 Every stage takes explicit input and output paths; pipeline.run derives them from the experiment config and the registered
-datasets, models and peer sets (pipeline.registry, configs/{datasets,models,peers}/).
+datasets, models and peers (pipeline.registry, configs/{datasets,models,peers}/).
 """

@@ -1,5 +1,5 @@
 # OOD test stream: yes/no, multiple-choice and short-answer tasks (PIQA, MMLU, OpenBookQA, SciQ, BBH, SuperGLUE), six peers.
 path: ood6/test.jsonl
-peers: six
+peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5 (configs/peers/)
 events: 17403
 release: ood6.test.jsonl.gz

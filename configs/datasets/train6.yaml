@@ -1,5 +1,5 @@
 # Training stream: GSM8K, SQuAD and APPS with six peers. Fits the record's addresses (label-free); RL training data.
 path: mixed_train_big6/train.jsonl        # under paths.data (bash datasets/unpack.sh restores it)
-peers: six
+peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5 (configs/peers/)
 events: 17709
 release: mixed_train_big6.train.jsonl.gz

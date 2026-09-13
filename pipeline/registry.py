@@ -1,12 +1,13 @@
-"""The registries: every dataset, model and peer set is one YAML file under configs/, found by scanning the folders.
+"""The registries: every dataset, model and peer is one YAML file under configs/, found by scanning the folders.
 
     configs/datasets/<name>.yaml   a dataset, by kind:
-                                     stream       a released stream of events with its peers' answers (path, peers)
-                                     answers      a peer set's generated answers on a stream (base, mode)
+                                     stream       a stream of events with its peers' answers (path; peers: the peers in
+                                                  peer_0, peer_1, ... order)
+                                     answers      the stream's peers' generated answers (base, mode)
                                      misleading   a stream whose answers are replaced under a regime (base, answers, regime)
                                    or a group: `group: [names]`, which experiments can name instead of its members
     configs/models/<name>.yaml     a model: its directory under paths.models_root and how to run it
-    configs/peers/<name>.yaml      an ordered peer set: `models: [...]` are peer_0, peer_1, ... of the streams
+    configs/peers/<name>.yaml      a peer: the registered model that answers, and peer-only settings (reasoning)
 
 The file name is the registered name. Files starting with "_" are templates, not registered: `include: _misleading.yaml`
 merges one under a file, and string values may use {name} and {base}. Experiments refer to registered names only, so
@@ -79,7 +80,7 @@ class Registry:
         self.groups = {k: v for k, v in entries.items() if "group" in v}
         self.datasets = {k: dict(v, kind=v.get("kind", "stream")) for k, v in entries.items() if "group" not in v}
         self.models = _scan(root / "models")
-        self.peer_sets = _scan(root / "peers")
+        self.peers = _scan(root / "peers")
 
     # --- lookups ------------------------------------------------------------------------------------------------------
     def dataset(self, name: str) -> dict:
@@ -94,10 +95,10 @@ class Registry:
             raise _unknown("model", name, self.models)
         return self.models[name]
 
-    def peer_set(self, name: str) -> list[str]:
-        if name not in self.peer_sets:
-            raise _unknown("peer", name, self.peer_sets)
-        return list(self.peer_sets[name]["models"])
+    def peer(self, name: str) -> dict:
+        if name not in self.peers:
+            raise _unknown("peer", name, self.peers)
+        return self.peers[name]
 
     def expand(self, names) -> list[str]:
         """Dataset names with every group replaced by its members, in order, each once."""
@@ -136,7 +137,10 @@ class Registry:
             need(kind in KINDS, f"{where}: kind {kind!r} is not one of {KINDS}")
             if kind == "stream":
                 need("path" in d, f"{where}: a stream needs path (under paths.data)")
-                need(d.get("peers") in self.peer_sets, f"{where}: peers {d.get('peers')!r} is not a registered peer set")
+                listed = d.get("peers")
+                need(isinstance(listed, list) and listed, f"{where}: peers must list the stream's peers in peer_0, peer_1, ... order")
+                for p in listed if isinstance(listed, list) else []:
+                    need(p in self.peers, f"{where}: peer {p!r} is not registered (configs/peers/{p}.yaml)")
                 continue
             base = self.datasets.get(d.get("base"))
             need(base is not None and base["kind"] == "stream", f"{where}: base {d.get('base')!r} is not a registered stream")
@@ -155,9 +159,8 @@ class Registry:
                 need(m in self.datasets or m in self.groups, f"{g['file']}: member {m!r} is not registered")
         for name, m in self.models.items():
             need("path" in m, f"{m['file']}: a model needs path (under paths.models_root, or absolute)")
-        for name, p in self.peer_sets.items():
-            for m in p.get("models", []):
-                need(m in self.models, f"{p['file']}: model {m!r} is not registered")
+        for name, p in self.peers.items():
+            need(p.get("model") in self.models, f"{p['file']}: model {p.get('model')!r} is not registered")
         return bad
 
 
@@ -175,9 +178,9 @@ def main(argv=None) -> None:
     print("datasets")
     for n, d in reg.datasets.items():
         if d["kind"] == "stream":
-            what = f"{d.get('path')}  peers {d.get('peers')}"
+            what = f"{d.get('path')}  {len(d.get('peers') or [])} peers"
         elif d["kind"] == "answers":
-            what = f"{d.get('mode')} answers of peers {reg.datasets.get(d.get('base'), {}).get('peers')} on {d.get('base')}"
+            what = f"{d.get('mode')} answers of the peers of {d.get('base')}"
         else:
             what = f"{d.get('base')} + {d.get('answers')}, regime {d.get('regime')}"
         print(f"  {n:34s} {d['kind']:10s} {what}")
@@ -186,9 +189,9 @@ def main(argv=None) -> None:
     print("models")
     for n, m in reg.models.items():
         print(f"  {n:34s} {m.get('hf_id', m['path'])}" + "".join(f"  {k}={m[k]}" for k in ("engine", "reasoning", "env_vars") if k in m))
-    print("peer sets")
-    for n, p in reg.peer_sets.items():
-        print(f"  {n:34s} {', '.join(p.get('models', []))}")
+    print("peers")
+    for n, p in reg.peers.items():
+        print(f"  {n:34s} model {p.get('model')}" + ("  reasoning" if p.get("reasoning") else ""))
     bad = reg.problems()
     for b in bad:
         print(f"PROBLEM {b}")

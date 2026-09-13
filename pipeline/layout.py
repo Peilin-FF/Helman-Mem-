@@ -48,24 +48,26 @@ class Layout:
         spec["path"] = path if path.is_absolute() else self.models_root / path
         return spec
 
-    def peer_models(self, peer_set: str) -> list[dict]:
-        """The models of a peer set in peer_0 ... order; `name` is the model directory, which names its answers."""
+    def peer_models(self, peers: list[str]) -> list[dict]:
+        """Registered peers in peer_0 ... order, each merged over its model; `name` is the model directory, which names
+        the peer's answers."""
         out = []
-        for i, tag in enumerate(self.registry.peer_set(peer_set)):
-            spec = self.model(tag)
-            out.append(dict(spec, tag=tag, index=i, name=spec["path"].name))
+        for i, tag in enumerate(peers):
+            peer = self.registry.peer(tag)
+            spec = dict(self.model(peer["model"]), **{k: v for k, v in peer.items() if k not in ("model", "name", "file")})
+            out.append(dict(spec, tag=tag, model=peer["model"], index=i, name=spec["path"].name))
         return out
 
     def stream(self, name: str) -> dict:
-        """A registered dataset: {'name', 'kind', 'path', 'peers' (count), 'peer_set', 'base', 'answers', 'regime', ...}.
+        """A registered dataset: {'name', 'kind', 'path', 'peers' (count), 'peer_names', 'base', 'answers', 'regime', ...}.
 
         A released stream is read from paths.data; what the pipeline builds (answers, misleading streams) goes to
         paths.data too, or to outputs/smoke/data in a smoke run, so a smoke run never writes next to real data.
         """
         d = dict(self.registry.dataset(name))
         base = self.registry.stream_of(name)
-        d["peer_set"] = base["peers"]
-        d["peers"] = len(self.registry.peer_set(base["peers"]))
+        d["peer_names"] = list(base["peers"])
+        d["peers"] = len(d["peer_names"])
         if d["kind"] == "stream":
             d["path"] = self._abs(Path(self.cfg.get("paths", {}).get("data", "data")) / d["path"])
         elif d["kind"] == "answers":

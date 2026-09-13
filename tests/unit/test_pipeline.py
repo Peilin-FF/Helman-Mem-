@@ -51,7 +51,8 @@ def test_the_registry_is_consistent_and_groups_expand():
     assert len(rates) == 10 and rates[0] == "indist6_misleading_p000" and rates[-1] == "ood6_misleading_p100"
     assert reg.expand(["indist6", "misleading_rates", "indist6"]) == ["indist6"] + rates   # in order, each once
     assert reg.dataset("ood6_misleading_p025")["answers"] == "ood6_misleading"            # {base} filled from the template
-    assert reg.peer_set("six") == ["gemma3_4b", "phi4_mini", "qwen25_coder_7b", "llama31", "deepseek_coder_v2_lite", "r1_distill_qwen_7b"]
+    assert reg.dataset("indist6")["peers"] == ["gemma3_4b", "phi4_mini", "qwen25_coder_7b", "llama31", "deepseek_coder_v2_lite", "r1_distill_qwen_7b"]
+    assert reg.peer("r1_distill_qwen_7b")["reasoning"] and "reasoning" not in reg.model("r1_distill_qwen_7b")      # a peer-only setting
     with pytest.raises(KeyError, match="did you mean"):
         reg.dataset("indist6_misleading_p05")
 
@@ -60,12 +61,13 @@ def test_the_registry_reports_broken_references(tmp_path):
     for sub in ("datasets", "models", "peers"):
         (tmp_path / sub).mkdir()
     (tmp_path / "models/m.yaml").write_text("path: M\n")
-    (tmp_path / "peers/two.yaml").write_text("models: [m, ghost]\n")
-    (tmp_path / "datasets/s.yaml").write_text("path: s/test.jsonl\npeers: two\n")
+    (tmp_path / "peers/p.yaml").write_text("model: m\n")
+    (tmp_path / "peers/q.yaml").write_text("model: ghost\n")
+    (tmp_path / "datasets/s.yaml").write_text("path: s/test.jsonl\npeers: [p, q, nobody]\n")
     (tmp_path / "datasets/s_bad.yaml").write_text("kind: misleading\nbase: s\nanswers: nowhere\nregime: p150\n")
     problems = "\n".join(load_registry(tmp_path).problems())
 
-    assert "ghost" in problems and "nowhere" in problems and "regime must be pNNN" in problems
+    assert "ghost" in problems and "nobody" in problems and "nowhere" in problems and "regime must be pNNN" in problems
 
 
 def test_registered_datasets_resolve_to_data_and_smoke_builds_are_isolated(tmp_path):
@@ -309,3 +311,24 @@ def test_a_families_smoke_run_reads_the_released_datasets_and_writes_to_smoke(tm
     feats = plan.features()
     assert all(f"--stream {tmp_path}/data/indist6_misleading_p050/test.jsonl " in j.cmd and "--max-examples 48" in j.cmd for j in feats)
     assert all(str(j.done).startswith(str(tmp_path / "out/smoke/")) for j in feats + plan.record() + plan.evaluate())
+
+
+def test_a_new_peer_is_a_new_file_and_a_stream_lists_its_peers(tmp_path):
+    root = Path(__file__).resolve().parents[2] / "configs"
+    (tmp_path / "models").symlink_to(root / "models")
+    (tmp_path / "peers").mkdir()
+    for f in (root / "peers").glob("*.yaml"):
+        (tmp_path / "peers" / f.name).write_text(f.read_text())
+    (tmp_path / "peers/ministral.yaml").write_text("model: ministral\n")
+    (tmp_path / "datasets").mkdir()
+    (tmp_path / "datasets/indist7.yaml").write_text(
+        "path: indist7/test.jsonl\npeers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b, ministral]\n")
+    (tmp_path / "datasets/indist7_misleading.yaml").write_text("kind: answers\nbase: indist7\nmode: misleading\n")
+    cfg = load(EXPERIMENTS / "misleading.yaml", [f"paths.registry={tmp_path}", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                 "datasets=[indist7_misleading]"])
+    plan = Plan(cfg, "misleading.yaml", smoke=False, gpus=[0])
+
+    assert Layout(cfg).registry.problems() == []
+    jobs = plan.peers()
+    assert len(jobs) == 7 and "--model /models/Ministral-8B-Instruct-2410 " in jobs[-1].cmd
+    assert [j for j in jobs if "DeepSeek-R1" in j.name][0].cmd.count("--reasoning") == 1

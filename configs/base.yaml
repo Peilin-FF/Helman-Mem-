@@ -1,6 +1,6 @@
 # Shared settings for every experiment. An experiment file names `base: ../base.yaml` and overrides what it needs.
 # Run one with:  bash run.sh configs/experiments/<name>.yaml [--steps ...] [--gpus 0,1] [--smoke] [--dry-run] [--set key=value]
-# Datasets, models and peer sets are registered one file each in configs/datasets/, configs/models/, configs/peers/
+# Datasets, models and peers are registered one file each in configs/datasets/, configs/models/, configs/peers/
 # (python -m pipeline.registry lists them); experiments name them.
 
 paths:
