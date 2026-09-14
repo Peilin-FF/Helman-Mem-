@@ -40,3 +40,24 @@ outputs/eval/q3_4b/<dataset>+own/decide/                          the decision p
 outputs/eval/q3_4b/<base stream>/solo/                            the own answer (question only)
 outputs/tables/reading_line.md
 ```
+
+## Results (2026-09-15)
+
+Qwen3-4B, accuracy % (job 20260915-021113; `outputs/tables/reading_line.md`, per event and per trust band in
+`outputs/eval/q3_4b/<dataset>+own/decide/`). "Read on" is the share of events where the decision took the reading.
+
+| misleading | in-dist: always read | alone | decide | read on | OOD: always read | alone | decide | read on |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 76.7 | 69.2 | 76.2 | 86% | 73.8 | 67.8 | 75.0 | 86% |
+| 25% | 75.5 | 69.2 | 75.4 | 85% | 70.4 | 67.8 | 72.4 | 78% |
+| 50% | 74.3 | 69.2 | 74.1 | 85% | 67.5 | 67.8 | 70.8 | 69% |
+| 75% | 73.1 | 69.2 | 72.7 | 86% | 62.5 | 67.8 | 70.2 | 53% |
+| 100% | 72.4 | 69.2 | 72.0 | 85% | 50.7 | 67.8 | 69.3 | 15% |
+
+- OOD: the decision is above both of its options at every rate. From 0% to 100% it falls 5.7 points; always reading
+  falls 23.1.
+- In-distribution: reading stays above answering alone at every rate, and the decision is within 0.5 points of always
+  reading.
+- The straight line over-states reading at high trust: ρ̂ is above 1 for most task types (up to 1.48). In-distribution
+  at low trust it keeps the own answer where reading was a little better (0%, T 0.2–0.4: reading right on 15.8%, own
+  answer on 10.0%, the decision read on 11% of those events).
