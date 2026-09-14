@@ -17,7 +17,8 @@ event between peers + memory and question alone?
   T* = δ / (ρ + δ − κ): with δ > 0 and ρ > κ peers + memory wins for T ≥ T*; the table says where it wins in every case.
 - **Datasets.** `misleading_rates`: in-distribution and OOD at 0, 25, 50, 75 and 100% misleading answers.
 
-The derivation of (ρ, δ) = P⁻¹q is on the "Mathematical" page.
+The derivation of (ρ, δ) = P⁻¹q is on the "Mathematical" page (https://claude.ai/code/artifact/d375f7dc-624f-465e-9e66-b2cf0b015b40);
+the mechanism and results are on "Answer Combination by the Record" (https://claude.ai/code/artifact/8d7155a5-2ec2-4c1c-84bf-a6e717d9c15e).
 
 ## Run
 
