@@ -336,7 +336,7 @@ def test_a_new_peer_is_a_new_file_and_a_stream_lists_its_peers(tmp_path):
 
 def test_combination_adds_the_own_answer_before_the_record_and_chooses_after_peers_and_memory(tmp_path):
     cfg = load(EXPERIMENTS / "combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
-                                                   "datasets=[indist6_misleading_p025, indist6_misleading_p050]"])
+                                                   "datasets=[indist6_misleading_p025, indist6_misleading_p050]", "central=[q3_4b]"])
     plan = Plan(cfg, "combination.yaml", smoke=False, gpus=[0, 1])
 
     own = plan.own()
@@ -354,7 +354,9 @@ def test_combination_adds_the_own_answer_before_the_record_and_chooses_after_pee
     assert "--peers 7 " in rec.cmd and rec.cmd.endswith("--own-slot 6")
     assert rec.done == tmp_path / "out/record/q3_4b/indist6_misleading_p050+own/shuffled0.fit-self.jsonl"
     ev = {j.name: j for j in plan.evaluate()}
-    assert sorted(ev) == ["eval_q3_4b_indist6_misleading_p025_tilt", "eval_q3_4b_indist6_misleading_p050_tilt"]   # question only ran in own
+    assert sorted(ev) == ["eval_q3_4b_indist6_misleading_p025_peers", "eval_q3_4b_indist6_misleading_p025_tilt",
+                          "eval_q3_4b_indist6_misleading_p050_peers", "eval_q3_4b_indist6_misleading_p050_tilt"]   # question alone ran in own
+    assert ev["eval_q3_4b_indist6_misleading_p050_peers"].done == tmp_path / "out/eval/q3_4b/indist6_misleading_p050+own/peers/eval_metrics.json"
     tilt = ev["eval_q3_4b_indist6_misleading_p050_tilt"]
     assert "/record/q3_4b/indist6_misleading_p050+own/" in tilt.cmd
     assert tilt.done == tmp_path / "out/eval/q3_4b/indist6_misleading_p050+own/tilt/eval_metrics.json"
@@ -379,7 +381,8 @@ def test_a_combination_smoke_run_reads_the_released_stream_and_writes_to_smoke(t
 def test_the_combination_table_names_its_columns_as_the_reports_do(tmp_path):
     from pipeline.table import build
 
-    cfg = load(EXPERIMENTS / "combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "datasets=[indist6_misleading_p050]"])
+    cfg = load(EXPERIMENTS / "combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "datasets=[indist6_misleading_p050]",
+                                                  "central=[q3_4b]"])
     L = Layout(cfg)
     for c, acc in (("tilt", 0.70), ("combination", 0.74)):
         d = L.eval_dir("q3_4b", "indist6_misleading_p050", c)
@@ -391,5 +394,5 @@ def test_the_combination_table_names_its_columns_as_the_reports_do(tmp_path):
     (d / "eval_metrics.json").write_text(json.dumps({"accuracy": 0.69}))
     text = build(cfg, smoke=False)
 
-    assert "| row | indist6: peers + memory | indist6: question alone | indist6: combination |" in text
-    assert "| p050 |  70.0 |  69.0 |  74.0 |" in text and "| p050 · indist6 | 80% | math 0.90 / 0.30 / T >= 0.50 |" in text
+    assert "| row | indist6: peers + memory | indist6: question + peers | indist6: question alone | indist6: combination |" in text
+    assert "| p050 |  70.0 |   -   |  69.0 |  74.0 |" in text and "| p050 · indist6 | 80% | math 0.90 / 0.30 / T >= 0.50 |" in text

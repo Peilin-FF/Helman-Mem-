@@ -6,11 +6,11 @@
 base: ../base.yaml
 name: combination
 steps: [own, features, record, evaluate, combination, table]
-central: [q3_4b]
+central: [q3_4b, qwen3_8b]                  # each with its own features (it is the judge), record and answers
 datasets: [misleading_rates]                 # 0-100% misleading, indist6 and ood6 (configs/datasets/)
 own_answer: true                             # the central model's question-alone answer joins every stream as its last answer
 record: {fit: self}                          # addresses fit on each stream itself (label-free)
-eval_conditions: [tilt, solo]                # peers + memory; question alone
+eval_conditions: [tilt, peers, solo]         # peers + memory; question + peers; question alone
 combination: {peers_memory: tilt, prior: [0.5, 0.0], lam: 1.0}   # the condition that competes with question alone; (rho, delta) before any event
 
 table:

@@ -1,14 +1,15 @@
 # Combination: peers + memory or question alone, chosen per event
 
-Question: with Qwen3-4B fixed as the central model, can it keep accuracy up as the peers turn misleading, by choosing per
-event between peers + memory and question alone?
+Question: with a fixed central model (Qwen3-4B, then Qwen3-8B), can it keep accuracy up as the peers turn misleading, by
+choosing per event between peers + memory and question alone?
 
 ## Setup
 
-- **Seven answers per event.** The six peers of the stream, plus Qwen3-4B's question-alone answer. One record estimates
-  all seven alike, addressed by question and answer; Qwen3-4B's own answer is recorded but never shown in the prompt.
-- **Peers + memory.** Qwen3-4B answers with the question and the six peers in the prompt, attention tilted (γ = 3) by
-  that same record.
+- **Seven answers per event.** The six peers of the stream, plus the central model's question-alone answer. One record
+  estimates all seven alike, addressed by question and answer; the central model's own answer is recorded but never shown
+  in the prompt. Each central model is its own judge: its features, record and answers are its own.
+- **Peers + memory.** The central model answers with the question and the six peers in the prompt, attention tilted
+  (γ = 3) by that same record. **Question + peers** is the same prompt without the tilt.
 - **The reading line.** On each event, T is the record's top estimate among the six peers and κ its estimate of the
   question-alone answer. Peers + memory is worth A(T) = T·ρ + (1 − T)(κ − δ), question alone κ. With u = [T, T − 1] and
   z = y − (1 − T)κ (y: whether peers + memory was right), (ρ, δ) = P⁻¹q with P = I + Σuuᵀ and q = (0.5, 0) + Σu·z: a 2×2
@@ -27,20 +28,22 @@ bash run.sh configs/experiments/combination.yaml --smoke     # 48 events of indi
 bash run.sh configs/experiments/combination.yaml             # every rate; finished work is skipped
 ```
 
-Steps: `own` (Qwen3-4B's question-alone answers, shared with the base streams, join each stream as
-`data/<dataset>+q3_4b/`), `features` and `record` on the seven answers, `evaluate` (peers + memory), `combination`, `table`.
+Steps: `own` (each central model's question-alone answers, shared with the base streams, join each stream as
+`data/<dataset>+<model>/`), `features` and `record` on the seven answers, `evaluate` (peers + memory, question + peers),
+`combination`, `table`.
 
 ## Outputs
 
 ```
-outputs/features/q3_4b/<dataset>+own/
-outputs/record/q3_4b/<dataset>+own/shuffled0.fit-self.jsonl       rows carry own_prob and own_correct
-outputs/eval/q3_4b/<dataset>+own/tilt/                            peers + memory
-outputs/eval/q3_4b/<dataset>+own/combination/                     the choice per event and eval_metrics.json: accuracy,
+outputs/features/<model>/<dataset>+own/
+outputs/record/<model>/<dataset>+own/shuffled0.fit-self.jsonl     rows carry own_prob and own_correct
+outputs/eval/<model>/<dataset>+own/tilt/                          peers + memory
+outputs/eval/<model>/<dataset>+own/peers/                         question + peers
+outputs/eval/<model>/<dataset>+own/combination/                   the choice per event and eval_metrics.json: accuracy,
                                                                   share_peers_memory, peers_memory_accuracy,
                                                                   question_alone_accuracy, reading_line (ρ, δ per task
                                                                   type), by_trust
-outputs/eval/q3_4b/<base stream>/solo/                            question alone
+outputs/eval/<model>/<base stream>/solo/                          question alone
 outputs/tables/combination.md
 ```
 
