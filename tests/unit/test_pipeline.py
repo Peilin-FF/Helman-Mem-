@@ -332,3 +332,62 @@ def test_a_new_peer_is_a_new_file_and_a_stream_lists_its_peers(tmp_path):
     jobs = plan.peers()
     assert len(jobs) == 7 and "--model /models/Ministral-8B-Instruct-2410 " in jobs[-1].cmd
     assert [j for j in jobs if "DeepSeek-R1" in j.name][0].cmd.count("--reasoning") == 1
+
+
+def test_the_reading_line_adds_the_own_answer_before_the_record_and_decides_after_the_reading(tmp_path):
+    cfg = load(EXPERIMENTS / "reading_line.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                   "datasets=[indist6_misleading_p025, indist6_misleading_p050]"])
+    plan = Plan(cfg, "reading_line.yaml", smoke=False, gpus=[0, 1])
+
+    own = plan.own()
+    solo = [j for j in own if j.wave == 0]
+    assert [j.name for j in solo] == ["eval_q3_4b_indist6_solo"]                   # once per base stream, needing no record
+    assert "--record" not in solo[0].cmd and "--order shuffled0 " in solo[0].cmd
+    assert solo[0].done == tmp_path / "out/eval/q3_4b/indist6/solo/eval_metrics.json"   # shared with the main experiment
+    add = {j.name: j for j in own if j.wave == 1}
+    assert add["own_q3_4b_indist6_misleading_p050"].cmd == (
+        f"python -m pipeline.streams add --base {tmp_path}/data/indist6_misleading_p050/test.jsonl "
+        f"--eval {tmp_path}/out/eval/q3_4b/indist6/solo --out {tmp_path}/data/indist6_misleading_p050+q3_4b/test.jsonl")
+    feats = plan.features()
+    assert len(feats) == 2 * 2 and all("+q3_4b/test.jsonl --model /models/Qwen3-4B " in j.cmd and "--peers 7 " in j.cmd for j in feats)
+    rec = {j.name: j for j in plan.record()}["record_q3_4b_indist6_misleading_p050"]
+    assert "--peers 7 " in rec.cmd and rec.cmd.endswith("--own-slot 6")
+    assert rec.done == tmp_path / "out/record/q3_4b/indist6_misleading_p050+own/shuffled0.fit-self.jsonl"
+    ev = {j.name: j for j in plan.evaluate()}
+    assert sorted(ev) == ["eval_q3_4b_indist6_misleading_p025_tilt", "eval_q3_4b_indist6_misleading_p050_tilt"]   # question only ran in own
+    tilt = ev["eval_q3_4b_indist6_misleading_p050_tilt"]
+    assert "/record/q3_4b/indist6_misleading_p050+own/" in tilt.cmd
+    assert tilt.done == tmp_path / "out/eval/q3_4b/indist6_misleading_p050+own/tilt/eval_metrics.json"
+    dec = {j.name: j for j in plan.decide()}["decide_q3_4b_indist6_misleading_p050"]
+    assert f"--reading {tmp_path}/out/eval/q3_4b/indist6_misleading_p050+own/tilt --own {tmp_path}/out/eval/q3_4b/indist6/solo " in dec.cmd
+    assert "--prior 0.5,0.0 --lam 1.0" in dec.cmd and dec.gpus == 0
+    with pytest.raises(SystemExit, match="fit: self"):
+        Plan(load(EXPERIMENTS / "reading_line.yaml", ["record.fit=train6"]), "reading_line.yaml", smoke=False, gpus=[0])
+
+
+def test_a_reading_line_smoke_run_reads_the_released_stream_and_writes_to_smoke(tmp_path):
+    cfg = load(EXPERIMENTS / "reading_line.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data"])
+    plan = Plan(cfg, "reading_line.yaml", smoke=True, gpus=[0])
+    own = plan.own()
+
+    assert "--limit 48" in own[0].cmd and f"--base {tmp_path}/data/indist6_misleading_p050/test.jsonl " in own[-1].cmd
+    jobs = own + plan.features() + plan.record() + plan.evaluate() + plan.decide()
+    assert all(str(j.done).startswith(str(tmp_path / "out/smoke/")) for j in jobs)
+
+
+def test_the_reading_line_table_shows_the_decision_next_to_reading_and_question_only(tmp_path):
+    from pipeline.table import build
+
+    cfg = load(EXPERIMENTS / "reading_line.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "datasets=[indist6_misleading_p050]"])
+    L = Layout(cfg)
+    for c, acc in (("tilt", 0.70), ("decide", 0.74)):
+        d = L.eval_dir("q3_4b", "indist6_misleading_p050", c)
+        d.mkdir(parents=True)
+        (d / "eval_metrics.json").write_text(json.dumps({"accuracy": acc, "read_share": 0.8,
+                                                         "reading_line": {"math": {"rho": 0.9, "delta": 0.3, "reads_at_mean_own_prob": "T >= 0.50"}}}))
+    d = L.eval_dir("q3_4b", "indist6", "solo")
+    d.mkdir(parents=True)
+    (d / "eval_metrics.json").write_text(json.dumps({"accuracy": 0.69}))
+    text = build(cfg, smoke=False)
+
+    assert "| p050 |  70.0 |  69.0 |  74.0 |" in text and "| p050 · indist6 | 80% | math 0.90 / 0.30 / T >= 0.50 |" in text

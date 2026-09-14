@@ -10,6 +10,10 @@
     outputs/tables/<experiment>.md, outputs/runs/<experiment>/    the result table, the resolved config and commands
     logs/<experiment>/<job>.log
 
+An experiment with `own_answer: true` adds the central model's own question-only answer to every stream it reads
+(data/<dataset>+<model>/): its features, record and every evaluation but question only live under <dataset>+own, so
+they never mix with the peers-only results; question only stays shared with the base stream.
+
 A smoke run (--smoke) uses outputs/smoke/ and logs/smoke/ for everything it writes, built datasets included, so it can
 never be mistaken for, or skip, a real run. An experiment that only evaluates released datasets sets
 `smoke: {use_released_data: true}`: its smoke run reads them from paths.data and never builds any.
@@ -34,6 +38,7 @@ class Layout:
         self.logs = logs / "smoke" if smoke else logs
         # built datasets: a smoke run builds its own under outputs/smoke/data, unless the experiment only reads released ones
         self.derived = self.outputs / "data" if smoke and not cfg.get("smoke", {}).get("use_released_data") else self.data
+        self.own = bool(cfg.get("own_answer"))
         self.models_root = Path(paths.get("models_root", "models"))
         self.registry = load_registry(paths.get("registry"))
 
@@ -76,9 +81,16 @@ class Layout:
             d["path"] = self.derived / d.get("path", f"{name}/{Path(base['path']).name}")
         return d
 
+    def own_stream(self, model: str, dataset: str) -> Path:
+        """The dataset's stream with the central model's own answer as its last answer (built, so under smoke/ in a smoke run)."""
+        return (self.outputs / "data" if self.smoke else self.data) / f"{dataset}+{model}" / "test.jsonl"
+
+    def _own(self, stream: str) -> str:
+        return f"{stream}+own" if self.own else stream
+
     # --- artifacts --------------------------------------------------------------------------------------------------
     def features_dir(self, model: str, stream: str) -> Path:
-        return self.outputs / "features" / model / stream
+        return self.outputs / "features" / model / self._own(stream)
 
     def record_file(self, model: str, stream: str) -> Path:
         rec = self.cfg.get("record", {})
@@ -87,7 +99,7 @@ class Layout:
         extra = ""
         if int(rec.get("dim", 256)) != 256 or float(rec.get("lam", 100.0)) != 100.0 or rec.get("design", "qc") != "qc":
             extra = f".{rec.get('design', 'qc')}-d{int(rec.get('dim', 256))}-lam{float(rec.get('lam', 100.0)):g}"
-        return self.outputs / "record" / model / stream / f"{order}.fit-{fit}{extra}.jsonl"
+        return self.outputs / "record" / model / self._own(stream) / f"{order}.fit-{fit}{extra}.jsonl"
 
     @staticmethod
     def quality_file(record_file: Path) -> Path:
@@ -99,7 +111,8 @@ class Layout:
         return self.registry.stream_of(dataset)["name"] if condition.get("mode") == "solo" else dataset
 
     def eval_dir(self, model: str, stream: str, condition: str) -> Path:
-        return self.outputs / "eval" / model / stream / condition
+        solo = self.cfg.get("conditions", {}).get(condition, {}).get("mode") == "solo"
+        return self.outputs / "eval" / model / (stream if solo else self._own(stream)) / condition
 
     def train_dir(self, run: str) -> Path:
         return self.outputs / "train" / run

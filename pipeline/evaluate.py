@@ -11,6 +11,7 @@ A condition is a prompt mode plus the tilt settings:
         --record outputs/record/q3_4b/indist6/shuffled0.jsonl --stream data/indist6/test.jsonl \
         --condition tilt --mode peers --gamma 3 --output outputs/eval/q3_4b/indist6/tilt
     # a trained model: add --checkpoint outputs/train/<run>/phase2/hf/global_step_276
+    # question only needs no record: without --record the stream's events run in --order (the first --limit of them)
     # HF engine, sharded: --engine hf --shard k/N --output <out>/shard<k>, then  python -m pipeline.evaluate --merge --output <out>
 
 Writes <output>/generations.jsonl (one graded answer per event, in stream order) and <output>/eval_metrics.json:
@@ -41,7 +42,9 @@ def parse_args(argv=None):
                    "code rows keep their stored label (programs are not executed again)")
     p.add_argument("--model", help="the central model's directory (its tokenizer is always used)")
     p.add_argument("--checkpoint", type=Path, default=None, help="an HF checkpoint directory of a trained central model")
-    p.add_argument("--record", type=Path, help="the record file of the stream (pipeline.record output)")
+    p.add_argument("--record", type=Path, help="the record file of the stream (pipeline.record output); optional with --mode solo")
+    p.add_argument("--order", default="shuffled0", help="without --record: the order of the events (pipeline.record's)")
+    p.add_argument("--limit", type=int, default=None, help="without --record: the first N events of the stream, as a smoke record holds")
     p.add_argument("--stream", type=Path, help="the stream JSONL (for grading)")
     p.add_argument("--condition", default=None, help="the condition's name, stored with the results")
     p.add_argument("--mode", choices=["peers", "solo"], default="peers")
@@ -59,6 +62,22 @@ def parse_args(argv=None):
     p.add_argument("--shard", default=None, help="k/N: evaluate rows k, k+N, ...")
     p.add_argument("--windows", type=int, default=10)
     return p.parse_args(argv)
+
+
+def question_only_rows(records: list[dict], order: str, limit: int | None) -> list[dict]:
+    """The rows a record would give a question-only run: the events in the record's order, the peers' labels, no peers shown."""
+    from feedback_state.memory_generator import build_messages
+    from pipeline.record import order_of
+
+    records = records[:limit] if limit else records
+    rows = []
+    for pos, t in enumerate(order_of(len(records), order).tolist()):
+        rec = records[t]
+        labels = rec.get("correctness_by_peer") or rec.get("peer_correct") or {}
+        rows.append({"pos": pos, "id": str(rec.get("id") or rec.get("uid")), "task_type": str(rec.get("task_type") or ""),
+                     "source": str(rec.get("source") or ""), "peer_correct": [int(round(float(labels[k]))) for k in sorted(labels)],
+                     "messages_solo": build_messages(rec, [], mode="solo")})
+    return rows
 
 
 def curve(hits: np.ndarray, windows: int) -> dict:
@@ -143,8 +162,8 @@ def main(argv=None) -> None:
     if args.regrade:
         regrade(args.output, args.stream, args.windows)
         return
-    if not (args.model and args.record and args.stream):
-        raise SystemExit("--model, --record and --stream are required (or --merge)")
+    if not (args.model and args.stream and (args.record or args.mode == "solo")):
+        raise SystemExit("--model and --stream are required, and --record unless --mode solo (or --merge)")
     if args.checkpoint is not None and not (args.checkpoint / "config.json").exists():
         raise SystemExit(f"--checkpoint {args.checkpoint} is not an HF model directory (no config.json)")
     from feedback_state.newarch_loader import apply_torch_fp8_shim
@@ -161,8 +180,9 @@ def main(argv=None) -> None:
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"
-    records = {str(r.get("id") or r.get("uid")): r for r in JsonlDataset(args.stream).records}
-    rows = [json.loads(l) for l in args.record.open()]
+    events = JsonlDataset(args.stream).records
+    records = {str(r.get("id") or r.get("uid")): r for r in events}
+    rows = [json.loads(l) for l in args.record.open()] if args.record else question_only_rows(events, args.order, args.limit)
     if args.every > 1:
         rows = rows[:: args.every]
     if args.max_examples:

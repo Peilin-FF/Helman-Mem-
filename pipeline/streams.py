@@ -1,6 +1,7 @@
 """Streams: derive a stream from an existing one, labels recomputed from the answers actually in it.
 
-    add       append new peers (their pipeline.peers answers) as peer_<k>; events missing an answer are dropped
+    add       append new peers (their pipeline.peers answers, or a model's question-only evaluation with --eval) as
+              peer_<k>; events missing an answer are dropped
     replace   put a peer's misleading answers in place of its honest ones, on the events a regime selects
     build     build registered misleading datasets (configs/datasets/) by name from their stream and answers
     digest    a content digest of a stream (ids, answers, correctness, misled flags), as datasets/manifest.json lists
@@ -49,18 +50,39 @@ def load_answers(directory: Path) -> tuple[dict[str, dict], dict]:
     return rows, summary
 
 
+def load_eval_answers(directory: Path) -> tuple[dict[str, dict], dict]:
+    """A pipeline.evaluate output as answers: the generation is the response, its grade the label."""
+    metrics = json.load(open(directory / "eval_metrics.json"))
+    rows = {}
+    for line in (directory / "generations.jsonl").open():
+        g = json.loads(line)
+        rows[str(g["id"])] = {"response": g["generation"], "correct": int(g["correct"])}
+    model = Path(str(metrics.get("central_model") or directory)).name
+    return rows, {"model": model, "generation_params": {"condition": metrics.get("condition"), "mode": metrics.get("mode"),
+                                                        "max_new_tokens": metrics.get("max_new_tokens"), "evaluation": shown(directory)}}
+
+
 def cmd_add(args) -> None:
+    if not (args.peer or args.eval):
+        raise SystemExit("name answers to add: --peer (with --answers) or --eval")
+    if args.peer and args.answers is None:
+        raise SystemExit("--peer needs --answers")
     peers = []
-    for name in args.peer:
+    for name in args.peer or []:
         rows, summary = load_answers(args.answers / name)
         if not rows:
             raise SystemExit(f"no answers under {args.answers / name}")
         peers.append((name, rows, summary))
         print(f"[streams] {name}: {len(rows)} answers")
+    for directory in args.eval or []:
+        rows, summary = load_eval_answers(directory)
+        peers.append((summary["model"], rows, summary))
+        print(f"[streams] {summary['model']} ({shown(directory)}): {len(rows)} answers")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     n_in = n_out = 0
     dropped = collections.Counter()
-    with args.out.open("w") as f:
+    tmp = args.out.with_name(args.out.name + ".tmp")
+    with tmp.open("w") as f:
         for line in args.base.open():
             rec = json.loads(line)
             n_in += 1
@@ -83,7 +105,9 @@ def cmd_add(args) -> None:
                 keys.append(k)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             n_out += 1
+    tmp.replace(args.out)   # the stream appears only once complete: its presence means the step finished
     manifest = {"kind": "add", "base": shown(args.base), "out": shown(args.out), "peers": [p[0] for p in peers],
+                "evaluations": [shown(d) for d in args.eval or []],
                 "events_in": n_in, "events_out": n_out, "dropped_for_missing_answers": dict(dropped)}
     (args.out.parent / "manifest.json").write_text(json.dumps(manifest, indent=1))
     print(f"[streams] {n_in} events in, {n_out} out, dropped {dict(dropped)} -> {args.out}")
@@ -224,8 +248,10 @@ def main(argv=None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("add")
     a.add_argument("--base", type=Path, required=True)
-    a.add_argument("--answers", type=Path, required=True, help="the directory holding one pipeline.peers output per peer")
-    a.add_argument("--peer", action="append", required=True, help="a peer directory name under --answers (repeatable)")
+    a.add_argument("--answers", type=Path, default=None, help="the directory holding one pipeline.peers output per peer")
+    a.add_argument("--peer", action="append", default=None, help="a peer directory name under --answers (repeatable)")
+    a.add_argument("--eval", type=Path, action="append", default=None,
+                   help="a pipeline.evaluate output directory whose answers join after the peers (repeatable)")
     a.add_argument("--out", type=Path, required=True)
     r = sub.add_parser("replace")
     r.add_argument("--base", type=Path, required=True)

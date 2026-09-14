@@ -9,6 +9,7 @@ row per trained run). `reference:` adds rows for
 models evaluated elsewhere on the base streams (the frozen Qwen3-4B of the main experiment). Cells are accuracy in percent
 per stream and condition, then the requested differences, then the record's AUC / favourite-right per stream.
 With `misleading_probe: true` two more tables follow: what the record makes of the misleading answers, and the peers.
+`extra_columns: [decide]` adds the columns pipeline.decide writes, and with it a table of the reading line per row.
 """
 from __future__ import annotations
 
@@ -86,7 +87,7 @@ def misleading_probe(record: Path, stream: Path) -> dict | None:
 def build(cfg: dict, smoke: bool) -> str:
     L = Layout(cfg, smoke)
     tb = cfg.get("table", {})
-    conds = list(cfg.get("eval_conditions", list(cfg.get("conditions", {}))))
+    conds = list(cfg.get("eval_conditions", list(cfg.get("conditions", {})))) + list(tb.get("extra_columns", []))
     deltas = [tuple(d) for d in tb.get("deltas", [])]
     reg = L.registry
     sm = cfg.get("smoke", {})
@@ -104,7 +105,7 @@ def build(cfg: dict, smoke: bool) -> str:
     else:
         base_streams = datasets
     rows = []   # (label, eval model key, record model, {base stream: evaluated stream}, layout for the record)
-    ref_cfg = deep_merge(cfg, {"record": {"fit": tb.get("reference_fit", "train6")}})
+    ref_cfg = deep_merge(cfg, {"record": {"fit": tb.get("reference_fit", "train6")}, "own_answer": False})
     for m in tb.get("reference", []) if not smoke else []:
         rows.append((f"{m} (reference)", m, m, {s: s for s in base_streams}, Layout(ref_cfg, False)))
     if kind == "models":
@@ -132,9 +133,23 @@ def build(cfg: dict, smoke: bool) -> str:
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
     notes = []
     for c in conds:
+        if c == "decide":
+            notes.append("`decide`: per event the reading or the question-only answer, by the reading line")
+            continue
         cd = cfg.get("conditions", {}).get(c, {})
         notes.append(f"`{c}`: mode {cd.get('mode', 'peers')}" + (f", tilt γ = {cd['gamma']}" if cd.get("gamma") else "") + (", record permuted by rank" if cd.get("swap") else ""))
     text = f"# {cfg['name']}{' (smoke)' if smoke else ''}\n\n" + "\n".join(lines) + "\n\n" + "; ".join(notes) + ".\n"
+
+    if "decide" in conds:
+        dlines = ["| row · stream | read on | reading line by task type: ρ̂ / δ̂ / reads when, at the mean own estimate |", "|---|---:|---|"]
+        for label, key, rec_model, smap, lay in rows:
+            for s, name in smap.items():
+                d = load_json(lay.eval_dir(key, name, "decide") / "eval_metrics.json")
+                if not d:
+                    continue
+                parts = [f"{t} {v['rho']:.2f} / {v['delta']:.2f} / {v['reads_at_mean_own_prob']}" for t, v in d["reading_line"].items()]
+                dlines.append(f"| {label} · {s} | {100 * d['read_share']:.0f}% | {'; '.join(parts)} |")
+        text += "\n## The reading line\n\n" + "\n".join(dlines) + "\n"
 
     if tb.get("misleading_probe"):
         plines = ["| regime · stream | honest answers: mean estimate | misleading answers | AUC honest over misleading | favourite is misleading |",

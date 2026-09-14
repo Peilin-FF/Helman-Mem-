@@ -5,12 +5,16 @@ peer is read from the state built by the earlier events, the event's row is writ
 peer labels written into the state. The PCA addresses are fit on --fit-features (label-free; the stream's own features
 when omitted). Peer slots are permuted per event (the record is identity-indexed, the prompt is not).
 
+With --own-slot K the answer in slot K is the central model's own question-only answer (pipeline.streams add --eval): the
+record estimates and writes it like every answer, but it stays out of the prompt and the tilt, and its estimate goes to
+own_prob (pipeline.decide reads it).
+
     PYTHONPATH=. python -m pipeline.record --stream data/indist6/test.jsonl --features outputs/features/q3_4b/indist6 \
         --fit-stream data/mixed_train_big6/train.jsonl --fit-features outputs/features/q3_4b/train6 \
         --order shuffled0 --out outputs/record/q3_4b/indist6/shuffled0.jsonl
 
 Writes <out> (one row per event: pos, id, task_type, source, peer_order, peer_correct, memory_prob, memory_evidence,
-messages_peers, messages_solo) and <out without .jsonl>.quality.json.
+messages_peers, messages_solo; with --own-slot also own_prob, own_correct, own_evidence) and <out without .jsonl>.quality.json.
 """
 from __future__ import annotations
 
@@ -35,7 +39,6 @@ def build(args) -> list[dict]:
     from feedback_state.feature_streams import load_stream_from
     from feedback_state.memory_generator import build_messages, prob_from_logit
     from feedback_state.memory_runtime import MemoryRuntime
-    from feedback_state.permutations import random_order
 
     device = torch.device(args.device)
     fs = load_stream_from(args.stream, args.features, num_peers=args.peers)
@@ -50,26 +53,40 @@ def build(args) -> list[dict]:
         order = order[: args.limit]
     rng = np.random.default_rng(args.seed)
     labels = fs.labels.numpy()
+    own = getattr(args, "own_slot", None)
     rows = []
     for pos, t in enumerate(order.tolist()):
         r = int(fs.real[t])
         if r < 1:
             continue
+        if own is not None and r <= own:
+            raise ValueError(f"event {fs.ids[t]} has {r} answers, so no own answer in slot {own}")
         y = labels[t, :r]
         ell, n_eff, _, X = runtime.read(t)
-        perm = random_order(r, int(rng.integers(1 << 30)))
+        perm = prompt_slots(r, own, int(rng.integers(1 << 30)))
         texts = [fs.texts[t][p] for p in perm]
         rec = fs.records[t]
-        rows.append({
+        row = {
             "pos": pos, "id": fs.ids[t], "task_type": fs.task[t], "source": fs.source[t],
             "peer_order": [int(p) for p in perm], "peer_correct": [int(y[p]) for p in perm],
             "memory_prob": [round(prob_from_logit(float(ell[p])), 4) for p in perm],
             "memory_evidence": [round(float(n_eff[p]), 1) for p in perm],
             "messages_peers": build_messages(rec, texts, mode="peers"),
             "messages_solo": build_messages(rec, texts, mode="solo"),
-        })
-        runtime.write(t, X, y)
+        }
+        if own is not None:
+            row.update(own_prob=round(prob_from_logit(float(ell[own])), 4), own_correct=int(y[own]), own_evidence=round(float(n_eff[own]), 1))
+        rows.append(row)
+        runtime.write(t, X, y)   # every answer's label, the own answer's included
     return rows
+
+
+def prompt_slots(real: int, own: int | None, seed: int) -> list[int]:
+    """The answers shown in the prompt, in slot order: a permutation of the peers, without the own answer."""
+    from feedback_state.permutations import random_order
+
+    peers = [i for i in range(real) if i != own]
+    return [peers[j] for j in random_order(len(peers), seed)]
 
 
 def main(argv=None) -> None:
@@ -84,6 +101,7 @@ def main(argv=None) -> None:
     ap.add_argument("--dim", type=int, default=256)
     ap.add_argument("--lam", type=float, default=100.0)
     ap.add_argument("--seed", type=int, default=0, help="the per-event peer-slot permutation")
+    ap.add_argument("--own-slot", type=int, default=None, help="the slot of the central model's own answer: recorded, not shown")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--windows", type=int, default=8)
     ap.add_argument("--device", default="cuda:0")
@@ -100,6 +118,9 @@ def main(argv=None) -> None:
         for row in rows:
             f.write(json.dumps(row) + "\n")
     res = quality(rows, args.windows, name=str(args.out))
+    if args.own_slot is not None:
+        own = [(r["own_prob"], r["own_correct"]) for r in rows]
+        res["own_answer"] = {"auc": auc(own), "mean_prob": sum(p for p, _ in own) / max(1, len(own)), "accuracy": sum(y for _, y in own) / max(1, len(own))}
     res["config"] = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("device",)}
     quality_path(args.out).write_text(json.dumps(res, indent=1))
     tmp.replace(args.out)   # the record file appears last: its presence means the stage finished

@@ -6,7 +6,7 @@
     bash run.sh configs/experiments/main.yaml --dry-run           print the jobs and whether each is done
     bash run.sh configs/experiments/main.yaml --set evaluation.max_new_tokens=1024 --gpus 4,5,6,7
 
-Steps run in the order peers -> streams -> features -> record -> train -> evaluate -> table; the jobs of a step run in
+Steps run in the order peers -> streams -> own -> features -> record -> train -> evaluate -> decide -> table; the jobs of a step run in
 parallel, one GPU each (or as many as a training job asks for). A job is skipped when its output exists; a sharded
 output counts only once all its shards finished (a complete.json is written then); an evaluation is skipped only if the
 stored settings match the requested ones, and a mismatch stops the job instead of silently reusing the old result.
@@ -31,7 +31,7 @@ import yaml
 from pipeline.config import load, shown
 from pipeline.layout import Layout
 
-ORDER = ["peers", "streams", "features", "record", "train", "evaluate", "table"]
+ORDER = ["peers", "streams", "own", "features", "record", "train", "evaluate", "decide", "table"]
 
 
 def stamp() -> str:
@@ -63,6 +63,8 @@ class Plan:
         asked = self.L.registry.expand(cfg.get("datasets", []))
         self.datasets = self.L.registry.expand(sm["datasets"]) if smoke and "datasets" in sm else asked[:1] if smoke else asked
         self.shards = 1 if smoke else len(gpus)
+        if self.L.own and self.fit() != "self":
+            raise SystemExit("own_answer needs record.fit: self (the fit stream has no own answers)")
 
     def eval_datasets(self) -> list[str]:
         """The datasets the central model is run on (answers datasets only feed the streams)."""
@@ -118,6 +120,26 @@ class Plan:
             jobs.append(Job("streams", f"stream_{d}", streams_command(self.L, d, self.events), gpus=0, done=spec["path"]))
         return jobs
 
+    def own(self) -> list[Job]:
+        """Every model answers first: the central model's question-only answer (wave 0, shared with the base stream) joins
+        each dataset's stream as its last answer (wave 1)."""
+        if not self.L.own:
+            raise SystemExit("step own needs own_answer: true")
+        jobs = []
+        for m in self.cfg.get("central", []):
+            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets(), conditions=["solo"], step="own")
+            for d in self.eval_datasets():
+                solo = self.L.eval_dir(m, self.L.eval_dataset(d, {"mode": "solo"}), "solo")
+                out = self.L.own_stream(m, d)
+                jobs.append(Job("own", f"own_{m}_{d}", f"python -m pipeline.streams add --base {self.L.stream(d)['path']} --eval {solo} --out {out}",
+                                gpus=0, done=out, wave=1))
+        return jobs
+
+    def source(self, model: str, dataset: str) -> tuple[Path, int]:
+        """The stream the judge and the record read, and its number of answers: with own_answer, the model's own answer is one more."""
+        spec = self.L.stream(dataset)
+        return (self.L.own_stream(model, dataset), spec["peers"] + 1) if self.L.own else (spec["path"], spec["peers"])
+
     def feature_streams(self) -> list[str]:
         return ([self.fit()] if self.fit() != "self" else []) + self.eval_datasets()
 
@@ -127,10 +149,10 @@ class Plan:
         for m in self.cfg.get("central", []):
             spec = self.L.model(m)
             for s in self.feature_streams():
-                stream, out = self.L.stream(s), self.L.features_dir(m, s)
+                (path, answers), out = self.source(m, s), self.L.features_dir(m, s)
                 for k in range(self.shards):
-                    cmd = (f"{self.model_env(spec)}python -m pipeline.features --stream {stream['path']} --model {spec['path']} "
-                           f"--output {out}/shard{k}of{self.shards}.pt --shards {self.shards} --shard {k} --peers {stream['peers']} "
+                    cmd = (f"{self.model_env(spec)}python -m pipeline.features --stream {path} --model {spec['path']} "
+                           f"--output {out}/shard{k}of{self.shards}.pt --shards {self.shards} --shard {k} --peers {answers} "
                            f"--max-length {fe.get('max_length', 8192)} --dtype {fe.get('dtype', 'bfloat16')}"
                            + (f" --max-examples {self.events}" if self.events else ""))
                     jobs.append(Job("features", f"features_{m}_{s}_{k}", cmd, done=out / f"shard{k}of{self.shards}.pt", group=out, group_size=self.shards))
@@ -143,21 +165,22 @@ class Plan:
         for m in self.cfg.get("central", []):
             spec = self.L.model(m)
             for s in self.eval_datasets():
-                stream, out = self.L.stream(s), self.L.record_file(m, s)
+                (path, answers), out = self.source(m, s), self.L.record_file(m, s)
                 fit = ""
                 if self.fit() != "self":
                     fit = f" --fit-stream {self.L.stream(self.fit())['path']} --fit-features {self.L.features_dir(m, self.fit())}"
-                cmd = (f"{self.model_env(spec)}python -m pipeline.record --stream {stream['path']} --features {self.L.features_dir(m, s)}{fit} "
-                       f"--peers {stream['peers']} --order {rec.get('order', 'shuffled0')} --design {rec.get('design', 'qc')} "
-                       f"--dim {dim} --lam {rec.get('lam', 100.0)} --out {out}")
+                cmd = (f"{self.model_env(spec)}python -m pipeline.record --stream {path} --features {self.L.features_dir(m, s)}{fit} "
+                       f"--peers {answers} --order {rec.get('order', 'shuffled0')} --design {rec.get('design', 'qc')} "
+                       f"--dim {dim} --lam {rec.get('lam', 100.0)} --out {out}" + (f" --own-slot {answers - 1}" if self.L.own else ""))
                 jobs.append(Job("record", f"record_{m}_{s}", cmd, done=out))
         return jobs
 
-    def eval_jobs(self, model_key: str, model_spec: dict, record_model: str, streams: list[str], checkpoint: Path | None = None) -> list[Job]:
+    def eval_jobs(self, model_key: str, model_spec: dict, record_model: str, streams: list[str], checkpoint: Path | None = None,
+                  conditions: list[str] | None = None, step: str = "evaluate") -> list[Job]:
         ev, conds = self.cfg.get("evaluation", {}), self.cfg.get("conditions", {})
         jobs, seen = [], set()
         for d in streams:
-            for c in self.cfg.get("eval_conditions", list(conds)):
+            for c in conditions if conditions is not None else self.cfg.get("eval_conditions", list(conds)):
                 if c not in conds:
                     raise SystemExit(f"condition {c!r} is not defined under conditions:")
                 cd = conds[c]
@@ -169,7 +192,10 @@ class Plan:
                 # the record fixes which events are evaluated, in which order; any record of the same events will do for solo
                 stream, record = self.L.stream(s), self.L.record_file(record_model, d)
                 engine = model_spec.get("engine", ev.get("engine", "vllm"))
-                args = (f"--model {model_spec['path']} --record {record} --stream {stream['path']} --condition {c} --mode {cd.get('mode', 'peers')} "
+                # with own_answer the record needs the question-only answer first, and a question-only run needs no record
+                source = (f"--order {self.cfg.get('record', {}).get('order', 'shuffled0')}" + (f" --limit {self.events}" if self.events else "")
+                          if self.L.own and cd.get("mode") == "solo" else f"--record {record}")
+                args = (f"--model {model_spec['path']} {source} --stream {stream['path']} --condition {c} --mode {cd.get('mode', 'peers')} "
                         f"--gamma {float(cd.get('gamma', 0.0))}{' --swap' if cd.get('swap') else ''} --bias-form {ev.get('bias_form', 'logratio')} "
                         f"--engine {engine} --max-new-tokens {ev.get('max_new_tokens', 768)} "
                         f"--gpu-memory-utilization {ev.get('gpu_memory_utilization', 0.85)}"
@@ -181,15 +207,15 @@ class Plan:
                 check = lambda out=out, want=want: stale(out / "eval_metrics.json", want)
                 pre = self.model_env(model_spec)
                 if engine == "vllm":
-                    jobs.append(Job("evaluate", f"eval_{model_key}_{s}_{c}", f"{pre}python -m pipeline.evaluate {args} --output {out}",
+                    jobs.append(Job(step, f"eval_{model_key}_{s}_{c}", f"{pre}python -m pipeline.evaluate {args} --output {out}",
                                     done=out / "eval_metrics.json", check=check))
                 else:   # HF engine: one shard per GPU, merged when all are in
                     n = 1 if self.smoke else int(model_spec.get("shards", len(self.gpus)))
                     for k in range(n):
-                        jobs.append(Job("evaluate", f"eval_{model_key}_{s}_{c}_{k}",
+                        jobs.append(Job(step, f"eval_{model_key}_{s}_{c}_{k}",
                                         f"{pre}python -m pipeline.evaluate {args} --batch-size {int(model_spec.get('batch_size', 8))} --shard {k}/{n} --output {out}/shard{k}",
                                         done=out / f"shard{k}" / "eval_metrics.json", check=check))
-                    jobs.append(Job("evaluate", f"merge_{model_key}_{s}_{c}", f"python -m pipeline.evaluate --merge --output {out}",
+                    jobs.append(Job(step, f"merge_{model_key}_{s}_{c}", f"python -m pipeline.evaluate --merge --output {out}",
                                     gpus=0, done=out / "eval_metrics.json", check=check, wave=1))
         return jobs
 
@@ -200,7 +226,25 @@ class Plan:
             return evaluate_runs(self)
         jobs = []
         for m in self.cfg.get("central", []):
-            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets())
+            conditions = [c for c in self.cfg.get("eval_conditions", list(self.cfg.get("conditions", {})))
+                          if not (self.L.own and self.cfg.get("conditions", {}).get(c, {}).get("mode") == "solo")]   # own ran those
+            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets(), conditions=conditions)
+        return jobs
+
+    def decide(self) -> list[Job]:
+        """Per event, the reading or the own answer, by the central model's reading line (pipeline.decide)."""
+        if not self.L.own:
+            raise SystemExit("step decide needs own_answer: true (the record must estimate the own answer)")
+        dc = self.cfg.get("decide", {})
+        prior = ",".join(str(float(x)) for x in dc.get("prior", [0.5, 0.0]))
+        jobs = []
+        for m in self.cfg.get("central", []):
+            for d in self.eval_datasets():
+                out = self.L.eval_dir(m, d, "decide")
+                cmd = (f"python -m pipeline.decide --record {self.L.record_file(m, d)} --reading {self.L.eval_dir(m, d, dc.get('read', 'tilt'))} "
+                       f"--own {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --prior {prior} --lam {float(dc.get('lam', 1.0))} "
+                       f"--output {out}")
+                jobs.append(Job("decide", f"decide_{m}_{d}", cmd, gpus=0, done=out / "eval_metrics.json"))
         return jobs
 
     def train(self) -> list[Job]:
