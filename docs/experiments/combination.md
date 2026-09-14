@@ -52,17 +52,19 @@ outputs/tables/combination.md
 Qwen3-4B, accuracy % (job 20260915-021113; `outputs/tables/combination.md`, per event and per trust band in
 `outputs/eval/q3_4b/<dataset>+own/combination/`). "Took peers + memory" is the share of events where combination chose it.
 
-| misleading | in-dist: peers + memory | question alone | combination | took peers + memory | OOD: peers + memory | question alone | combination | took peers + memory |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0% | 76.7 | 69.2 | 76.2 | 86% | 73.8 | 67.8 | 75.0 | 86% |
-| 25% | 75.5 | 69.2 | 75.4 | 85% | 70.4 | 67.8 | 72.4 | 78% |
-| 50% | 74.3 | 69.2 | 74.1 | 85% | 67.5 | 67.8 | 70.8 | 69% |
-| 75% | 73.1 | 69.2 | 72.7 | 86% | 62.5 | 67.8 | 70.2 | 53% |
-| 100% | 72.4 | 69.2 | 72.0 | 85% | 50.7 | 67.8 | 69.3 | 15% |
+| misleading | in-dist: peers + memory | question + peers | question alone | combination | took peers + memory | OOD: peers + memory | question + peers | question alone | combination | took peers + memory |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 76.7 | 74.6 | 69.2 | 76.2 | 86% | 73.8 | 69.2 | 67.8 | 75.0 | 86% |
+| 25% | 75.5 | 74.2 | 69.2 | 75.4 | 85% | 70.4 | 64.0 | 67.8 | 72.4 | 78% |
+| 50% | 74.3 | 73.7 | 69.2 | 74.1 | 85% | 67.5 | 58.1 | 67.8 | 70.8 | 69% |
+| 75% | 73.1 | 72.4 | 69.2 | 72.7 | 86% | 62.5 | 51.4 | 67.8 | 70.2 | 53% |
+| 100% | 72.4 | 71.3 | 69.2 | 72.0 | 85% | 50.7 | 45.8 | 67.8 | 69.3 | 15% |
 
 - OOD: combination is above peers + memory and question alone at every rate. From 0% to 100% it falls 5.7 points;
   peers + memory falls 23.1.
 - In-distribution: peers + memory stays above question alone at every rate, and combination is within 0.5 points of it.
+- The memory's tilt carries the reading: question + peers falls to 45.8 on OOD at 100%; peers + memory is 4.6 points
+  above it with honest peers and 9.4–11.1 points at 50–75%.
 - The straight line over-states peers + memory at high trust: ρ̂ is above 1 for most task types (up to 1.48).
   In-distribution at low trust combination keeps question alone where peers + memory was a little better (0%, T 0.2–0.4:
   peers + memory right on 15.8%, question alone on 10.0%, combination took peers + memory on 11% of those events).
