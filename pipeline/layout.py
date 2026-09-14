@@ -102,6 +102,10 @@ class Layout:
         return self.outputs / "record" / model / self._own(stream) / f"{order}.fit-{fit}{extra}.jsonl"
 
     @staticmethod
+    def addresses_file(record_file: Path) -> Path:
+        return record_file.with_name(record_file.name[: -len(".jsonl")] + ".addresses.pt")
+
+    @staticmethod
     def quality_file(record_file: Path) -> Path:
         return record_file.with_name(record_file.name[: -len(".jsonl")] + ".quality.json")
 

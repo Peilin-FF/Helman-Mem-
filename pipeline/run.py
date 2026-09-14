@@ -171,7 +171,8 @@ class Plan:
                     fit = f" --fit-stream {self.L.stream(self.fit())['path']} --fit-features {self.L.features_dir(m, self.fit())}"
                 cmd = (f"{self.model_env(spec)}python -m pipeline.record --stream {path} --features {self.L.features_dir(m, s)}{fit} "
                        f"--peers {answers} --order {rec.get('order', 'shuffled0')} --design {rec.get('design', 'qc')} "
-                       f"--dim {dim} --lam {rec.get('lam', 100.0)} --out {out}" + (f" --own-slot {answers - 1}" if self.L.own else ""))
+                       f"--dim {dim} --lam {rec.get('lam', 100.0)} --out {out}" + (f" --own-slot {answers - 1}" if self.L.own else "")
+                       + (f" --save-addresses {self.L.addresses_file(out)}" if rec.get("save_addresses") else ""))
                 jobs.append(Job("record", f"record_{m}_{s}", cmd, done=out))
         return jobs
 

@@ -9,6 +9,10 @@ data:
   prompt_key: prompt            # chat messages: question + peers' answers, or the question alone
   attn_gamma: 0.0               # the memory's attention tilt: gamma * log(p_i / max_j p_j) added to every attention score onto peer i's block (0 = off)
   attn_bias_form: logratio      # logratio (validated training-free) | logodds (gamma * (logit p_i - max_j logit p_j))
+  combination:                  # set by pipeline.train for a combination arm: per question, peers + memory or question alone
+    addresses: null             # pipeline.record --save-addresses of the training stream (seven answers, the own answer last)
+    prior: [0.5, 0.0]           # rho, delta of the reading line before any question
+    lam: 1.0                    # the reading line's prior precision
   reward_fn_key: data_source    # task type -> per-task validation metrics
   max_prompt_length: 4608       # input budget (question + all peer answers + passage); longer prompts are filtered out at load
   max_response_length: 768

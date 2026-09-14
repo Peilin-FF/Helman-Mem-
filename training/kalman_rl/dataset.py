@@ -3,6 +3,10 @@
 Prompts are rendered with thinking off, exactly as the evaluations render them. With
 ``data.attn_gamma > 0`` each row also carries the tilt over its prompt tokens (``attn_bias``), built from the record's
 estimates and the peer blocks' character spans stored by training/kalman_rl/build_rl_data.py.
+
+A combination row (``prompt_solo`` present) carries both prompts, encoded as input_ids / attention_mask / position_ids
+and their ``_solo`` twins, and ``peer_slot_map`` (the peer slot of every prompt token, -1 elsewhere): the trainer picks
+the prompt per question and sets the tilt from its online estimates (training/kalman_rl/trainer.py).
 """
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ import verl.utils.torch_functional as verl_F
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from verl.utils.model import compute_position_id_with_mask
 
-from feedback_state.attn_bias import bias_values, token_bias
+from feedback_state.attn_bias import bias_values, token_bias, token_slots
 
 def render(tokenizer, messages) -> str:
     """Chat template with the generation prompt, thinking off (as feedback_state.memory_generator.render_prompt)."""
@@ -70,6 +74,21 @@ class KalmanRLDataset(RLHFDataset):
         out[self.max_prompt_length - len(b):] = torch.from_numpy(b)
         return out
 
+    def _slot_map(self, raw: str, messages, extra: dict, att: torch.Tensor) -> torch.Tensor:
+        """The peer slot of every left-padded prompt token (-1 outside the peer blocks)."""
+        out = torch.full((self.max_prompt_length,), -1, dtype=torch.long)
+        spans = extra.get("peer_spans")
+        content = messages[-1]["content"]
+        off = raw.find(content)
+        if not spans or off < 0:
+            return out
+        offsets = self.tokenizer(raw, add_special_tokens=False, return_offsets_mapping=True)["offset_mapping"]
+        s = token_slots(offsets, [(int(a) + off, int(e) + off) for a, e in spans])
+        n = int(att.sum())
+        s = s[-n:] if len(s) > n else s
+        out[self.max_prompt_length - len(s):] = torch.from_numpy(s)
+        return out
+
     def _read_files_and_tokenize(self):
         import datasets
 
@@ -112,7 +131,13 @@ class KalmanRLDataset(RLHFDataset):
         ids, att, pos = self._encode(raw)
         row["input_ids"], row["attention_mask"], row["position_ids"] = ids, att, pos
         row["raw_prompt_ids"] = self._raw_ids(raw)
-        if self.attn_gamma > 0:
+        solo = row.pop("prompt_solo", None)
+        if solo is not None:   # combination: both prompts; the trainer chooses and tilts
+            raw_solo = render(self.tokenizer, solo)
+            row["input_ids_solo"], row["attention_mask_solo"], row["position_ids_solo"] = self._encode(raw_solo)
+            row["raw_prompt_ids_solo"] = self._raw_ids(raw_solo)
+            row["peer_slot_map"] = self._slot_map(raw, messages, row.get("extra_info") or {}, att)
+        elif self.attn_gamma > 0:
             row["attn_bias"] = self._attn_bias(raw, messages, row.get("extra_info") or {}, att)
         row.pop("guided_prompt", None)   # a column of the parquets built before 2026-09-13 (always empty in the trained runs)
         if self.return_raw_chat:

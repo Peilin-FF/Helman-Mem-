@@ -32,6 +32,25 @@ class MemoryRuntime:
         self.z = fs.margins.to(self.device, torch.float64)
         self.real = fs.real.tolist()
 
+    @classmethod
+    def from_addresses(cls, saved: dict, device=None) -> "MemoryRuntime":
+        """A cold runtime over the addresses pipeline.record --save-addresses wrote (no features, no PCA fit)."""
+        self = cls.__new__(cls)
+        self.design, self.P, self.lam, self.rho = str(saved["design"]), int(saved["num_peers"]), float(saved["lam"]), float(saved.get("rho", 1.0))
+        self.device = torch.device(device) if device is not None else torch.device("cpu")
+        self.per_peer = self.design == "q"
+        self.proj_q = self.proj_c = None
+        self.psi_q, self.psi_c = saved["psi_q"].to(torch.float64), saved["psi_c"].to(torch.float64)
+        self.z, self.real = saved["z"].to(self.device, torch.float64), [int(r) for r in saved["real"]]
+        self.D = design_dim(self.design, self.P, self.psi_q.shape[-1], self.psi_c.shape[-1])
+        self.mem = KalmanMemory(self.D, self.P if self.per_peer else 1, lam=self.lam, rho=self.rho, device=self.device)
+        return self
+
+    def addresses(self) -> dict:
+        """What from_addresses needs: the projected addresses of every event."""
+        return {"design": self.design, "num_peers": self.P, "lam": self.lam, "rho": self.rho, "psi_q": self.psi_q.cpu(),
+                "psi_c": self.psi_c.cpu(), "z": self.z.cpu(), "real": list(self.real)}
+
     def reset(self) -> None:
         self.mem.reset()
 
@@ -67,5 +86,14 @@ class MemoryRuntime:
             for c in range(r):
                 self.mem.write(X[c], s[c : c + 1])
 
+    @torch.no_grad()
+    def write_targets(self, X: torch.Tensor, targets: dict[int, float]) -> None:
+        """Write only the observed candidates, each with a target in [-1, 1] (2 * accuracy - 1 for an average of samples)."""
+        if self.per_peer:
+            raise ValueError("write_targets needs a shared-state design (one row per candidate)")
+        for c, s in sorted(targets.items()):
+            self.mem.write(X[c], torch.tensor([float(s)], device=self.device, dtype=torch.float64))
+
     def config(self) -> dict:
-        return {"design": self.design, "num_peers": self.P, "lam": self.lam, "rho": self.rho, "dim_q": self.proj_q.dim, "dim_c": self.proj_c.dim}
+        return {"design": self.design, "num_peers": self.P, "lam": self.lam, "rho": self.rho,
+                "dim_q": self.psi_q.shape[-1] if self.psi_q is not None else None, "dim_c": self.psi_c.shape[-1] if self.psi_c is not None else None}

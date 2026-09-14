@@ -7,7 +7,8 @@ when omitted). Peer slots are permuted per event (the record is identity-indexed
 
 With --own-slot K the answer in slot K is the central model's own question-only answer (pipeline.streams add --eval): the
 record estimates and writes it like every answer, but it stays out of the prompt and the tilt, and its estimate goes to
-own_prob (pipeline.combination reads it).
+own_prob (pipeline.combination reads it). --save-addresses writes every event's projected address, so a later process
+(the combination during training) can run the same record without the features or the PCA fit.
 
     PYTHONPATH=. python -m pipeline.record --stream data/indist6/test.jsonl --features outputs/features/q3_4b/indist6 \
         --fit-stream data/mixed_train_big6/train.jsonl --fit-features outputs/features/q3_4b/train6 \
@@ -48,6 +49,9 @@ def build(args) -> list[dict]:
     runtime = MemoryRuntime(design=args.design, proj_q=proj_q, proj_c=proj_c, num_peers=fs.num_peers, lam=args.lam, device=device)
     runtime.attach(fs)
     runtime.reset()
+    if getattr(args, "save_addresses", None):
+        args.save_addresses.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({**runtime.addresses(), "ids": list(fs.ids), "labels": fs.labels.clone(), "task": list(fs.task)}, args.save_addresses)
     order = order_of(len(fs), args.order)
     if args.limit:
         order = order[: args.limit]
@@ -102,6 +106,7 @@ def main(argv=None) -> None:
     ap.add_argument("--lam", type=float, default=100.0)
     ap.add_argument("--seed", type=int, default=0, help="the per-event peer-slot permutation")
     ap.add_argument("--own-slot", type=int, default=None, help="the slot of the central model's own answer: recorded, not shown")
+    ap.add_argument("--save-addresses", type=Path, default=None, help="also write every event's projected address (torch file)")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--windows", type=int, default=8)
     ap.add_argument("--device", default="cuda:0")

@@ -82,6 +82,16 @@ def token_bias(offsets: Sequence[tuple[int, int]], spans: Sequence[tuple[int, in
     return out
 
 
+def token_slots(offsets: Sequence[tuple[int, int]], spans: Sequence[tuple[int, int]]) -> np.ndarray:
+    """Per-token peer slot from character spans (-1 outside every span): the tilt then follows estimates known only later."""
+    out = np.full(len(offsets), -1, dtype=np.int64)
+    starts = np.array([a for a, _ in offsets]); ends = np.array([b for _, b in offsets])
+    for slot, (a, e) in enumerate(spans):
+        if e > a:
+            out[(ends > starts) & (starts >= a) & (ends <= e)] = slot
+    return out
+
+
 def prompt_token_bias(tokenizer, prompt: str, texts: Sequence[str], probs: Sequence[float], gamma: float, form: str = "logratio",
                       char_limit: int = CHAR_LIMIT) -> tuple[list[int], np.ndarray]:
     """Token ids of a rendered prompt and the tilt over them."""

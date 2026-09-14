@@ -3,8 +3,12 @@
 Each prompt of the stream is answered by rollout.n samples (question + peers' answers, or the question alone), graded by
 the task verifier, and trained with verl's GRPO (group-mean baseline, PPO clip, KL loss to the reference). With
 ``data.attn_gamma > 0`` the tilt rides with the prompt into the rollout (patched vLLM kernels) and into the actor and
-reference forwards (additive attention mask). On top of verl this trainer only writes metrics.jsonl and keeps a bf16 HF
+reference forwards (additive attention mask). On top of verl this trainer writes metrics.jsonl and keeps a bf16 HF
 copy of every checkpoint under hf/global_step_N (the fp32 copy verl writes is removed).
+
+With ``data.combination.addresses`` set, combination chooses each question's prompt before its rollouts (peers + memory,
+with the tilt from the online record, or question alone; feedback_state.combination) and is written after the rewards;
+every question's choice goes to combination.jsonl and the state to combination_state/ with each checkpoint.
 """
 from __future__ import annotations
 
@@ -80,8 +84,60 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
         with open(path, "a") as f:
             f.write(json.dumps({k: (float(v) if isinstance(v, (int, float, np.floating, np.integer)) else v) for k, v in metrics.items()}) + "\n")
 
+    # ------------------------------------------------------------------ combination
+    def _combination(self):
+        cfg = self.config.data.get("combination", None)
+        if not cfg or not cfg.get("addresses"):
+            return None
+        from feedback_state.combination import TrainingCombination
+
+        saved = torch.load(cfg["addresses"], map_location="cpu", weights_only=False)
+        print(f"[kalman] combination during training: record over {saved['num_peers']} answers of {len(saved['ids'])} questions, "
+              f"prior {list(cfg.get('prior', [0.5, 0.0]))}, lam {cfg.get('lam', 1.0)}")
+        return TrainingCombination(saved, prior=tuple(cfg.get("prior", [0.5, 0.0])), lam=float(cfg.get("lam", 1.0)),
+                                   gamma=float(self.config.data.get("attn_gamma", 0.0)), bias_form=str(self.config.data.get("attn_bias_form", "logratio")))
+
+    def _choose_prompts(self, batch: DataProto) -> None:
+        """Before the rollouts: each question's prompt (and its tilt) from combination's current state."""
+        from feedback_state.combination import PEERS_MEMORY
+
+        extra = batch.non_tensor_batch["extra_info"]
+        decisions = self.combination.choose([e["id"] for e in extra], [e["task_type"] for e in extra], [e["peer_order"] for e in extra])
+        take = torch.tensor([d["choice"] == PEERS_MEMORY for d in decisions])
+        for key in ("input_ids", "attention_mask", "position_ids"):
+            solo = batch.batch.pop(f"{key}_solo")
+            batch.batch[key] = torch.where(take.view(-1, *([1] * (solo.dim() - 1))), batch.batch[key], solo)
+        solo_ids = batch.non_tensor_batch.pop("raw_prompt_ids_solo")
+        ids = np.empty(len(decisions), dtype=object)
+        for i, keep in enumerate(take.tolist()):
+            ids[i] = batch.non_tensor_batch["raw_prompt_ids"][i] if keep else solo_ids[i]
+        batch.non_tensor_batch["raw_prompt_ids"] = ids
+        slots = batch.batch.pop("peer_slot_map")
+        bias = torch.zeros(slots.shape, dtype=torch.float32)
+        for i, d in enumerate(decisions):
+            if d["choice"] == PEERS_MEMORY and any(d["bias"]):
+                row = slots[i]
+                inside = row >= 0
+                bias[i, inside] = torch.tensor(d["bias"], dtype=torch.float32)[row[inside]]
+        batch.batch["attn_bias"] = bias
+
+    def _write_combination(self, batch: DataProto, rollout_n: int) -> dict:
+        """After the rewards: every question's mean accuracy over its samples goes into combination's state."""
+        acc = np.asarray(batch.non_tensor_batch["acc"], dtype=float).reshape(-1, rollout_n).mean(axis=1)   # samples are interleaved per question
+        rows, metrics = self.combination.update(acc.tolist())
+        path = os.path.join(self.config.trainer.default_local_dir, "combination.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            for r in rows:
+                f.write(json.dumps({"step": self.global_steps, **r}) + "\n")
+        return metrics
+
     def _save_checkpoint(self):
         super()._save_checkpoint()
+        if getattr(self, "combination", None) is not None:
+            path = os.path.join(self.config.trainer.default_local_dir, "combination_state", f"global_step_{self.global_steps}.pt")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            torch.save(self.combination.state_dict(), path)
         if not self.config.trainer.get("keep_hf_checkpoints", True):
             return
         src = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}", "actor", "huggingface")
@@ -121,6 +177,7 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
             self._append_metrics_file({"training/global_step": self.global_steps, **val_metrics})
             if self.config.trainer.get("val_only", False):
                 return
+        self.combination = self._combination()
         progress_bar = tqdm(total=self.total_training_steps, initial=self.global_steps, desc="Training Progress")
         self.global_steps += 1
         last_val_metrics = None
@@ -131,6 +188,8 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
                 metrics, timing_raw = {}, {}
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
                 batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
+                if self.combination is not None:
+                    self._choose_prompts(batch)
                 gen_batch = batch.pop(batch_keys=["input_ids", "attention_mask", "position_ids"],
                                       non_tensor_batch_keys=[k for k in ("raw_prompt_ids", "raw_prompt", "tools_kwargs", "multi_modal_data") if k in batch.non_tensor_batch])
                 if "attn_bias" in batch.batch.keys():   # the memory's attention tilt: rides with the prompts into the rollout and stays for the actor / ref forwards
@@ -147,6 +206,8 @@ class KalmanRayPPOTrainer(RayPPOTrainer):
                     batch.batch["token_level_scores"] = reward_tensor
                     if reward_extra:
                         batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra.items()})
+                    if self.combination is not None:   # before the batch is rebalanced: samples are still grouped per question
+                        metrics.update(self._write_combination(batch, rollout_n))
                     if self.config.trainer.balance_batch:
                         self._balance_batch(batch, metrics=metrics)
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
