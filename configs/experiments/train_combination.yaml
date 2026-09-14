@@ -12,6 +12,7 @@ datasets: [train6]                  # the training stream: own answers, features
 own_answer: true
 record: {fit: self, order: shuffled0, save_addresses: true}
 eval_conditions: [solo]             # the own step's question-alone run on the training stream
+evaluation: {vllm_shards: 8}        # 17.7k questions: one vLLM engine per GPU
 
 train_data: {dataset: train6, order: shuffled0}
 val_data: {dataset: train6, order: shuffled0, limit: 64}   # validation is off during training (the evaluation follows); verl needs a file

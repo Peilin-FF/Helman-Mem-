@@ -121,8 +121,8 @@ class Plan:
         return jobs
 
     def own(self) -> list[Job]:
-        """Every model answers first: the central model's question-only answer (wave 0, shared with the base stream) joins
-        each dataset's stream as its last answer (wave 1)."""
+        """Every model answers first: the central model's question-only answer (waves 0-1, shared with the base stream) joins
+        each dataset's stream as its last answer (wave 2)."""
         if not self.L.own:
             raise SystemExit("step own needs own_answer: true")
         jobs = []
@@ -132,7 +132,7 @@ class Plan:
                 solo = self.L.eval_dir(m, self.L.eval_dataset(d, {"mode": "solo"}), "solo")
                 out = self.L.own_stream(m, d)
                 jobs.append(Job("own", f"own_{m}_{d}", f"python -m pipeline.streams add --base {self.L.stream(d)['path']} --eval {solo} --out {out}",
-                                gpus=0, done=out, wave=1))
+                                gpus=0, done=out, wave=2))
         return jobs
 
     def source(self, model: str, dataset: str) -> tuple[Path, int]:
@@ -207,7 +207,14 @@ class Plan:
                     want["record"] = str(record)
                 check = lambda out=out, want=want: stale(out / "eval_metrics.json", want)
                 pre = self.model_env(model_spec)
-                if engine == "vllm":
+                vllm_shards = 1 if self.smoke else int(ev.get("vllm_shards", 1))   # a long stream: one vLLM engine per GPU, merged after
+                if engine == "vllm" and vllm_shards > 1:
+                    for k in range(vllm_shards):
+                        jobs.append(Job(step, f"eval_{model_key}_{s}_{c}_{k}", f"{pre}python -m pipeline.evaluate {args} --shard {k}/{vllm_shards} --output {out}/shard{k}",
+                                        done=out / f"shard{k}" / "eval_metrics.json", check=check))
+                    jobs.append(Job(step, f"merge_{model_key}_{s}_{c}", f"python -m pipeline.evaluate --merge --output {out}",
+                                    gpus=0, done=out / "eval_metrics.json", check=check, wave=1))
+                elif engine == "vllm":
                     jobs.append(Job(step, f"eval_{model_key}_{s}_{c}", f"{pre}python -m pipeline.evaluate {args} --output {out}",
                                     done=out / "eval_metrics.json", check=check))
                 else:   # HF engine: one shard per GPU, merged when all are in

@@ -344,7 +344,7 @@ def test_combination_adds_the_own_answer_before_the_record_and_chooses_after_pee
     assert [j.name for j in solo] == ["eval_q3_4b_indist6_solo"]                   # once per base stream, needing no record
     assert "--record" not in solo[0].cmd and "--order shuffled0 " in solo[0].cmd
     assert solo[0].done == tmp_path / "out/eval/q3_4b/indist6/solo/eval_metrics.json"   # shared with the main experiment
-    add = {j.name: j for j in own if j.wave == 1}
+    add = {j.name: j for j in own if j.wave == 2}
     assert add["own_q3_4b_indist6_misleading_p050"].cmd == (
         f"python -m pipeline.streams add --base {tmp_path}/data/indist6_misleading_p050/test.jsonl "
         f"--eval {tmp_path}/out/eval/q3_4b/indist6/solo --out {tmp_path}/data/indist6_misleading_p050+q3_4b/test.jsonl")

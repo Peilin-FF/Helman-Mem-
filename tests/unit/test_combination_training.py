@@ -74,8 +74,11 @@ def test_train_combination_expands_to_own_answers_addresses_and_one_online_run(t
     cfg = load(EXPERIMENTS / "train_combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
     plan = Plan(cfg, "train_combination.yaml", smoke=False, gpus=list(range(8)))
 
-    solo = [j for j in plan.own() if j.wave == 0]
-    assert len(solo) == 1 and "--record" not in solo[0].cmd and f"--stream {tmp_path}/data/mixed_train_big6/train.jsonl " in solo[0].cmd
+    own = plan.own()
+    solo = [j for j in own if j.wave == 0]
+    assert len(solo) == 8 and all("--record" not in j.cmd and f"--stream {tmp_path}/data/mixed_train_big6/train.jsonl " in j.cmd for j in solo)
+    assert "--shard 7/8 " in solo[-1].cmd and [j.name for j in own if j.wave == 1] == ["merge_q3_4b_train6_solo"]
+    assert [j.name for j in own if j.wave == 2] == ["own_q3_4b_train6"]                   # the stream is built once the shards are merged
     rec = plan.record()[0]
     assert "--own-slot 6" in rec.cmd and f"--save-addresses {tmp_path}/out/record/q3_4b/train6+own/shuffled0.fit-self.addresses.pt" in rec.cmd
     jobs = {j.name: j for j in plan.train()}
