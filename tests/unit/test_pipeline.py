@@ -334,10 +334,10 @@ def test_a_new_peer_is_a_new_file_and_a_stream_lists_its_peers(tmp_path):
     assert [j for j in jobs if "DeepSeek-R1" in j.name][0].cmd.count("--reasoning") == 1
 
 
-def test_the_reading_line_adds_the_own_answer_before_the_record_and_decides_after_the_reading(tmp_path):
-    cfg = load(EXPERIMENTS / "reading_line.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+def test_combination_adds_the_own_answer_before_the_record_and_chooses_after_peers_and_memory(tmp_path):
+    cfg = load(EXPERIMENTS / "combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
                                                    "datasets=[indist6_misleading_p025, indist6_misleading_p050]"])
-    plan = Plan(cfg, "reading_line.yaml", smoke=False, gpus=[0, 1])
+    plan = Plan(cfg, "combination.yaml", smoke=False, gpus=[0, 1])
 
     own = plan.own()
     solo = [j for j in own if j.wave == 0]
@@ -358,36 +358,38 @@ def test_the_reading_line_adds_the_own_answer_before_the_record_and_decides_afte
     tilt = ev["eval_q3_4b_indist6_misleading_p050_tilt"]
     assert "/record/q3_4b/indist6_misleading_p050+own/" in tilt.cmd
     assert tilt.done == tmp_path / "out/eval/q3_4b/indist6_misleading_p050+own/tilt/eval_metrics.json"
-    dec = {j.name: j for j in plan.decide()}["decide_q3_4b_indist6_misleading_p050"]
-    assert f"--reading {tmp_path}/out/eval/q3_4b/indist6_misleading_p050+own/tilt --own {tmp_path}/out/eval/q3_4b/indist6/solo " in dec.cmd
-    assert "--prior 0.5,0.0 --lam 1.0" in dec.cmd and dec.gpus == 0
+    comb = {j.name: j for j in plan.combination()}["combination_q3_4b_indist6_misleading_p050"]
+    assert (f"--peers-memory {tmp_path}/out/eval/q3_4b/indist6_misleading_p050+own/tilt "
+            f"--question-alone {tmp_path}/out/eval/q3_4b/indist6/solo ") in comb.cmd
+    assert "--prior 0.5,0.0 --lam 1.0" in comb.cmd and comb.gpus == 0
     with pytest.raises(SystemExit, match="fit: self"):
-        Plan(load(EXPERIMENTS / "reading_line.yaml", ["record.fit=train6"]), "reading_line.yaml", smoke=False, gpus=[0])
+        Plan(load(EXPERIMENTS / "combination.yaml", ["record.fit=train6"]), "combination.yaml", smoke=False, gpus=[0])
 
 
-def test_a_reading_line_smoke_run_reads_the_released_stream_and_writes_to_smoke(tmp_path):
-    cfg = load(EXPERIMENTS / "reading_line.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data"])
-    plan = Plan(cfg, "reading_line.yaml", smoke=True, gpus=[0])
+def test_a_combination_smoke_run_reads_the_released_stream_and_writes_to_smoke(tmp_path):
+    cfg = load(EXPERIMENTS / "combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data"])
+    plan = Plan(cfg, "combination.yaml", smoke=True, gpus=[0])
     own = plan.own()
 
     assert "--limit 48" in own[0].cmd and f"--base {tmp_path}/data/indist6_misleading_p050/test.jsonl " in own[-1].cmd
-    jobs = own + plan.features() + plan.record() + plan.evaluate() + plan.decide()
+    jobs = own + plan.features() + plan.record() + plan.evaluate() + plan.combination()
     assert all(str(j.done).startswith(str(tmp_path / "out/smoke/")) for j in jobs)
 
 
-def test_the_reading_line_table_shows_the_decision_next_to_reading_and_question_only(tmp_path):
+def test_the_combination_table_names_its_columns_as_the_reports_do(tmp_path):
     from pipeline.table import build
 
-    cfg = load(EXPERIMENTS / "reading_line.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "datasets=[indist6_misleading_p050]"])
+    cfg = load(EXPERIMENTS / "combination.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "datasets=[indist6_misleading_p050]"])
     L = Layout(cfg)
-    for c, acc in (("tilt", 0.70), ("decide", 0.74)):
+    for c, acc in (("tilt", 0.70), ("combination", 0.74)):
         d = L.eval_dir("q3_4b", "indist6_misleading_p050", c)
         d.mkdir(parents=True)
-        (d / "eval_metrics.json").write_text(json.dumps({"accuracy": acc, "read_share": 0.8,
-                                                         "reading_line": {"math": {"rho": 0.9, "delta": 0.3, "reads_at_mean_own_prob": "T >= 0.50"}}}))
+        (d / "eval_metrics.json").write_text(json.dumps({"accuracy": acc, "share_peers_memory": 0.8,
+                                                         "reading_line": {"math": {"rho": 0.9, "delta": 0.3, "peers_memory_wins_at_mean_own_prob": "T >= 0.50"}}}))
     d = L.eval_dir("q3_4b", "indist6", "solo")
     d.mkdir(parents=True)
     (d / "eval_metrics.json").write_text(json.dumps({"accuracy": 0.69}))
     text = build(cfg, smoke=False)
 
+    assert "| row | indist6: peers + memory | indist6: question alone | indist6: combination |" in text
     assert "| p050 |  70.0 |  69.0 |  74.0 |" in text and "| p050 · indist6 | 80% | math 0.90 / 0.30 / T >= 0.50 |" in text

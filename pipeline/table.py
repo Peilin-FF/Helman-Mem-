@@ -9,7 +9,8 @@ row per trained run). `reference:` adds rows for
 models evaluated elsewhere on the base streams (the frozen Qwen3-4B of the main experiment). Cells are accuracy in percent
 per stream and condition, then the requested differences, then the record's AUC / favourite-right per stream.
 With `misleading_probe: true` two more tables follow: what the record makes of the misleading answers, and the peers.
-`extra_columns: [decide]` adds the columns pipeline.decide writes, and with it a table of the reading line per row.
+Columns are named by each condition's `label` (peers + memory, question + peers, question alone). `extra_columns:
+[combination]` adds the column pipeline.combination writes, and with it a table of the reading line per row.
 """
 from __future__ import annotations
 
@@ -120,7 +121,9 @@ def build(cfg: dict, smoke: bool) -> str:
         keep = cfg.get("smoke", {}).get("arms") if smoke else None
         for run in [r for r in cfg.get("arms", {}) if keep is None or r in keep]:
             rows.append((run, run, cfg.get("judge", "q3_4b"), {s: s for s in base_streams}, L))
-    head = ["row"] + [f"{s}: {c}" for s in base_streams for c in conds] + [f"{s}: {a} − {b}" for s in base_streams for a, b in deltas] + [f"{s}: record AUC / fav" for s in base_streams]
+    cond_label = lambda c: cfg.get("conditions", {}).get(c, {}).get("label", c)
+    head = (["row"] + [f"{s}: {cond_label(c)}" for s in base_streams for c in conds] + [f"{s}: {cond_label(a)} − {cond_label(b)}" for s in base_streams for a, b in deltas]
+            + [f"{s}: record AUC / fav" for s in base_streams])
     lines = ["| " + " | ".join(head) + " |", "|---|" + "---:|" * (len(head) - 1)]
     for label, key, rec_model, smap, lay in rows:
         m = {(s, c): load_json(lay.eval_dir(key, lay.eval_dataset(smap[s], cfg.get("conditions", {}).get(c, {})), c) / "eval_metrics.json")
@@ -133,22 +136,23 @@ def build(cfg: dict, smoke: bool) -> str:
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
     notes = []
     for c in conds:
-        if c == "decide":
-            notes.append("`decide`: per event the reading or the question-only answer, by the reading line")
+        if c == "combination":
+            notes.append("combination: per event peers + memory or question alone, chosen by the reading line")
             continue
         cd = cfg.get("conditions", {}).get(c, {})
-        notes.append(f"`{c}`: mode {cd.get('mode', 'peers')}" + (f", tilt γ = {cd['gamma']}" if cd.get("gamma") else "") + (", record permuted by rank" if cd.get("swap") else ""))
+        notes.append(f"{cond_label(c)} (`{c}`): mode {cd.get('mode', 'peers')}" + (f", tilt γ = {cd['gamma']}" if cd.get("gamma") else "") + (", record permuted by rank" if cd.get("swap") else ""))
     text = f"# {cfg['name']}{' (smoke)' if smoke else ''}\n\n" + "\n".join(lines) + "\n\n" + "; ".join(notes) + ".\n"
 
-    if "decide" in conds:
-        dlines = ["| row · stream | read on | reading line by task type: ρ̂ / δ̂ / reads when, at the mean own estimate |", "|---|---:|---|"]
-        for label, key, rec_model, smap, lay in rows:
+    if "combination" in conds:
+        dlines = ["| row · stream | took peers + memory | reading line by task type: ρ̂ / δ̂ / peers + memory wins when (at the mean own estimate) |",
+                  "|---|---:|---|"]
+        for row_label, key, rec_model, smap, lay in rows:
             for s, name in smap.items():
-                d = load_json(lay.eval_dir(key, name, "decide") / "eval_metrics.json")
+                d = load_json(lay.eval_dir(key, name, "combination") / "eval_metrics.json")
                 if not d:
                     continue
-                parts = [f"{t} {v['rho']:.2f} / {v['delta']:.2f} / {v['reads_at_mean_own_prob']}" for t, v in d["reading_line"].items()]
-                dlines.append(f"| {label} · {s} | {100 * d['read_share']:.0f}% | {'; '.join(parts)} |")
+                parts = [f"{t} {v['rho']:.2f} / {v['delta']:.2f} / {v['peers_memory_wins_at_mean_own_prob']}" for t, v in d["reading_line"].items()]
+                dlines.append(f"| {row_label} · {s} | {100 * d['share_peers_memory']:.0f}% | {'; '.join(parts)} |")
         text += "\n## The reading line\n\n" + "\n".join(dlines) + "\n"
 
     if tb.get("misleading_probe"):

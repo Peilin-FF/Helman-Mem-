@@ -7,7 +7,7 @@ when omitted). Peer slots are permuted per event (the record is identity-indexed
 
 With --own-slot K the answer in slot K is the central model's own question-only answer (pipeline.streams add --eval): the
 record estimates and writes it like every answer, but it stays out of the prompt and the tilt, and its estimate goes to
-own_prob (pipeline.decide reads it).
+own_prob (pipeline.combination reads it).
 
     PYTHONPATH=. python -m pipeline.record --stream data/indist6/test.jsonl --features outputs/features/q3_4b/indist6 \
         --fit-stream data/mixed_train_big6/train.jsonl --fit-features outputs/features/q3_4b/train6 \

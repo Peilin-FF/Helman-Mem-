@@ -6,7 +6,7 @@
     features  the frozen judge's hidden states that address the record
     record    the Bayesian record along a stream, read before write, and its quality
     evaluate  the central model answers each event under a condition (tilt, peers, solo, swap)
-    decide    per event, the central model's reading or its own answer, by its reading line
+    combination  per event, peers + memory or question alone, chosen by the central model's reading line
     train     GRPO of the central model (arm data, then the phases)
     table     the experiment's result table
 

@@ -6,7 +6,7 @@ import numpy as np
 from feedback_state.permutations import random_order
 from feedback_state.reading_line import ReadingLine
 from pipeline import streams
-from pipeline.decide import decide
+from pipeline.combination import PEERS_MEMORY, QUESTION_ALONE, combine
 from pipeline.evaluate import question_only_rows
 from pipeline.record import order_of, prompt_slots
 
@@ -44,22 +44,22 @@ def _row(pos, rid, trust, own_prob, own_correct, task="mcqa"):
             "own_prob": own_prob, "own_correct": own_correct}
 
 
-def test_decide_reads_before_it_writes():
+def test_combination_reads_before_it_writes():
     rows = [_row(1, "b", 0.9, 0.6, 0), _row(0, "a", 0.9, 0.6, 0)]               # out of order on purpose
-    reading = {rid: {"correct": 1, "generation": f"read {rid}"} for rid in "ab"}
-    own = {rid: {"correct": 0, "generation": f"own {rid}"} for rid in "ab"}
-    out, summary = decide(rows, reading, own, prior=(0.5, 0.0), lam=1.0)
+    peers_memory = {rid: {"correct": 1, "generation": f"peers+memory {rid}"} for rid in "ab"}
+    question_alone = {rid: {"correct": 0, "generation": f"alone {rid}"} for rid in "ab"}
+    out, summary = combine(rows, peers_memory, question_alone, prior=(0.5, 0.0), lam=1.0)
 
     assert [o["id"] for o in out] == ["a", "b"]                                  # the record's order
-    assert (out[0]["rho"], out[0]["delta"], out[0]["decision"]) == (0.5, 0.0, "own")   # the first event sees only the prior
-    assert out[1]["decision"] == "read" and out[1]["generation"] == "read b" and out[1]["correct"] == 1
+    assert (out[0]["rho"], out[0]["delta"], out[0]["choice"]) == (0.5, 0.0, QUESTION_ALONE)   # the first event sees only the prior
+    assert out[1]["choice"] == PEERS_MEMORY and out[1]["generation"] == "peers+memory b" and out[1]["correct"] == 1
     assert summary["own_labels_mismatched"] == 0 and summary["reading_line"]["mcqa"]["events"] == 2
 
 
-def test_low_trust_keeps_the_own_answer():
+def test_low_trust_keeps_question_alone():
     rows = [_row(0, "a", 0.1, 0.6, 1)]
-    out, _ = decide(rows, {"a": {"correct": 0, "generation": "r"}}, {"a": {"correct": 1, "generation": "o"}}, prior=(0.5, 0.0), lam=1.0)
-    assert out[0]["decision"] == "own" and out[0]["correct"] == 1
+    out, _ = combine(rows, {"a": {"correct": 0, "generation": "p"}}, {"a": {"correct": 1, "generation": "q"}}, prior=(0.5, 0.0), lam=1.0)
+    assert out[0]["choice"] == QUESTION_ALONE and out[0]["correct"] == 1
 
 
 def test_a_question_only_evaluation_joins_a_stream_as_its_last_answer(tmp_path):

@@ -6,7 +6,7 @@
     bash run.sh configs/experiments/main.yaml --dry-run           print the jobs and whether each is done
     bash run.sh configs/experiments/main.yaml --set evaluation.max_new_tokens=1024 --gpus 4,5,6,7
 
-Steps run in the order peers -> streams -> own -> features -> record -> train -> evaluate -> decide -> table; the jobs of a step run in
+Steps run in the order peers -> streams -> own -> features -> record -> train -> evaluate -> combination -> table; the jobs of a step run in
 parallel, one GPU each (or as many as a training job asks for). A job is skipped when its output exists; a sharded
 output counts only once all its shards finished (a complete.json is written then); an evaluation is skipped only if the
 stored settings match the requested ones, and a mismatch stops the job instead of silently reusing the old result.
@@ -31,7 +31,7 @@ import yaml
 from pipeline.config import load, shown
 from pipeline.layout import Layout
 
-ORDER = ["peers", "streams", "own", "features", "record", "train", "evaluate", "decide", "table"]
+ORDER = ["peers", "streams", "own", "features", "record", "train", "evaluate", "combination", "table"]
 
 
 def stamp() -> str:
@@ -231,20 +231,21 @@ class Plan:
             jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets(), conditions=conditions)
         return jobs
 
-    def decide(self) -> list[Job]:
-        """Per event, the reading or the own answer, by the central model's reading line (pipeline.decide)."""
+    def combination(self) -> list[Job]:
+        """Per event, peers + memory or question alone, chosen by the central model's reading line (pipeline.combination)."""
         if not self.L.own:
-            raise SystemExit("step decide needs own_answer: true (the record must estimate the own answer)")
-        dc = self.cfg.get("decide", {})
-        prior = ",".join(str(float(x)) for x in dc.get("prior", [0.5, 0.0]))
+            raise SystemExit("step combination needs own_answer: true (the record must estimate the own answer)")
+        cb = self.cfg.get("combination", {})
+        prior = ",".join(str(float(x)) for x in cb.get("prior", [0.5, 0.0]))
         jobs = []
         for m in self.cfg.get("central", []):
             for d in self.eval_datasets():
-                out = self.L.eval_dir(m, d, "decide")
-                cmd = (f"python -m pipeline.decide --record {self.L.record_file(m, d)} --reading {self.L.eval_dir(m, d, dc.get('read', 'tilt'))} "
-                       f"--own {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --prior {prior} --lam {float(dc.get('lam', 1.0))} "
-                       f"--output {out}")
-                jobs.append(Job("decide", f"decide_{m}_{d}", cmd, gpus=0, done=out / "eval_metrics.json"))
+                out = self.L.eval_dir(m, d, "combination")
+                cmd = (f"python -m pipeline.combination --record {self.L.record_file(m, d)} "
+                       f"--peers-memory {self.L.eval_dir(m, d, cb.get('peers_memory', 'tilt'))} "
+                       f"--question-alone {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --prior {prior} "
+                       f"--lam {float(cb.get('lam', 1.0))} --output {out}")
+                jobs.append(Job("combination", f"combination_{m}_{d}", cmd, gpus=0, done=out / "eval_metrics.json"))
         return jobs
 
     def train(self) -> list[Job]:

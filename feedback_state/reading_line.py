@@ -1,4 +1,4 @@
-"""The central model's reading line: on an event, is reading the peers worth more than its own answer?
+"""The central model's reading line: on an event, is peers + memory worth more than its question-alone answer?
 
 For the central model c, T is the record's trust in the evidence it reads (the top estimate among the peers) and kappa the
 record's estimate of c's own question-only answer, addressed like every other answer. Reading succeeds with

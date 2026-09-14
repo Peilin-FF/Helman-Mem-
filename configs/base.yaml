@@ -36,10 +36,10 @@ evaluation:                                # pipeline.evaluate
   bias_form: logratio
 
 conditions:                                # how the central model answers; a new setting needs a new name (results are stored by name)
-  tilt:  {mode: peers, gamma: 3.0}         # the six answers in the prompt, attention tilted by the record
-  peers: {mode: peers}                     # the same prompt, no tilt
-  solo:  {mode: solo}                      # the question alone
-  swap:  {mode: peers, gamma: 3.0, swap: true}   # the tilt with the record permuted by rank (control)
+  tilt:  {mode: peers, gamma: 3.0, label: peers + memory}      # the six answers in the prompt, attention tilted by the record
+  peers: {mode: peers, label: question + peers}                # the same prompt, no tilt
+  solo:  {mode: solo, label: question alone}                   # the question alone
+  swap:  {mode: peers, gamma: 3.0, swap: true, label: swap}    # the tilt with the record permuted by rank (control)
 
 smoke:                                     # --smoke: a few events of one stream, every step, into outputs/smoke/
   events: 48
