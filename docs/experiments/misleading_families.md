@@ -126,3 +126,41 @@ tar czf misleading_families_results.tgz outputs/tables/misleading_families.md \
   `configs/models/<name>.yaml`.
 - **Ministral**: its 32k sliding window is switched off inside the engine; the prompts are under 4k tokens, so nothing changes.
 - **Qwen3-14B** runs with thinking off, like Qwen3-4B.
+
+## Result (run 2026-09-14 by our partner)
+
+Accuracy (%) with memory / without memory (`tilt` / `peers`) at each misleading rate, and question only (`solo`), each
+model with its own record. Page: https://claude.ai/code/artifact/ad571df8-9290-44e9-81b2-33f154a7a26e (section 4).
+
+OOD (unaffected by the reading-grading change):
+
+| model | 0% | 25% | 50% | 75% | 100% | solo |
+|---|---|---|---|---|---|---:|
+| Qwen3-14B | 75.6 / 69.8 | 72.2 / 65.6 | 69.6 / 60.4 | 65.7 / 55.2 | 54.8 / 50.6 | 66.5 |
+| Qwen3-4B (ours) | 74.0 / 69.2 | 70.3 / 64.0 | 67.9 / 58.1 | 63.5 / 51.4 | 50.2 / 45.8 | 67.8 |
+| Qwen2.5-7B | 71.5 / 65.9 | 67.9 / 59.3 | 65.2 / 52.9 | 59.7 / 47.3 | 48.3 / 43.3 | 59.1 |
+| Llama-3.1-8B | 71.3 / 68.3 | 67.9 / 61.2 | 65.1 / 54.5 | 60.2 / 48.2 | 49.4 / 45.5 | 67.4 |
+| phi-4 | 71.1 / 65.8 | 68.8 / 62.4 | 66.9 / 57.9 | 62.8 / 52.5 | 52.2 / 48.3 | 63.4 |
+| Ministral-8B | 70.9 / 64.0 | 66.1 / 54.8 | 62.2 / 41.6 | 53.7 / 27.4 | 26.1 / 18.0 | 58.6 |
+
+In-distribution, **reading graded by exact match** (this run predates commit b349366, which grades reading by token-F1
+≥ 0.5; Qwen3-4B is shown under the same rule):
+
+| model | 0% | 25% | 50% | 75% | 100% | solo |
+|---|---|---|---|---|---|---:|
+| Qwen3-14B | 68.4 / 67.0 | 67.9 / 66.7 | 67.4 / 66.2 | 66.0 / 64.9 | 65.2 / 64.6 | 63.6 |
+| Qwen3-4B (ours) | 67.3 / 64.8 | 66.0 / 64.9 | 65.4 / 64.5 | 64.4 / 63.4 | 63.8 / 62.9 | 60.5 |
+| Qwen2.5-7B | 66.7 / 62.8 | 65.5 / 61.9 | 64.4 / 61.0 | 62.8 / 59.6 | 61.4 / 58.9 | 63.6 |
+| phi-4 | 66.4 / 62.0 | 64.8 / 62.2 | 63.7 / 61.9 | 62.5 / 61.3 | 62.2 / 60.6 | 59.4 |
+| Llama-3.1-8B | 63.3 / 57.8 | 62.1 / 57.1 | 59.5 / 55.4 | 55.2 / 52.3 | 52.7 / 50.4 | 57.7 |
+| Ministral-8B | 60.1 / 53.5 | 57.7 / 52.9 | 54.3 / 51.1 | 51.6 / 49.0 | 51.3 / 47.3 | 47.0 |
+
+To put the in-distribution rows under the current rule, update the code (`git pull`) and re-grade the stored
+generations, CPU only: `for d in outputs/eval/*/indist6*/*/; do python -m pipeline.evaluate --regrade --output $d
+--stream data/$(basename $(dirname $d))/test.jsonl; done`, then rebuild the table with `--steps table`.
+
+Reading: with memory every model is above its no-memory accuracy at every rate; a model stays above its question-only
+accuracy on OOD up to 25% misleading (Llama-3.1-8B), 50% (Qwen3-4B, Qwen3-14B, phi-4, Ministral-8B) or 75%
+(Qwen2.5-7B). Ministral-8B is the most swayed without memory (64.0 → 18.0 on OOD); Qwen3-14B is the highest with memory
+at every rate on both streams. The record built from each model's own features separates honest from misleading answers
+alike (AUC 0.68–0.73 in-distribution, 0.77–0.87 OOD).
