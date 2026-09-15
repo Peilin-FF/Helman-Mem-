@@ -89,3 +89,31 @@ def test_train_combination_expands_to_own_answers_addresses_and_one_online_run(t
     assert f"data.combination.addresses={tmp_path}/out/record/q3_4b/train6+own/shuffled0.fit-self.addresses.pt" in train.cmd
     assert "data.combination.prior=[0.5,0.0]" in train.cmd and "data.shuffle=False" in train.cmd and "data.attn_gamma=3.0" in train.cmd
     assert train.gpus == 8 and train.wave == 2
+
+
+def test_a_trained_run_answers_from_its_checkpoint_and_the_frozen_judge_addresses_its_record(tmp_path):
+    ck = tmp_path / "out/train/comb3b/hf/global_step_277"
+    ck.mkdir(parents=True)
+    (ck / "config.json").write_text("{}")
+    cfg = load(EXPERIMENTS / "combination_trained.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                          "datasets=[ood6_misleading_p050]", "central=[comb3b]"])
+    plan = Plan(cfg, "combination_trained.yaml", smoke=False, gpus=[0, 1, 2, 3])
+
+    solo = [j for j in plan.own() if j.wave == 0]
+    assert len(solo) == 4 and all(f"--checkpoint {ck}" in j.cmd and "--model /models/Qwen3-4B " in j.cmd for j in solo)
+    assert solo[0].done == tmp_path / "out/eval/comb3b/ood6/solo/shard0/eval_metrics.json"
+    feats = plan.features()
+    assert all("--model /models/Qwen3-4B " in j.cmd and "+comb3b/test.jsonl" in j.cmd and "/features/comb3b/ood6_misleading_p050+own/" in j.cmd for j in feats)
+    ev = [j for j in plan.evaluate() if j.wave == 0]
+    assert ev and all(f"--checkpoint {ck}" in j.cmd and "/record/comb3b/ood6_misleading_p050+own/" in j.cmd for j in ev)
+
+
+def test_a_merged_result_counts_for_every_shard(tmp_path):
+    cfg = load(EXPERIMENTS / "combination_trained.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                          "datasets=[ood6_misleading_p050]", "central=[q3_4b]"])
+    merged = tmp_path / "out/eval/q3_4b/ood6_misleading_p050+own/tilt/eval_metrics.json"
+    merged.parent.mkdir(parents=True)
+    merged.write_text(json.dumps({"mode": "peers", "gamma": 3.0, "swap_record": False, "max_new_tokens": 768, "checkpoint": None,
+                                  "record": str(tmp_path / "out/record/q3_4b/ood6_misleading_p050+own/shuffled0.fit-self.jsonl")}))
+    ev = [j for j in Plan(cfg, "combination_trained.yaml", smoke=False, gpus=[0, 1, 2, 3]).evaluate() if "_tilt" in j.name]
+    assert len(ev) == 5 and all(j.done == merged and j.check() is None for j in ev)          # stored unsharded: nothing reruns

@@ -83,6 +83,24 @@ class Plan:
     def fit(self) -> str:
         return str(self.cfg.get("record", {}).get("fit", "self"))
 
+    def central(self, m: str) -> tuple[dict | None, Path | None, dict]:
+        """A central model's (spec, checkpoint, judge spec). A run under `trained:` answers from its last checkpoint
+        (outputs/train/<run>/hf) with its init model's tokenizer, and the named judge's features address its record."""
+        run = self.cfg.get("trained", {}).get(m)
+        if run is None:
+            spec = self.L.model(m)
+            return spec, None, spec
+        from pipeline.train import last_checkpoint
+
+        ck = last_checkpoint(self.L.train_dir(m))
+        judge = self.L.model(run.get("judge", run["init"]))
+        if ck is None:
+            if getattr(self, "dry", False):
+                print(f"[dry-run] {m}: no checkpoint under {self.L.train_dir(m)}/hf yet (its answers need the training run)")
+                return None, None, judge
+            raise SystemExit(f"{m}: no checkpoint under {self.L.train_dir(m)}/hf (train it first)")
+        return self.L.model(run["init"]), ck, judge
+
     def model_env(self, spec: dict) -> str:
         return f'eval "$(conda shell.bash hook)" && conda activate {spec["conda_env"]} && ' if spec.get("conda_env") else ""
 
@@ -127,7 +145,10 @@ class Plan:
             raise SystemExit("step own needs own_answer: true")
         jobs = []
         for m in self.cfg.get("central", []):
-            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets(), conditions=["solo"], step="own")
+            spec, ck, _ = self.central(m)
+            if spec is None:
+                continue
+            jobs += self.eval_jobs(m, spec, m, self.eval_datasets(), checkpoint=ck, conditions=["solo"], step="own")
             for d in self.eval_datasets():
                 solo = self.L.eval_dir(m, self.L.eval_dataset(d, {"mode": "solo"}), "solo")
                 out = self.L.own_stream(m, d)
@@ -147,7 +168,7 @@ class Plan:
         fe = self.cfg.get("features", {})
         jobs = []
         for m in self.cfg.get("central", []):
-            spec = self.L.model(m)
+            spec = self.central(m)[2]                     # the judge: the model itself, or a trained run's named judge
             for s in self.feature_streams():
                 (path, answers), out = self.source(m, s), self.L.features_dir(m, s)
                 for k in range(self.shards):
@@ -163,7 +184,7 @@ class Plan:
         dim = int(self.cfg.get("smoke", {}).get("dim", 32)) if self.smoke else int(rec.get("dim", 256))
         jobs = []
         for m in self.cfg.get("central", []):
-            spec = self.L.model(m)
+            spec = self.central(m)[2]
             for s in self.eval_datasets():
                 (path, answers), out = self.source(m, s), self.L.record_file(m, s)
                 fit = ""
@@ -208,10 +229,11 @@ class Plan:
                 check = lambda out=out, want=want: stale(out / "eval_metrics.json", want)
                 pre = self.model_env(model_spec)
                 vllm_shards = 1 if self.smoke else int(ev.get("vllm_shards", 1))   # a long stream: one vLLM engine per GPU, merged after
+                merged = out / "eval_metrics.json"           # a merged result, however it was sharded, makes every shard done
                 if engine == "vllm" and vllm_shards > 1:
                     for k in range(vllm_shards):
                         jobs.append(Job(step, f"eval_{model_key}_{s}_{c}_{k}", f"{pre}python -m pipeline.evaluate {args} --shard {k}/{vllm_shards} --output {out}/shard{k}",
-                                        done=out / f"shard{k}" / "eval_metrics.json", check=check))
+                                        done=merged if merged.exists() else out / f"shard{k}" / "eval_metrics.json", check=check))
                     jobs.append(Job(step, f"merge_{model_key}_{s}_{c}", f"python -m pipeline.evaluate --merge --output {out}",
                                     gpus=0, done=out / "eval_metrics.json", check=check, wave=1))
                 elif engine == "vllm":
@@ -222,7 +244,7 @@ class Plan:
                     for k in range(n):
                         jobs.append(Job(step, f"eval_{model_key}_{s}_{c}_{k}",
                                         f"{pre}python -m pipeline.evaluate {args} --batch-size {int(model_spec.get('batch_size', 8))} --shard {k}/{n} --output {out}/shard{k}",
-                                        done=out / f"shard{k}" / "eval_metrics.json", check=check))
+                                        done=merged if merged.exists() else out / f"shard{k}" / "eval_metrics.json", check=check))
                     jobs.append(Job(step, f"merge_{model_key}_{s}_{c}", f"python -m pipeline.evaluate --merge --output {out}",
                                     gpus=0, done=out / "eval_metrics.json", check=check, wave=1))
         return jobs
@@ -234,9 +256,12 @@ class Plan:
             return evaluate_runs(self)
         jobs = []
         for m in self.cfg.get("central", []):
+            spec, ck, _ = self.central(m)
+            if spec is None:
+                continue
             conditions = [c for c in self.cfg.get("eval_conditions", list(self.cfg.get("conditions", {})))
                           if not (self.L.own and self.cfg.get("conditions", {}).get(c, {}).get("mode") == "solo")]   # own ran those
-            jobs += self.eval_jobs(m, self.L.model(m), m, self.eval_datasets(), conditions=conditions)
+            jobs += self.eval_jobs(m, spec, m, self.eval_datasets(), checkpoint=ck, conditions=conditions)
         return jobs
 
     def combination(self) -> list[Job]:

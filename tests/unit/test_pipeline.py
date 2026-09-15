@@ -35,6 +35,7 @@ def test_every_experiment_config_loads_and_expands(tmp_path):
     for f in sorted(EXPERIMENTS.glob("*.yaml")):
         cfg = load(f, [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", f"paths.logs={tmp_path}/logs"])
         plan = Plan(cfg, str(f), smoke=False, gpus=[0, 1])
+        plan.dry = True                                                   # a trained run's checkpoint is not on disk here
         for step in cfg["steps"]:
             if step == "evaluate" and cfg.get("arms"):
                 continue   # needs a trained checkpoint on disk: covered by the training test below

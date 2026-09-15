@@ -27,5 +27,10 @@ bash run.sh configs/experiments/train_combination.yaml --smoke     # 48 question
 bash run.sh configs/experiments/train_combination.yaml             # own answers, features, record, then the epoch
 ```
 
-The trained checkpoint is then evaluated like the frozen model in `combination.yaml` (question alone, question + peers,
-peers + memory, combination on the 0–100% misleading datasets), with the frozen Qwen3-4B's features addressing the record.
+The trained checkpoint is then evaluated like the frozen model (question alone, question + peers, peers + memory,
+combination on the 0–100% misleading datasets), next to the frozen Qwen3-4B, with the frozen Qwen3-4B's features addressing
+both records:
+
+```bash
+bash run.sh configs/experiments/combination_trained.yaml
+```

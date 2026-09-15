@@ -1,0 +1,9 @@
+# Combination for Qwen3-4B trained under combination (train_combination.yaml), next to the frozen Qwen3-4B it started from
+# (docs/experiments/train_combination.md). The trained run answers from its last checkpoint; the frozen Qwen3-4B stays the
+# judge, so its features address both records and only the answers differ.
+base: combination.yaml
+name: combination_trained
+central: [q3_4b, comb3b]
+trained:                            # a trained run as a central model
+  comb3b: {init: q3_4b, judge: q3_4b}
+evaluation: {vllm_shards: 4}        # question alone on 17.4k OOD questions, and every other evaluation, four engines each
