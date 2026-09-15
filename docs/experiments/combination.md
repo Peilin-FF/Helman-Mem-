@@ -60,9 +60,20 @@ Qwen3-4B, accuracy % (job 20260915-021113; `outputs/tables/combination.md`, per 
 | 75% | 73.1 | 72.4 | 69.2 | 72.7 | 86% | 62.5 | 51.4 | 67.8 | 70.2 | 53% |
 | 100% | 72.4 | 71.3 | 69.2 | 72.0 | 85% | 50.7 | 45.8 | 67.8 | 69.3 | 15% |
 
-- OOD: combination is above peers + memory and question alone at every rate. From 0% to 100% it falls 5.7 points;
-  peers + memory falls 23.1.
-- In-distribution: peers + memory stays above question alone at every rate, and combination is within 0.5 points of it.
+Qwen3-8B, its own features, record and answers (same layout under `outputs/eval/qwen3_8b/`):
+
+| misleading | in-dist: peers + memory | question + peers | question alone | combination | took peers + memory | OOD: peers + memory | question + peers | question alone | combination | took peers + memory |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 78.1 | 75.7 | 72.9 | 77.4 | 86% | 74.2 | 67.9 | 65.6 | 74.9 | 89% |
+| 25% | 77.0 | 75.1 | 72.9 | 76.6 | 85% | 70.1 | 61.6 | 65.6 | 71.4 | 80% |
+| 50% | 76.3 | 74.3 | 72.9 | 76.1 | 85% | 66.9 | 54.3 | 65.6 | 70.0 | 70% |
+| 75% | 74.8 | 73.6 | 72.9 | 74.6 | 84% | 61.0 | 46.7 | 65.6 | 68.7 | 52% |
+| 100% | 74.0 | 72.3 | 72.9 | 73.7 | 83% | 46.2 | 40.0 | 65.6 | 67.7 | 14% |
+
+- OOD: combination is above peers + memory and question alone at every rate, for both models. From 0% to 100% it falls
+  5.7 points (Qwen3-4B) and 7.2 (Qwen3-8B); peers + memory falls 23.1 and 28.0.
+- In-distribution: peers + memory stays above question alone at every rate, and combination is within 0.5 (Qwen3-4B)
+  and 0.7 (Qwen3-8B) points of it.
 - The memory's tilt carries the reading: question + peers falls to 45.8 on OOD at 100%; peers + memory is 4.6 points
   above it with honest peers and 9.4–11.1 points at 50–75%.
 - The straight line over-states peers + memory at high trust: ρ̂ is above 1 for most task types (up to 1.48).
