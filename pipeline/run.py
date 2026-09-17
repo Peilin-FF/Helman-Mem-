@@ -6,7 +6,7 @@
     bash run.sh configs/experiments/main.yaml --dry-run           print the jobs and whether each is done
     bash run.sh configs/experiments/main.yaml --set evaluation.max_new_tokens=1024 --gpus 4,5,6,7
 
-Steps run in the order peers -> streams -> own -> features -> record -> train -> evaluate -> combination -> table; the jobs of a step run in
+Steps run in the order peers -> streams -> own -> features -> record -> train -> evaluate -> vote -> combination -> table; the jobs of a step run in
 parallel, one GPU each (or as many as a training job asks for). A job is skipped when its output exists; a sharded
 output counts only once all its shards finished (a complete.json is written then); an evaluation is skipped only if the
 stored settings match the requested ones, and a mismatch stops the job instead of silently reusing the old result.
@@ -31,7 +31,7 @@ import yaml
 from pipeline.config import load, shown
 from pipeline.layout import Layout
 
-ORDER = ["peers", "streams", "own", "features", "record", "train", "evaluate", "combination", "table"]
+ORDER = ["peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "table"]
 
 
 def stamp() -> str:
@@ -214,18 +214,29 @@ class Plan:
                 # the record fixes which events are evaluated, in which order; any record of the same events will do for solo
                 stream, record = self.L.stream(s), self.L.record_file(record_model, d)
                 engine = model_spec.get("engine", ev.get("engine", "vllm"))
+                mode = cd.get("mode", "peers")
+                debate = ""
+                wave = 0
+                if mode == "debate":   # round r reads round r-1's answers, so it runs two waves (shards, merge) later
+                    rnd, prev = int(cd.get("round", 1)), cd.get("previous", "solo")
+                    if prev not in conds:
+                        raise SystemExit(f"condition {c!r}: previous {prev!r} is not defined under conditions:")
+                    debate = f" --round {rnd} --previous {self.L.eval_dir(model_key, self.L.eval_dataset(d, conds[prev]), prev)}"
+                    wave = 2 * (rnd - 1)
                 # with own_answer the record needs the question-only answer first, and a question-only run needs no record
                 source = (f"--order {self.cfg.get('record', {}).get('order', 'shuffled0')}" + (f" --limit {self.events}" if self.events else "")
                           if self.L.own and cd.get("mode") == "solo" else f"--record {record}")
-                args = (f"--model {model_spec['path']} {source} --stream {stream['path']} --condition {c} --mode {cd.get('mode', 'peers')} "
+                args = (f"--model {model_spec['path']} {source} --stream {stream['path']} --condition {c} --mode {mode} "
                         f"--gamma {float(cd.get('gamma', 0.0))}{' --swap' if cd.get('swap') else ''} --bias-form {ev.get('bias_form', 'logratio')} "
                         f"--engine {engine} --max-new-tokens {ev.get('max_new_tokens', 768)} "
                         f"--gpu-memory-utilization {ev.get('gpu_memory_utilization', 0.85)}"
-                        + (f" --checkpoint {checkpoint}" if checkpoint else ""))
+                        + (f" --checkpoint {checkpoint}" if checkpoint else "") + debate)
                 want = {"mode": cd.get("mode", "peers"), "gamma": float(cd.get("gamma", 0.0)), "swap_record": bool(cd.get("swap", False)),
                         "max_new_tokens": int(ev.get("max_new_tokens", 768)), "checkpoint": str(checkpoint) if checkpoint else None}
                 if cd.get("mode", "peers") != "solo":           # the answers never see the record without peers
                     want["record"] = str(record)
+                if mode == "debate":
+                    want["round"] = int(cd.get("round", 1))
                 check = lambda out=out, want=want: stale(out / "eval_metrics.json", want)
                 pre = self.model_env(model_spec)
                 vllm_shards = 1 if self.smoke else int(ev.get("vllm_shards", 1))   # a long stream: one vLLM engine per GPU, merged after
@@ -233,12 +244,12 @@ class Plan:
                 if engine == "vllm" and vllm_shards > 1:
                     for k in range(vllm_shards):
                         jobs.append(Job(step, f"eval_{model_key}_{s}_{c}_{k}", f"{pre}python -m pipeline.evaluate {args} --shard {k}/{vllm_shards} --output {out}/shard{k}",
-                                        done=merged if merged.exists() else out / f"shard{k}" / "eval_metrics.json", check=check))
+                                        done=merged if merged.exists() else out / f"shard{k}" / "eval_metrics.json", check=check, wave=wave))
                     jobs.append(Job(step, f"merge_{model_key}_{s}_{c}", f"python -m pipeline.evaluate --merge --output {out}",
-                                    gpus=0, done=out / "eval_metrics.json", check=check, wave=1))
+                                    gpus=0, done=out / "eval_metrics.json", check=check, wave=wave + 1))
                 elif engine == "vllm":
                     jobs.append(Job(step, f"eval_{model_key}_{s}_{c}", f"{pre}python -m pipeline.evaluate {args} --output {out}",
-                                    done=out / "eval_metrics.json", check=check))
+                                    done=out / "eval_metrics.json", check=check, wave=wave))
                 else:   # HF engine: one shard per GPU, merged when all are in
                     n = 1 if self.smoke else int(model_spec.get("shards", len(self.gpus)))
                     for k in range(n):
@@ -262,6 +273,25 @@ class Plan:
             conditions = [c for c in self.cfg.get("eval_conditions", list(self.cfg.get("conditions", {})))
                           if not (self.L.own and self.cfg.get("conditions", {}).get(c, {}).get("mode") == "solo")]   # own ran those
             jobs += self.eval_jobs(m, spec, m, self.eval_datasets(), checkpoint=ck, conditions=conditions)
+        return jobs
+
+    def vote(self) -> list[Job]:
+        """Majority votes over the peers' answers, with or without an answer of the central model (pipeline.vote); CPU."""
+        conds = self.cfg.get("conditions", {})
+        jobs = []
+        for m in self.cfg.get("central", []):
+            for d in self.eval_datasets():
+                for c in self.cfg.get("vote_conditions", []):
+                    cd = conds.get(c)
+                    if cd is None or cd.get("mode") != "vote":
+                        raise SystemExit(f"vote condition {c!r} must be defined under conditions: with mode: vote")
+                    own = cd.get("own")
+                    if own is not None and own not in conds:
+                        raise SystemExit(f"vote condition {c!r}: own {own!r} is not defined under conditions:")
+                    out = self.L.eval_dir(m, d, c)
+                    cmd = (f"python -m pipeline.vote --record {self.L.record_file(m, d)} --stream {self.L.stream(d)['path']} --condition {c}"
+                           + (f" --own {self.L.eval_dir(m, self.L.eval_dataset(d, conds[own]), own)}" if own else "") + f" --output {out}")
+                    jobs.append(Job("vote", f"vote_{m}_{d}_{c}", cmd, gpus=0, done=out / "eval_metrics.json"))
         return jobs
 
     def combination(self) -> list[Job]:

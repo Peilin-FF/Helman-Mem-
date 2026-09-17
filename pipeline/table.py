@@ -10,7 +10,8 @@ models evaluated elsewhere on the base streams (the frozen Qwen3-4B of the main 
 per stream and condition, then the requested differences, then the record's AUC / favourite-right per stream.
 With `misleading_probe: true` two more tables follow: what the record makes of the misleading answers, and the peers.
 Columns are named by each condition's `label` (peers + memory, question + peers, question alone). `extra_columns:
-[combination]` adds the column pipeline.combination writes, and with it a table of the reading line per row.
+[combination]` adds the column pipeline.combination writes, and with it a table of the reading line per row; `columns:`
+sets every column and its order instead (conditions evaluated elsewhere, votes, combination).
 """
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ def misleading_probe(record: Path, stream: Path) -> dict | None:
 def build(cfg: dict, smoke: bool) -> str:
     L = Layout(cfg, smoke)
     tb = cfg.get("table", {})
-    conds = list(cfg.get("eval_conditions", list(cfg.get("conditions", {})))) + list(tb.get("extra_columns", []))
+    conds = list(tb.get("columns") or list(cfg.get("eval_conditions", list(cfg.get("conditions", {})))) + list(tb.get("extra_columns", [])))
     deltas = [tuple(d) for d in tb.get("deltas", [])]
     reg = L.registry
     sm = cfg.get("smoke", {})
@@ -140,6 +141,12 @@ def build(cfg: dict, smoke: bool) -> str:
             notes.append("combination: per event peers + memory or question alone, chosen by the reading line")
             continue
         cd = cfg.get("conditions", {}).get(c, {})
+        if cd.get("mode") == "vote":
+            notes.append(f"{cond_label(c)} (`{c}`): majority vote over the peers' answers" + (f" and the central model's answer in `{cd['own']}`" if cd.get("own") else ""))
+            continue
+        if cd.get("mode") == "debate":
+            notes.append(f"{cond_label(c)} (`{c}`): the central model's answer after {cd.get('round', 1)} debate round(s) with the peers' answers")
+            continue
         notes.append(f"{cond_label(c)} (`{c}`): mode {cd.get('mode', 'peers')}" + (f", tilt γ = {cd['gamma']}" if cd.get("gamma") else "") + (", record permuted by rank" if cd.get("swap") else ""))
     text = f"# {cfg['name']}{' (smoke)' if smoke else ''}\n\n" + "\n".join(lines) + "\n\n" + "; ".join(notes) + ".\n"
 

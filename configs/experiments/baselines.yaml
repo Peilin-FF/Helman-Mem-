@@ -1,0 +1,21 @@
+# Multi-agent baselines for combination (docs/experiments/baselines.md): on the same misleading streams, with the same
+# central model and the same six peer answers, how do majority vote and multi-agent debate compare with peers + memory,
+# question + peers, question alone and combination? It reads the combination experiment's results for the central model
+# (its record, question-alone answers, peers + memory, combination); only the debate rounds use GPUs.
+base: combination.yaml
+name: baselines
+steps: [evaluate, vote, table]
+central: [q3_4b]
+eval_conditions: [debate1, debate2]                 # the central model's answer after one and two debate rounds
+vote_conditions: [vote_peers, vote_all, debate_vote]
+conditions:
+  debate1:     {mode: debate, round: 1, previous: solo, label: debate (1 round)}       # Du et al. (2023); the peers' answers stay fixed
+  debate2:     {mode: debate, round: 2, previous: debate1, label: debate (2 rounds)}
+  vote_peers:  {mode: vote, label: majority vote (peers)}                              # the six peers
+  vote_all:    {mode: vote, own: solo, label: majority vote (peers + own)}             # and the central model's question-alone answer
+  debate_vote: {mode: vote, own: debate2, label: debate + vote}                        # and its answer after two debate rounds
+evaluation: {vllm_shards: 2}
+
+table:
+  rows: regimes
+  columns: [solo, peers, vote_peers, vote_all, debate1, debate2, debate_vote, tilt, combination]

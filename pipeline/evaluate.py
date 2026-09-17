@@ -6,6 +6,9 @@ A condition is a prompt mode plus the tilt settings:
     peers  --mode peers                    the same prompt, no tilt
     solo   --mode solo                     the question alone
     swap   --mode peers --gamma 3 --swap   the tilt with the record permuted by rank (control)
+    debate --mode debate --round r --previous <round r-1's evaluation (round 1: the question-alone one)>
+                                           multi-agent debate: the central model updates its answer after reading the peers'
+                                           answers, r times (feedback_state.baselines)
 
     PYTHONPATH=. FEEDBACK_CODE_EXEC_ALLOW=1 python -m pipeline.evaluate --model /models/Qwen3-4B \
         --record outputs/record/q3_4b/indist6/shuffled0.jsonl --stream data/indist6/test.jsonl \
@@ -31,7 +34,7 @@ import numpy as np
 from pipeline.config import REPO, shown
 
 CONDITION_KEYS = ("condition", "mode", "gamma", "swap_record", "bias_form", "max_new_tokens", "engine",
-                  "central_model", "checkpoint", "record", "stream", "every", "max_examples")
+                  "central_model", "checkpoint", "record", "stream", "every", "max_examples", "round", "previous")
 
 
 def parse_args(argv=None):
@@ -47,7 +50,10 @@ def parse_args(argv=None):
     p.add_argument("--limit", type=int, default=None, help="without --record: the first N events of the stream, as a smoke record holds")
     p.add_argument("--stream", type=Path, help="the stream JSONL (for grading)")
     p.add_argument("--condition", default=None, help="the condition's name, stored with the results")
-    p.add_argument("--mode", choices=["peers", "solo"], default="peers")
+    p.add_argument("--mode", choices=["peers", "solo", "debate"], default="peers")
+    p.add_argument("--round", type=int, default=1, help="debate only: the round to answer (round 0 is the question-alone answer)")
+    p.add_argument("--previous", type=Path, default=None, help="debate only: the evaluation holding the central model's answers of "
+                   "the round before (round 1: the question-alone evaluation)")
     p.add_argument("--gamma", type=float, default=0.0, help="the tilt: gamma * log(p_i / max p) on peer i's tokens (0 = off)")
     p.add_argument("--swap", action="store_true", help="control: the record permuted by rank (highest estimate on the least trusted peer)")
     p.add_argument("--bias-form", default="logratio", help="logratio | logodds (feedback_state.attn_bias)")
@@ -164,6 +170,8 @@ def main(argv=None) -> None:
         return
     if not (args.model and args.stream and (args.record or args.mode == "solo")):
         raise SystemExit("--model and --stream are required, and --record unless --mode solo (or --merge)")
+    if args.mode == "debate" and (args.previous is None or args.gamma > 0):
+        raise SystemExit("--mode debate needs --previous (the round before) and runs without the tilt")
     if args.checkpoint is not None and not (args.checkpoint / "config.json").exists():
         raise SystemExit(f"--checkpoint {args.checkpoint} is not an HF model directory (no config.json)")
     from feedback_state.newarch_loader import apply_torch_fp8_shim
@@ -191,7 +199,11 @@ def main(argv=None) -> None:
         k, n = (int(x) for x in args.shard.split("/"))
         rows = rows[k::n]
         print(f"[evaluate] shard {k}/{n}: {len(rows)} events", flush=True)
-    prompts = [render_prompt(tok, r[f"messages_{args.mode}"]) for r in rows]
+    if args.mode == "debate":
+        attach_debate_history(rows, records, args.previous, args.round)
+        prompts = [render_prompt(tok, r["messages_debate"]) for r in rows]
+    else:
+        prompts = [render_prompt(tok, r[f"messages_{args.mode}"]) for r in rows]
     n_tok = [len(tok(p, add_special_tokens=False)["input_ids"]) for p in prompts[: min(len(prompts), 200)]]
     print(f"[evaluate] {args.condition or args.mode}: central model {args.model}"
           f"{f' checkpoint {args.checkpoint}' if args.checkpoint else ''}, "
@@ -221,6 +233,24 @@ def main(argv=None) -> None:
         outputs = generate_hf(model_path, prompts, args, tok, biases=biases)
     print(f"[evaluate] decoded {len(prompts)} prompts ({time.time() - t0:.0f}s)", flush=True)
     write_results(args, rows, records, outputs, t0)
+
+
+def attach_debate_history(rows: list[dict], records: dict[str, dict], previous: Path, rnd: int) -> None:
+    """Give every row the central model's answers so far (from the round before) and its next debate conversation."""
+    from feedback_state.baselines import debate_messages
+    from feedback_state.memory_generator import peer_texts_in_prompt_order
+
+    before = {str(g["id"]): g for g in map(json.loads, (previous / "generations.jsonl").open())}
+    for r in rows:
+        prev = before.get(str(r["id"]))
+        if prev is None:
+            raise SystemExit(f"event {r['id']} has no answer in {previous}")
+        history = list(prev.get("history") or [prev["generation"]])
+        if len(history) != rnd:
+            raise SystemExit(f"{previous} holds {len(history)} answers per event; debate round {rnd} needs {rnd}")
+        rec = records[str(r["id"])]
+        r["history"] = history
+        r["messages_debate"] = debate_messages(rec, peer_texts_in_prompt_order(rec, r["peer_order"]), history)
 
 
 def generate_hf(model_path: str, prompts: list[str], args, tok, biases=None) -> list[str]:
@@ -300,11 +330,15 @@ def write_results(args, rows, records, outputs, t0) -> None:
         ok = grade(records[str(r["id"])], text)
         out_rows.append({"pos": r["pos"], "id": r["id"], "task_type": r["task_type"], "source": r["source"], "correct": int(ok),
                          "peer_correct": r["peer_correct"], "memory_prob": r.get("memory_prob"), "generation": text})
+        if "history" in r:   # debate: every answer of the central model so far, this round's last
+            out_rows[-1]["history"] = r["history"] + [text]
     metrics = {"condition": args.condition, "mode": args.mode, "gamma": args.gamma, "swap_record": bool(args.swap),
                "bias_form": args.bias_form if args.gamma > 0 else None,
                "max_new_tokens": args.max_new_tokens, "engine": args.engine, "central_model": args.model,
                "checkpoint": shown(args.checkpoint) if args.checkpoint else None, "record": shown(args.record),
                "stream": shown(args.stream), "every": args.every, "max_examples": args.max_examples, "shard": args.shard}
+    if args.mode == "debate":
+        metrics.update(round=args.round, previous=shown(args.previous))
     metrics.update(summarise(out_rows, args.windows))
     with (args.output / "generations.jsonl").open("w") as f:
         for row in out_rows:

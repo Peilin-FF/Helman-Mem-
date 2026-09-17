@@ -104,6 +104,7 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 | `misleading_families` | the same misleading datasets for Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4 and Qwen3-14B, each with its own record (a guide for running it elsewhere) | [docs/experiments/misleading_families.md](docs/experiments/misleading_families.md) |
 | `combination` | per event, peers + memory or question alone, chosen by the central model's reading line (ρ, δ); 0–100% misleading | [docs/experiments/combination.md](docs/experiments/combination.md) |
 | `combination_families` | combination for Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4 and Qwen3-14B, each its own judge (a guide for running it elsewhere) | [docs/experiments/combination_families.md](docs/experiments/combination_families.md) |
+| `baselines` | multi-agent baselines on the combination streams: majority vote (peers; peers + own answer) and multi-agent debate (1 and 2 rounds; debate + vote) | [docs/experiments/baselines.md](docs/experiments/baselines.md) |
 | `train_combination` | GRPO of Qwen3-4B under combination: per question, before its rollouts, combination picks peers + memory or question alone from its online state; one epoch | [docs/experiments/train_combination.md](docs/experiments/train_combination.md) |
 | `train_tilt` | GRPO of the central model with and without the tilt | [docs/experiments/train_tilt.md](docs/experiments/train_tilt.md) |
 
@@ -149,18 +150,19 @@ and `--set "datasets=[indist6_saboteurs]"` runs it (the streams step builds it f
 
 Copy the closest file in `configs/experiments/` and change what differs. What a file can set:
 
-- `steps`: any of peers, streams, own, features, record, train, evaluate, combination, table.
+- `steps`: any of peers, streams, own, features, record, train, evaluate, vote, combination, table.
 - `central`: the models that answer (registered names).
 - `datasets`: registered datasets or groups. The steps follow from their kinds: `peers` generates the answers datasets
   the named misleading datasets need, `streams` builds those, and features, record and evaluate run on each.
 - `eval_conditions` (conditions are defined once under `conditions:`; a new setting, e.g. another γ, gets a new name,
-  because results are stored by condition name).
+  because results are stored by condition name). A condition with `mode: debate` answers after `round` debate rounds and
+  reads its `previous` condition's answers; `vote_conditions` (`mode: vote`, optional `own`) are majority votes, step `vote`.
 - `record`: design, dim, lam, order, fit (a dataset name, or `self`).
 - `own_answer: true`: the central model's question-only answer joins every stream as one more answer, recorded like the
   peers' but kept out of the prompt (step `own`); `combination` then picks peers + memory or question alone per event.
 - `arms`, `overrides`, `tilt_overrides`, `train_data`, `val_data`: training (docs/experiments/train_tilt.md; any key of
   `configs/train/grpo.yaml` can be overridden).
-- `table`: rows (`models`, `regimes` or `runs`), `reference` models, `deltas`.
+- `table`: rows (`models`, `regimes` or `runs`), `reference` models, `deltas`, and `columns` (every column, in order).
 
 A result is reused only if it was produced with the same settings: an evaluation stores its full condition, and the
 runner stops with a clear message instead of silently reusing a result made with other settings.

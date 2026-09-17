@@ -397,3 +397,47 @@ def test_the_combination_table_names_its_columns_as_the_reports_do(tmp_path):
 
     assert "| row | indist6: peers + memory | indist6: question + peers | indist6: question alone | indist6: combination |" in text
     assert "| p050 |  70.0 |   -   |  69.0 |  74.0 |" in text and "| p050 · indist6 | 80% | math 0.90 / 0.30 / T >= 0.50 |" in text
+
+
+def test_the_baselines_debate_in_rounds_and_vote_on_the_combination_results(tmp_path):
+    cfg = load(EXPERIMENTS / "baselines.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                "datasets=[indist6_misleading_p050]"])
+    plan = Plan(cfg, "baselines.yaml", smoke=False, gpus=[0, 1])
+
+    ev = {j.name: j for j in plan.evaluate()}
+    assert sorted(ev) == ["eval_q3_4b_indist6_misleading_p050_debate1_0", "eval_q3_4b_indist6_misleading_p050_debate1_1",
+                          "eval_q3_4b_indist6_misleading_p050_debate2_0", "eval_q3_4b_indist6_misleading_p050_debate2_1",
+                          "merge_q3_4b_indist6_misleading_p050_debate1", "merge_q3_4b_indist6_misleading_p050_debate2"]
+    own = f"{tmp_path}/out/eval/q3_4b/indist6_misleading_p050+own"
+    first, second = ev["eval_q3_4b_indist6_misleading_p050_debate1_0"], ev["eval_q3_4b_indist6_misleading_p050_debate2_1"]
+    assert "--mode debate --gamma 0.0 " in first.cmd and f"--record {tmp_path}/out/record/q3_4b/indist6_misleading_p050+own/" in first.cmd
+    assert f"--round 1 --previous {tmp_path}/out/eval/q3_4b/indist6/solo --shard 0/2 " in first.cmd       # round 0: the question-alone answers
+    assert f"--round 2 --previous {own}/debate1 --shard 1/2 " in second.cmd
+    assert [ev[n].wave for n in ("eval_q3_4b_indist6_misleading_p050_debate1_0", "merge_q3_4b_indist6_misleading_p050_debate1",
+                                 "eval_q3_4b_indist6_misleading_p050_debate2_1", "merge_q3_4b_indist6_misleading_p050_debate2")] == [0, 1, 2, 3]
+    assert ev["merge_q3_4b_indist6_misleading_p050_debate2"].done == Path(own) / "debate2" / "eval_metrics.json"
+
+    votes = {j.name: j for j in plan.vote()}
+    assert sorted(votes) == ["vote_q3_4b_indist6_misleading_p050_debate_vote", "vote_q3_4b_indist6_misleading_p050_vote_all",
+                             "vote_q3_4b_indist6_misleading_p050_vote_peers"]
+    assert "--own" not in votes["vote_q3_4b_indist6_misleading_p050_vote_peers"].cmd
+    assert f"--own {tmp_path}/out/eval/q3_4b/indist6/solo --output {own}/vote_all" in votes["vote_q3_4b_indist6_misleading_p050_vote_all"].cmd
+    assert f"--own {own}/debate2 --output {own}/debate_vote" in votes["vote_q3_4b_indist6_misleading_p050_debate_vote"].cmd
+    assert all(j.gpus == 0 and f"--stream {tmp_path}/data/indist6_misleading_p050/test.jsonl " in j.cmd for j in votes.values())
+
+
+def test_the_baselines_table_lists_every_method_in_the_configured_order(tmp_path):
+    from pipeline.table import build
+
+    cfg = load(EXPERIMENTS / "baselines.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "datasets=[ood6_misleading_p100]"])
+    L = Layout(cfg)
+    for c, acc in (("vote_peers", 0.31), ("debate2", 0.52), ("combination", 0.69)):
+        d = L.eval_dir("q3_4b", "ood6_misleading_p100", c)
+        d.mkdir(parents=True)
+        (d / "eval_metrics.json").write_text(json.dumps({"accuracy": acc, "share_peers_memory": 0.15, "reading_line": {}}))
+    text = build(cfg, smoke=False)
+
+    assert ("| row | ood6: question alone | ood6: question + peers | ood6: majority vote (peers) | ood6: majority vote (peers + own) | "
+            "ood6: debate (1 round) | ood6: debate (2 rounds) | ood6: debate + vote | ood6: peers + memory | ood6: combination |") in text
+    assert "| p100 |   -   |   -   |  31.0 |   -   |   -   |  52.0 |   -   |   -   |  69.0 |" in text
+    assert "majority vote (peers + own) (`vote_all`): majority vote over the peers' answers and the central model's answer in `solo`" in text
