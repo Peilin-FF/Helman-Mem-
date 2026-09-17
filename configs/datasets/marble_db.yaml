@@ -1,0 +1,7 @@
+# MultiAgentBench's database diagnosis (Zhu et al., 2025) as a stream: 100 tasks (10 scenarios x 10 anomaly sets) with the five
+# agents' findings as the answers. Built by the swarm step from datasets/marble_db/tasks.jsonl (the benchmark's tasks) with the
+# central model as every agent; the released files hold only the tasks, the findings depend on the model that runs them.
+path: marble_db/test.jsonl
+peers: [swarm_insert, swarm_lock, swarm_vacuum, swarm_index, swarm_fetch]   # peer_0 ... peer_4: agent1 ... agent5 of the benchmark
+events: 100
+built: swarm

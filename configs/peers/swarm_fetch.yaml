@@ -1,0 +1,3 @@
+# agent5 of MultiAgentBench's database diagnosis: the central model, as the agent investigating FETCH_LARGE_DATA (pipeline.swarm).
+model: q3_4b
+role: FETCH_LARGE_DATA

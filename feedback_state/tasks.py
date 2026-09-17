@@ -477,7 +477,31 @@ def _code_prompt(record: dict[str, Any], with_context: bool) -> str:
     )
 
 
+def _dbdiag_correct(text: str, record: dict[str, Any]) -> bool:
+    """The benchmark's rule (MultiAgentBench, database): one of the allowed number of predicted root causes is a true one."""
+    from feedback_state.swarm import hit
+
+    return hit(str(text), [str(c) for c in (record.get("answer") or [])], int(record.get("number_of_labels_pred", 3)))
+
+
+def _dbdiag_target(text: str, record: dict[str, Any]) -> float:
+    return 1.0 if _dbdiag_correct(text, record) else 0.0
+
+
+def _dbdiag_extract(text: str) -> str:
+    from feedback_state.swarm import predicted_causes
+
+    return ", ".join(predicted_causes(str(text)))
+
+
+def _dbdiag_prompt(record: dict[str, Any], with_context: bool) -> str:
+    return (f"{record.get('problem', '')}\n\nName the most likely root causes, most likely first (one to three), and end with a line "
+            "of the form 'Final answer: <CAUSE_1>, <CAUSE_2>' using the exact names.")
+
+
 REGISTRY: dict[str, TaskSpec] = {
+    # database diagnosis (the swarm): the agents' findings carry their own verdict labels, the central model's diagnosis is graded
+    "dbdiag": TaskSpec("dbdiag", _dbdiag_target, _dbdiag_correct, _dbdiag_extract, _dbdiag_prompt, precomputed=True),
     "math": TaskSpec("math", _math_target, _math_correct, extract_final_answer, _math_prompt),
     "rag": TaskSpec("rag", _rag_target, _rag_correct, qa_extract_answer, _rag_prompt),
     "boolqa": TaskSpec(

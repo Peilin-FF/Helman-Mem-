@@ -1,0 +1,203 @@
+"""Swarm: run MultiAgentBench's database diagnosis with a local model, and turn it into a stream with evaluations.
+
+    python -m pipeline.swarm run   --tasks datasets/marble_db/tasks.jsonl --model /models/Qwen3-4B --served-name Qwen3-4B --port 8123 \
+                                   --pg-port 5432 --pg-data /mnt/data/peilin/pg/5432 --out outputs/swarm/q3_4b/marble_db [--shard k/N] [--limit N]
+    python -m pipeline.swarm merge --out outputs/swarm/q3_4b/marble_db --stream data/marble_db/test.jsonl \
+                                   --solo outputs/eval/q3_4b/marble_db/solo --swarm outputs/eval/q3_4b/marble_db+own/swarm \
+                                   --verdicts outputs/eval/q3_4b/marble_db+own/verdicts --model /models/Qwen3-4B
+
+`run` starts vLLM's OpenAI server for the model on the visible GPU and a user-space PostgreSQL if none listens on --pg-port,
+then for every task (in file order, this shard's share): reset the database, run the scenario's schema and benign queries,
+inject the anomaly workloads, run the benchmark's swarm (feedback_state.swarm.run_swarm), collect the agents' findings, and
+run the central model alone (run_solo). Every task is one line of <out>/[shard<k>/]events.jsonl; a task already there is
+skipped, so a run resumes. `merge` reads the events and writes the stream (the five findings as the candidate answers), the
+question-alone evaluation the `own` step reads, and the `swarm` and `verdicts` evaluations, all in the pipeline's layout.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import time
+from pathlib import Path
+
+from pipeline.config import shown
+
+
+def load_tasks(path: Path) -> list[dict]:
+    return [json.loads(line) for line in Path(path).open()]
+
+
+def done_ids(events: Path) -> set[str]:
+    if not events.exists():
+        return set()
+    return {json.loads(line)["id"] for line in events.open() if line.strip()}
+
+
+def cmd_run(args) -> None:
+    from feedback_state.swarm import MarbleDB, ensure_postgres, graded, make_env, patch_llm, run_solo, run_swarm, serve_vllm
+
+    tasks = load_tasks(args.tasks)
+    if args.limit:
+        tasks = tasks[: args.limit]
+    if args.shard:
+        k, n = (int(x) for x in args.shard.split("/"))
+        tasks = tasks[k::n]
+    out = args.out / (f"shard{args.shard.split('/')[0]}" if args.shard else "")
+    out.mkdir(parents=True, exist_ok=True)
+    events = out / "events.jsonl"
+    log_file = (out / "run.log").open("a")
+
+    def log(msg: str) -> None:
+        line = f"[swarm {time.strftime('%H:%M:%S')}] {msg}"
+        print(line, flush=True)
+        log_file.write(line + "\n"); log_file.flush()
+
+    skip = done_ids(events)
+    todo = [t for t in tasks if t["id"] not in skip]
+    log(f"{len(tasks)} tasks in this run, {len(skip)} done, {len(todo)} to do")
+    if not todo:
+        (out / "complete.json").write_text(json.dumps({"tasks": len(tasks)}))
+        return
+    ensure_postgres(args.pg_port, args.pg_data)
+    db = MarbleDB(args.pg_port)
+    proc = None
+    if not args.api_base:
+        proc = serve_vllm(args.model, args.served_name, args.port, out / "vllm.log", gpu_memory_utilization=args.gpu_memory_utilization,
+                          max_model_len=args.max_model_len)
+        api_base = f"http://localhost:{args.port}/v1"
+    else:
+        api_base = args.api_base
+    patch_llm(api_base, thinking=False)
+    llm = f"openai/{args.served_name}"
+    env = make_env(db)
+    try:
+        for i, task in enumerate(todo):
+            t0 = time.time()
+            log(f"task {task['id']} ({i + 1}/{len(todo)}): root causes {task['root_causes']}")
+            db.reset()
+            db.initialise(task["init_sql"])
+            inject = db.inject(task["anomalies"], args.anomaly_duration)
+            log(f"    injected {[x['anomaly'] for x in task['anomalies']]} in {sum(x['seconds'] for x in inject):.0f}s")
+            t1 = time.time()
+            swarm = run_swarm(task, llm, env, log)
+            swarm.update(graded(swarm["final"], task))
+            t2 = time.time()
+            solo = run_solo(task, llm, env, args.iterations, log)
+            solo.update(graded(solo["final"], task))
+            t3 = time.time()
+            row = {"id": task["id"], "scenario": task["scenario"], "root_causes": task["root_causes"], "labels": task["labels"],
+                   "number_of_labels_pred": task["number_of_labels_pred"], "anomalies": [x["anomaly"] for x in task["anomalies"]],
+                   "injection": inject, "swarm": swarm, "solo": solo, "model": args.served_name,
+                   "seconds": {"inject": round(t1 - t0, 1), "swarm": round(t2 - t1, 1), "solo": round(t3 - t2, 1)}}
+            with events.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            log(f"    swarm hit {swarm['correct']} exact {swarm['exact']} {swarm['predicted']} | findings "
+                f"{[x['verdict'] for x in swarm['findings']]} right {sum(x['correct'] for x in swarm['findings'])}/5 | "
+                f"solo hit {solo['correct']} exact {solo['exact']} {solo['predicted']} | {t3 - t0:.0f}s")
+        (out / "complete.json").write_text(json.dumps({"tasks": len(tasks), "finished": time.strftime("%Y-%m-%d %H:%M:%S")}))
+    finally:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(30)
+            except Exception:
+                proc.kill()
+
+
+def cmd_merge(args) -> None:
+    from feedback_state.swarm import stream_record, verdict_answer
+    from pipeline.evaluate import summarise
+
+    files = sorted(glob.glob(str(args.out / "shard*" / "events.jsonl"))) or [str(args.out / "events.jsonl")]
+    rows = {}
+    for f in files:
+        if Path(f).exists():
+            for line in open(f):
+                if line.strip():
+                    r = json.loads(line); rows[r["id"]] = r
+    tasks = {t["id"]: t for t in load_tasks(args.tasks)}
+    ids = [t for t in tasks if t in rows]
+    missing = [t for t in tasks if t not in rows]
+    if not ids:
+        raise SystemExit(f"no events under {args.out}")
+    if missing and not args.partial:
+        raise SystemExit(f"{len(missing)} of {len(tasks)} tasks have no event (e.g. {missing[:3]}); pass --partial to merge what is there")
+    args.stream.parent.mkdir(parents=True, exist_ok=True)
+    tmp = args.stream.with_name(args.stream.name + ".tmp")
+    with tmp.open("w") as f:
+        for t in ids:
+            f.write(json.dumps(stream_record(rows[t], tasks[t], args.served_name), ensure_ascii=False) + "\n")
+    tmp.replace(args.stream)
+    (args.stream.parent / "manifest.json").write_text(json.dumps({"kind": "swarm", "events": len(ids), "missing": missing, "model": args.served_name,
+                                                                   "sources": [shown(Path(f)) for f in files]}, indent=1))
+    findings_right = [x["correct"] for t in ids for x in rows[t]["swarm"]["findings"]]
+    print(f"[swarm] stream {shown(args.stream)}: {len(ids)} events; findings right {100 * sum(findings_right) / max(1, len(findings_right)):.1f}%")
+
+    def write_eval(directory: Path, condition: str, mode: str, texts: dict[str, str], extra: dict | None = None) -> None:
+        out_rows = []
+        for pos, t in enumerate(ids):
+            task = tasks[t]
+            from feedback_state.swarm import graded
+
+            g = graded(texts[t], task)
+            out_rows.append({"pos": pos, "id": t, "task_type": "dbdiag", "source": task["scenario"], "correct": g["correct"], "exact": g["exact"],
+                             "predicted": g["predicted"], "peer_correct": [x["correct"] for x in rows[t]["swarm"]["findings"]],
+                             "memory_prob": None, "generation": texts[t]})
+        metrics = {"condition": condition, "mode": mode, "gamma": 0.0, "swap_record": False, "bias_form": None,
+                   "max_new_tokens": int(args.max_new_tokens), "engine": "vllm-openai", "central_model": args.model, "checkpoint": None,
+                   "record": None, "stream": shown(args.stream), "every": 1, "max_examples": None, "shard": None}
+        metrics.update(summarise(out_rows, args.windows))
+        metrics["exact_accuracy"] = sum(r["exact"] for r in out_rows) / len(out_rows)
+        metrics.update(extra or {})
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / "generations.jsonl").open("w") as f:
+            for r in out_rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        (directory / "eval_metrics.json").write_text(json.dumps(metrics, indent=1))
+        print(f"[swarm] {condition}: accuracy {100 * metrics['accuracy']:.1f} (exact {100 * metrics['exact_accuracy']:.1f}) -> {shown(directory)}")
+
+    write_eval(args.solo, "solo", "solo", {t: rows[t]["solo"]["final"] for t in ids})
+    write_eval(args.swarm, "swarm", "swarm", {t: rows[t]["swarm"]["final"] for t in ids},
+               {"iterations_mean": sum(len(rows[t]["swarm"]["iterations"]) for t in ids) / len(ids)})
+    write_eval(args.verdicts, "verdicts", "swarm", {t: verdict_answer(rows[t]["swarm"]["findings"]) for t in ids})
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--tasks", type=Path, required=True)
+    r.add_argument("--model", required=True, help="the model's directory (served by vLLM here unless --api-base)")
+    r.add_argument("--served-name", required=True)
+    r.add_argument("--api-base", default=None, help="an OpenAI-compatible server already serving the model")
+    r.add_argument("--port", type=int, default=8123)
+    r.add_argument("--gpu-memory-utilization", type=float, default=0.6)
+    r.add_argument("--max-model-len", type=int, default=16384)
+    r.add_argument("--pg-port", type=int, default=5432)
+    r.add_argument("--pg-data", type=Path, required=True, help="the PostgreSQL cluster's directory (created if missing)")
+    r.add_argument("--iterations", type=int, default=5, help="the central model's tool calls when it investigates alone")
+    r.add_argument("--anomaly-duration", type=int, default=60, help="seconds of each anomaly workload (the benchmark's default)")
+    r.add_argument("--limit", type=int, default=None)
+    r.add_argument("--shard", default=None, help="k/N: tasks k, k+N, ...")
+    r.add_argument("--out", type=Path, required=True)
+    m = sub.add_parser("merge")
+    m.add_argument("--tasks", type=Path, required=True)
+    m.add_argument("--out", type=Path, required=True)
+    m.add_argument("--stream", type=Path, required=True)
+    m.add_argument("--solo", type=Path, required=True)
+    m.add_argument("--swarm", type=Path, required=True)
+    m.add_argument("--verdicts", type=Path, required=True)
+    m.add_argument("--model", required=True)
+    m.add_argument("--served-name", required=True)
+    m.add_argument("--max-new-tokens", type=int, default=768)
+    m.add_argument("--windows", type=int, default=10)
+    m.add_argument("--partial", action="store_true")
+    args = ap.parse_args(argv)
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    {"run": cmd_run, "merge": cmd_merge}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    main()

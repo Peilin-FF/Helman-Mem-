@@ -6,7 +6,7 @@
     bash run.sh configs/experiments/main.yaml --dry-run           print the jobs and whether each is done
     bash run.sh configs/experiments/main.yaml --set evaluation.max_new_tokens=1024 --gpus 4,5,6,7
 
-Steps run in the order peers -> streams -> own -> features -> record -> train -> evaluate -> vote -> combination -> table; the jobs of a step run in
+Steps run in the order swarm -> peers -> streams -> own -> features -> record -> train -> evaluate -> vote -> combination -> table; the jobs of a step run in
 parallel, one GPU each (or as many as a training job asks for). A job is skipped when its output exists; a sharded
 output counts only once all its shards finished (a complete.json is written then); an evaluation is skipped only if the
 stored settings match the requested ones, and a mismatch stops the job instead of silently reusing the old result.
@@ -31,7 +31,7 @@ import yaml
 from pipeline.config import load, shown
 from pipeline.layout import Layout
 
-ORDER = ["peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "table"]
+ORDER = ["swarm", "peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "table"]
 
 
 def stamp() -> str:
@@ -105,6 +105,45 @@ class Plan:
         return f'eval "$(conda shell.bash hook)" && conda activate {spec["conda_env"]} && ' if spec.get("conda_env") else ""
 
     # the steps
+    def swarm(self) -> list[Job]:
+        """The agent swarm (pipeline.swarm): the benchmark's agents work every task with the central model, which gives the dataset's
+        stream (the agents' findings as the answers), the model's question-alone evaluation, and the swarm conditions."""
+        sw, ev = self.cfg.get("swarm", {}), self.cfg.get("evaluation", {})
+        jobs = []
+        for m in self.cfg.get("central", []):
+            spec, ck, _ = self.central(m)
+            if spec is None:
+                continue
+            if ck is not None:
+                raise SystemExit(f"{m}: the swarm step runs a released model, not a trained checkpoint")
+            for d in self.eval_datasets():
+                ds = self.L.stream(d)
+                if ds.get("built") != "swarm":
+                    continue
+                out, stream = self.L.outputs / "swarm" / m / d, ds["path"]
+                tasks = self.L._abs(Path(sw.get("tasks", "datasets/marble_db/tasks.jsonl")))
+                served = str(sw.get("served_name", Path(spec["path"]).name))
+                base = (f"--tasks {tasks} --model {spec['path']} --served-name {served} --iterations {int(sw.get('iterations', 5))} "
+                        f"--anomaly-duration {int(sw.get('anomaly_duration', 60))} --gpu-memory-utilization {sw.get('gpu_memory_utilization', 0.6)} "
+                        f"--max-model-len {int(sw.get('max_model_len', 16384))} --out {out}" + (f" --limit {self.events}" if self.events else ""))
+                merge = (f"python -m pipeline.swarm merge --tasks {tasks} --out {out} --stream {stream} "
+                         f"--solo {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --swarm {self.L.eval_dir(m, d, 'swarm')} "
+                         f"--verdicts {self.L.eval_dir(m, d, 'verdicts')} --model {spec['path']} --served-name {served} "
+                         f"--max-new-tokens {ev.get('max_new_tokens', 768)}" + (" --partial" if self.events else ""))   # a smoke run: a few tasks
+                port, pg_port, pg_data = int(sw.get("port", 8123)), int(sw.get("pg_port", 5432)), str(sw.get("pg_data", "/mnt/data/peilin/pg"))
+                shards = 1 if self.smoke else max(1, min(int(sw.get("shards", 1)), len(self.gpus)))
+                pre = self.model_env(spec)
+                if shards == 1:
+                    jobs.append(Job("swarm", f"swarm_{m}_{d}", f"{pre}python -m pipeline.swarm run {base} --port {port} --pg-port {pg_port} "
+                                    f"--pg-data {pg_data}/{pg_port} && {merge}", done=stream))
+                else:   # one vLLM server and one PostgreSQL cluster per shard, on their own ports; merged when every shard is complete
+                    for k in range(shards):
+                        jobs.append(Job("swarm", f"swarm_{m}_{d}_{k}", f"{pre}python -m pipeline.swarm run {base} --shard {k}/{shards} "
+                                        f"--port {port + k} --pg-port {pg_port + k} --pg-data {pg_data}/{pg_port + k}",
+                                        done=stream if stream.exists() else out / f"shard{k}" / "complete.json"))
+                    jobs.append(Job("swarm", f"swarm_merge_{m}_{d}", merge, gpus=0, done=stream, wave=1))
+        return jobs
+
     def peers(self) -> list[Job]:
         gen = self.cfg.get("generation", {})
         mis = gen.get("misleading", {})

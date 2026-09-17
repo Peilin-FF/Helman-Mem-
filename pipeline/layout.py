@@ -74,7 +74,8 @@ class Layout:
         d["peer_names"] = list(base["peers"])
         d["peers"] = len(d["peer_names"])
         if d["kind"] == "stream":
-            d["path"] = self._abs(Path(self.cfg.get("paths", {}).get("data", "data")) / d["path"])
+            root = (self.outputs / "data") if (self.smoke and d.get("built")) else Path(self.cfg.get("paths", {}).get("data", "data"))
+            d["path"] = self._abs(root / d["path"])
         elif d["kind"] == "answers":
             d["path"] = self.derived / d.get("path", name)
         else:

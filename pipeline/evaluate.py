@@ -332,6 +332,12 @@ def write_results(args, rows, records, outputs, t0) -> None:
                          "peer_correct": r["peer_correct"], "memory_prob": r.get("memory_prob"), "generation": text})
         if "history" in r:   # debate: every answer of the central model so far, this round's last
             out_rows[-1]["history"] = r["history"] + [text]
+        if r["task_type"] == "dbdiag":   # the swarm's diagnoses: the benchmark's hit rule is `correct`; the exact set is kept too
+            from feedback_state.swarm import exact, predicted_causes
+
+            rec = records[str(r["id"])]
+            k = int(rec.get("number_of_labels_pred", 3))
+            out_rows[-1].update(exact=int(exact(text, list(rec.get("answer") or []), k)), predicted=predicted_causes(text)[:k])
     metrics = {"condition": args.condition, "mode": args.mode, "gamma": args.gamma, "swap_record": bool(args.swap),
                "bias_form": args.bias_form if args.gamma > 0 else None,
                "max_new_tokens": args.max_new_tokens, "engine": args.engine, "central_model": args.model,
@@ -340,6 +346,8 @@ def write_results(args, rows, records, outputs, t0) -> None:
     if args.mode == "debate":
         metrics.update(round=args.round, previous=shown(args.previous))
     metrics.update(summarise(out_rows, args.windows))
+    if out_rows and all("exact" in row for row in out_rows):
+        metrics["exact_accuracy"] = float(np.mean([row["exact"] for row in out_rows]))
     with (args.output / "generations.jsonl").open("w") as f:
         for row in out_rows:
             f.write(json.dumps(row) + "\n")

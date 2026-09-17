@@ -1,0 +1,2 @@
+python main.py --anomaly FETCH_LARGE_DATA started at 1789666911
+python main.py --anomaly FETCH_LARGE_DATA ended at 1789666947

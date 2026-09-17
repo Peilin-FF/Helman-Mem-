@@ -1,0 +1,3 @@
+# agent2 of MultiAgentBench's database diagnosis: the central model, as the agent investigating LOCK_CONTENTION (pipeline.swarm).
+model: q3_4b
+role: LOCK_CONTENTION
