@@ -40,12 +40,17 @@ Conditions in the table: `solo` (question alone), `swarm` (the benchmark as-is: 
 ## Run
 
 ```bash
-bash run.sh configs/experiments/swarm.yaml --smoke --gpus 0        # four tasks end to end, under outputs/smoke/ (about 30 minutes)
-bash run.sh configs/experiments/swarm.yaml --gpus 0,1              # every task; two shards, each with its own server and cluster
+bash run.sh configs/experiments/swarm.yaml --smoke --gpus 0                    # four tasks end to end, under outputs/smoke/ (about 15 minutes)
+bash run.sh configs/experiments/swarm.yaml --gpus 1,2,3,4 --set swarm.shards=4   # every task; one server and one cluster per shard
 ```
 
-A task takes about 5–8 minutes (two 60-second anomaly workloads, the swarm's iterations, the solo investigation), so the
-100 tasks take about 5 h on two shards. The run resumes: finished tasks are in `outputs/swarm/q3_4b/marble_db/shard*/events.jsonl`.
+A task takes 2–3 minutes (an anomaly workload is about 90 s: the bulk insert, then 60 s of the anomaly; then the swarm's
+iterations and the solo investigation), so the 100 tasks take about 75 minutes on four shards. The run resumes: finished
+tasks are in `outputs/swarm/q3_4b/marble_db/shard*/events.jsonl`. Check `injection[].returncode` there: a workload that
+dies at once leaves the agents a clean database (the vendored trigger needed the `pymysql` import made optional).
+
+The planner assigns two agents per iteration: the benchmark's naive-planning prompt shows a two-agent JSON example and
+Qwen3-4B follows it. That is the benchmark as-is; an agent never assigned gives its finding from an empty memory.
 
 ## Outputs
 

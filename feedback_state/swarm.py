@@ -181,10 +181,13 @@ class MarbleDB:
             cmd = [sys.executable, "main.py", "--anomaly", a["anomaly"], "--threads", str(a["threads"]), "--ncolumn", str(a["ncolumn"]),
                    "--colsize", str(a["colsize"]), "--duration", str(int(duration))]
             t0 = time.time()
-            p = subprocess.run(cmd, cwd=TRIGGER, env={**os.environ, "KALMAN_PG_PORT": str(self.port)}, capture_output=True, text=True,
-                               timeout=int(duration) * 4 + 600)
-            logs.append({"anomaly": a["anomaly"], "seconds": round(time.time() - t0, 1), "returncode": p.returncode,
-                         "tail": (p.stdout + p.stderr)[-600:]})
+            try:
+                p = subprocess.run(cmd, cwd=TRIGGER, env={**os.environ, "KALMAN_PG_PORT": str(self.port)}, capture_output=True, text=True,
+                                   timeout=int(duration) * 4 + 600)
+                rc, tail = p.returncode, (p.stdout + p.stderr)[-600:]
+            except subprocess.TimeoutExpired as e:   # a workload that hangs must not take the shard with it; the event records it
+                rc, tail = -1, f"timeout after {int(duration) * 4 + 600}s: " + ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else str(e.stdout or ""))[-500:]
+            logs.append({"anomaly": a["anomaly"], "seconds": round(time.time() - t0, 1), "returncode": rc, "tail": tail})
         return logs
 
     def query(self, sql: str) -> dict:

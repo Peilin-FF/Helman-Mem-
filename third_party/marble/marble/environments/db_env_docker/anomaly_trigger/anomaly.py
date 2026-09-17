@@ -229,7 +229,7 @@ def vacuum(threads, duration, ncolumns, nrows, colsize, table_name="table1"):
         user="test",
         password="Test123_456",
         host="localhost",
-        port="5432",
+        port=str(DB_CONFIG["port"]),   # kalman-mem: this cluster, not 5432
     )
     cur = conn.cursor()
     # Create a new table

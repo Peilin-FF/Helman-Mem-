@@ -47,7 +47,7 @@ class Projection:
             _, _, V = torch.pca_lowrank(Zc, q=q, center=False, niter=6)
         self.basis = V[:, : int(dim)].contiguous()
         self.scale = float((Zc @ self.basis).std()) + 1e-6
-        self.dim = int(dim)
+        self.dim = int(self.basis.shape[1])     # fewer than asked when the fitting set is smaller than dim (a smoke run)
 
     def state(self) -> dict:
         return {"mean": self.mean.cpu(), "std": self.std.cpu(), "center": self.center.cpu(), "basis": self.basis.cpu(), "scale": self.scale}

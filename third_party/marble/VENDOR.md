@@ -13,6 +13,8 @@ Patches, each marked `kalman-mem` in the code:
   memory use from Prometheus for logging only, and no Prometheus runs here.
 - `environments/db_env_docker/anomaly_trigger/utils/database.py`, `createdatabase.py`, `dropdatabase.py`: the PostgreSQL port
   comes from `KALMAN_PG_PORT` (default 5432), so several clusters can run side by side.
+- `environments/db_env_docker/anomaly_trigger/anomaly.py`: `vacuum()` opened its own connection on a hard-coded port 5432, so
+  with several clusters every shard's `VACUUM FULL` ran on the first one and the shards deadlocked; it now uses `DB_CONFIG`'s port.
 - `environments/db_env_docker/anomaly_trigger/utils/database.py`: `pymysql` is an optional import (only its MySQL branch
   uses it; without the patch the anomaly workloads died on import and the agents investigated a clean database).
 - `environments/__init__.py`: the environments other than the base and database ones are optional imports.

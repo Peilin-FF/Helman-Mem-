@@ -84,3 +84,6 @@ def test_the_pca_addresses_are_the_same_on_every_run():
     a, b = Projection(X, dim=8), Projection(X, dim=8)
 
     assert torch.equal(a.basis, b.basis) and a.scale == b.scale
+
+    small = Projection(X[:4], dim=8)                 # a smoke run fits on a handful of events: fewer components than asked
+    assert small.dim == small.basis.shape[1] == 4 and small(X[:2]).shape == (2, 4)
