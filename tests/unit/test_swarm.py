@@ -104,6 +104,18 @@ def test_another_central_model_runs_the_swarm_on_its_own_stream_ports_and_cluste
     assert {p["model"] for p in peers} == {"qwen3_8b"} and Layout(cfg).stream("marble_db_qwen3_8b")["peers"] == 5
 
 
+def test_shards_claim_tasks_and_a_stopped_shard_gives_its_unfinished_ones_back(tmp_path):
+    from pipeline.swarm import all_done_ids, claim, release_stale_claims
+
+    claims = tmp_path / "claims"; claims.mkdir()
+    assert claim(claims, "T1", "shard0") and not claim(claims, "T1", "shard1") and claim(claims, "T2", "shard1")
+    (tmp_path / "shard0").mkdir(); (tmp_path / "shard1").mkdir()
+    (tmp_path / "shard0" / "events.jsonl").write_text(json.dumps({"id": "T1"}) + "\n")
+    assert all_done_ids(tmp_path) == {"T1"}
+    assert release_stale_claims(claims, "shard1", done_ids := all_done_ids(tmp_path)) == ["T2"]      # shard1 stopped before T2's event
+    assert release_stale_claims(claims, "shard0", done_ids) == [] and claim(claims, "T2", "shard0")   # T1 stays claimed, T2 is free again
+
+
 def test_a_swarm_smoke_run_builds_its_stream_under_smoke(tmp_path):
     cfg = load(EXPERIMENTS / "swarm.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data"])
     plan = Plan(cfg, "swarm.yaml", smoke=True, gpus=[0])

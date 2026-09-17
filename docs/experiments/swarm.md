@@ -45,8 +45,9 @@ bash run.sh configs/experiments/swarm.yaml --gpus 1,2,3,4 --set swarm.shards=4  
 ```
 
 A task takes 2–3 minutes (an anomaly workload is about 90 s: the bulk insert, then 60 s of the anomaly; then the swarm's
-iterations and the solo investigation), so the 100 tasks take about 75 minutes on four shards. The run resumes: finished
-tasks are in `outputs/swarm/q3_4b/marble_db/shard*/events.jsonl`. Check `injection[].returncode` there: a workload that
+iterations and the solo investigation), so the 100 tasks take about 75 minutes on four shards. The shards share the task list and each
+claims the next free task (`outputs/swarm/q3_4b/marble_db/claims/`), so the work balances. The run resumes: finished
+tasks are in `outputs/swarm/q3_4b/marble_db/shard*/events.jsonl`, and a stopped shard gives its unfinished claims back. Check `injection[].returncode` there: a workload that
 dies at once leaves the agents a clean database (the vendored trigger needed the `pymysql` import made optional).
 
 The planner assigns two agents per iteration: the benchmark's naive-planning prompt shows a two-agent JSON example and

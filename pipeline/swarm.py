@@ -7,7 +7,8 @@
                                    --verdicts outputs/eval/q3_4b/marble_db+own/verdicts --model /models/Qwen3-4B
 
 `run` starts vLLM's OpenAI server for the model on the visible GPU and a user-space PostgreSQL if none listens on --pg-port,
-then for every task (in file order, this shard's share): reset the database, run the scenario's schema and benign queries,
+then for every task it claims (the shards share the task list, in file order, and each takes the next free one through
+<out>/claims/, so the work balances; a stopped shard releases its unfinished claims when it restarts): reset the database, run the scenario's schema and benign queries,
 inject the anomaly workloads, run the benchmark's swarm (feedback_state.swarm.run_swarm), collect the agents' findings, and
 run the central model alone (run_solo). Every task is one line of <out>/[shard<k>/]events.jsonl; a task already there is
 skipped, so a run resumes. `merge` reads the events and writes the stream (the five findings as the candidate answers), the
@@ -35,16 +36,43 @@ def done_ids(events: Path) -> set[str]:
     return {json.loads(line)["id"] for line in events.open() if line.strip()}
 
 
+def all_done_ids(root: Path) -> set[str]:
+    """The tasks any shard of this run has finished (every events.jsonl under root)."""
+    ids = set()
+    for f in [root / "events.jsonl"] + [Path(p) for p in glob.glob(str(root / "shard*" / "events.jsonl"))]:
+        ids |= done_ids(f)
+    return ids
+
+
+def claim(claims: Path, task_id: str, who: str) -> bool:
+    """Take a task for this shard: an atomic create of <claims>/<task>.claim. Shards share the task list and claim the next
+    free task, so the work balances however long the tasks take."""
+    try:
+        with (claims / f"{task_id}.claim").open("x") as f:
+            f.write(who)
+        return True
+    except FileExistsError:
+        return False
+
+
+def release_stale_claims(claims: Path, who: str, done: set[str]) -> list[str]:
+    """A claim of this shard without an event is from a run that was stopped mid-task: give the task back."""
+    released = []
+    for c in sorted(claims.glob("*.claim")):
+        if c.read_text().strip() == who and c.stem not in done:
+            c.unlink()
+            released.append(c.stem)
+    return released
+
+
 def cmd_run(args) -> None:
     from feedback_state.swarm import MarbleDB, ensure_postgres, graded, make_env, patch_llm, run_solo, run_swarm, serve_vllm
 
     tasks = load_tasks(args.tasks)
     if args.limit:
         tasks = tasks[: args.limit]
-    if args.shard:
-        k, n = (int(x) for x in args.shard.split("/"))
-        tasks = tasks[k::n]
-    out = args.out / (f"shard{args.shard.split('/')[0]}" if args.shard else "")
+    who = f"shard{args.shard.split('/')[0]}" if args.shard else "single"
+    out = args.out / (who if args.shard else "")
     out.mkdir(parents=True, exist_ok=True)
     events = out / "events.jsonl"
     log_file = (out / "run.log").open("a")
@@ -54,9 +82,13 @@ def cmd_run(args) -> None:
         print(line, flush=True)
         log_file.write(line + "\n"); log_file.flush()
 
-    skip = done_ids(events)
-    todo = [t for t in tasks if t["id"] not in skip]
-    log(f"{len(tasks)} tasks in this run, {len(skip)} done, {len(todo)} to do")
+    claims = args.out / "claims"
+    claims.mkdir(parents=True, exist_ok=True)
+    mine, done = done_ids(events), all_done_ids(args.out)
+    released = release_stale_claims(claims, who, mine)
+    todo = [t for t in tasks if t["id"] not in done]
+    log(f"{len(tasks)} tasks in this run, {len(done)} done ({len(mine)} by {who}), {len(todo)} to claim"
+        + (f"; released {released}" if released else ""))
     if not todo:
         (out / "complete.json").write_text(json.dumps({"tasks": len(tasks)}))
         return
@@ -73,9 +105,13 @@ def cmd_run(args) -> None:
     llm = f"openai/{args.served_name}"
     env = make_env(db)
     try:
-        for i, task in enumerate(todo):
+        ran = 0
+        for task in todo:
+            if not claim(claims, task["id"], who):
+                continue                                   # another shard has it
+            ran += 1
             t0 = time.time()
-            log(f"task {task['id']} ({i + 1}/{len(todo)}): root causes {task['root_causes']}")
+            log(f"task {task['id']} ({ran} by {who}; {len(all_done_ids(args.out))}/{len(tasks)} done): root causes {task['root_causes']}")
             db.reset()
             db.initialise(task["init_sql"])
             inject = db.inject(task["anomalies"], args.anomaly_duration)
