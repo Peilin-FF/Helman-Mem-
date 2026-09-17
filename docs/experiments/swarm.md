@@ -53,6 +53,37 @@ dies at once leaves the agents a clean database (the vendored trigger needed the
 The planner assigns two agents per iteration: the benchmark's naive-planning prompt shows a two-agent JSON example and
 Qwen3-4B follows it. That is the benchmark as-is; an agent never assigned gives its finding from an empty memory.
 
+## Results: Qwen3-4B (2026-09-18)
+
+100 tasks, four shards, `outputs/tables/swarm.md`. Accuracy is the benchmark's hit rule; set F1 is between the predicted and the
+true set; single cause / pair: hits on the 50 tasks of each kind.
+
+| condition | accuracy | exact set | set F1 | single cause | pair | guesses |
+|---|---:|---:|---:|---:|---:|---:|
+| question alone | 64.0 | 5.0 | 40.7 | 23/50 | 41/50 | 2.06 |
+| MARBLE swarm (the planner's decision) | 61.0 | 3.0 | 35.8 | 19/50 | 42/50 | 2.33 |
+| agents' verdicts (the YESes) | 69.0 | 3.0 | 40.5 | 24/50 | 45/50 | 2.33 |
+| question + peers | 64.0 | 3.0 | 38.9 | 22/50 | 42/50 | 2.18 |
+| peers + memory | 63.0 | 3.0 | 38.2 | 22/50 | 41/50 | 2.07 |
+| combination | 66.0 | 4.0 | 40.6 | 22/50 | 44/50 | 2.10 |
+| always guess the maximum (chance) | 65.0 | – | 37.3 | 40% | 90% | 2.50 |
+
+- Everything sits near chance under the hit rule: a wrong extra guess never costs, so guessing the maximum scores 65. Exact set is
+  3–5 for every condition; no condition beats question alone on set F1. Qwen3-4B barely solves this benchmark as planner, agents
+  and central model; the single-cause tasks are where the conditions differ at all.
+- The planner's decision (61) is below the model alone (64). The literal YESes score 69 because they list more causes, not because
+  they are more right (set F1 ties question alone).
+- The findings carry little evidence: vacuum agent 76/100 verdicts right; insert 45, lock 36, index 43, fetch 51; insert and
+  fetch say YES on 83 and 79 of the 100 tasks. The planner assigns 2.7 agents per iteration. Record AUC 0.69, mostly identity.
+- The tilt alone changes nothing (63 vs 64; five tasks flip each way) and cannot under this rule. The record's trust does separate
+  where reading helps: mean trust 0.6–0.8 (58 tasks) peers + memory 72.4 vs 65.5 alone; trust 0.4–0.6 (37 tasks) 48.6 vs 56.8.
+  Combination follows that split (ρ̂ 0.81, δ̂ 0.23, consult when mean trust ≥ 0.48; consulted 69%) and ends at 66: +2 over
+  the model alone, +5 over the benchmark's planner, within noise at 100 tasks (standard error about 5 points).
+- Sharper tests: a swarm whose findings carry evidence (Qwen3-8B, running), a longer stream, a metric that charges for wrong
+  guesses, compromised agents. Cost: 163 s per task (118 s of anomaly workload, 40 s of star iterations, 6 s alone).
+
+Results page (generated from the events and evaluations): https://claude.ai/artifact/YDkUMzyLvTNvrJQYWhwKZt
+
 ## Another central model
 
 A swarm stream depends on the model that runs it, so each central model has its own dataset entry, five peer entries and an
