@@ -105,6 +105,7 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 | `combination` | per event, peers + memory or question alone, chosen by the central model's reading line (ρ, δ); 0–100% misleading | [docs/experiments/combination.md](docs/experiments/combination.md) |
 | `combination_families` | combination for Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4 and Qwen3-14B, each its own judge (a guide for running it elsewhere) | [docs/experiments/combination_families.md](docs/experiments/combination_families.md) |
 | `baselines` | multi-agent baselines on the combination streams: majority vote (peers; peers + own answer) and multi-agent debate (1 and 2 rounds; debate + vote) | [docs/experiments/baselines.md](docs/experiments/baselines.md) |
+| `baselines_families` | the baselines for Qwen3-8B, Qwen3-14B, Llama-3.1-8B, Ministral-8B, phi-4 and Qwen2.5-7B, each its own judge; runs the missing combination steps first (a guide for running it elsewhere) | [docs/experiments/baselines_families.md](docs/experiments/baselines_families.md) |
 | `train_combination` | GRPO of Qwen3-4B under combination: per question, before its rollouts, combination picks peers + memory or question alone from its online state; one epoch | [docs/experiments/train_combination.md](docs/experiments/train_combination.md) |
 | `train_tilt` | GRPO of the central model with and without the tilt | [docs/experiments/train_tilt.md](docs/experiments/train_tilt.md) |
 

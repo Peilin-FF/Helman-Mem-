@@ -441,3 +441,25 @@ def test_the_baselines_table_lists_every_method_in_the_configured_order(tmp_path
             "ood6: debate (1 round) | ood6: debate (2 rounds) | ood6: debate + vote | ood6: peers + memory | ood6: combination |") in text
     assert "| p100 |   -   |   -   |  31.0 |   -   |   -   |  52.0 |   -   |   -   |  69.0 |" in text
     assert "majority vote (peers + own) (`vote_all`): majority vote over the peers' answers and the central model's answer in `solo`" in text
+
+
+def test_the_baselines_families_run_the_missing_combination_steps_then_the_baselines_and_record_seven_methods(tmp_path):
+    from pipeline.table import build
+
+    cfg = load(EXPERIMENTS / "baselines_families.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models",
+                                                         "datasets=[ood6_misleading_p050]", "central=[qwen3_14b]"])
+    plan = Plan(cfg, "baselines_families.yaml", smoke=False, gpus=[0, 1])
+
+    assert cfg["central"] == ["qwen3_14b"] and [j.name for j in plan.own() if j.wave == 0] == ["eval_qwen3_14b_ood6_solo_0", "eval_qwen3_14b_ood6_solo_1"]
+    assert [j.name for j in plan.record()] == ["record_qwen3_14b_ood6_misleading_p050"]
+    ev = {j.name for j in plan.evaluate() if not j.name.startswith("merge_")}
+    assert ev == {f"eval_qwen3_14b_ood6_misleading_p050_{c}_{k}" for c in ("tilt", "peers", "debate1", "debate2") for k in (0, 1)}
+    assert sorted(j.name for j in plan.vote()) == ["vote_qwen3_14b_ood6_misleading_p050_vote_all", "vote_qwen3_14b_ood6_misleading_p050_vote_peers"]
+    assert [j.name for j in plan.combination()] == ["combination_qwen3_14b_ood6_misleading_p050"]
+    assert "--model /models/Qwen3-14B " in next(j for j in plan.evaluate() if j.name.endswith("debate2_0")).cmd
+
+    d = Layout(cfg).eval_dir("qwen3_14b", "ood6_misleading_p050", "combination")
+    d.mkdir(parents=True)
+    (d / "eval_metrics.json").write_text(json.dumps({"accuracy": 0.7, "share_peers_memory": 0.7, "reading_line": {}}))
+    assert ("| row | ood6: combination | ood6: peers + memory | ood6: question + peers | ood6: debate (2 rounds) | "
+            "ood6: majority vote (peers + own) | ood6: majority vote (peers) | ood6: question alone |") in build(cfg, smoke=False)
