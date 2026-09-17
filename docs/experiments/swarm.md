@@ -82,7 +82,44 @@ true set; single cause / pair: hits on the 50 tasks of each kind.
 - Sharper tests: a swarm whose findings carry evidence (Qwen3-8B, running), a longer stream, a metric that charges for wrong
   guesses, compromised agents. Cost: 163 s per task (118 s of anomaly workload, 40 s of star iterations, 6 s alone).
 
-Results page (generated from the events and evaluations): https://claude.ai/artifact/YDkUMzyLvTNvrJQYWhwKZt
+## Results: Qwen3-8B (2026-09-18)
+
+Same experiment (`configs/experiments/swarm_qwen3_8b.yaml`), 100 tasks, `outputs/tables/swarm_qwen3_8b.md`.
+
+| condition | accuracy | exact set | set F1 | single cause | pair | guesses |
+|---|---:|---:|---:|---:|---:|---:|
+| question alone | 78.0 | 20.0 | 56.7 | 37/50 | 41/50 | 1.96 |
+| MARBLE swarm (the planner's decision) | 54.0 | 5.0 | 34.3 | 21/50 | 33/50 | 1.83 |
+| agents' verdicts (the YESes) | 64.0 | 22.0 | 47.5 | 27/50 | 37/50 | 1.58 |
+| question + peers | 65.0 | 21.0 | 48.6 | 30/50 | 35/50 | 1.64 |
+| peers + memory | 64.0 | 21.0 | 47.6 | 29/50 | 35/50 | 1.61 |
+| combination | 64.0 | 20.0 | 47.3 | 30/50 | 34/50 | 1.67 |
+
+- The 8B alone is well above chance; the benchmark's coordination destroys it (planner 54, reading the findings 65). The agents
+  are careful by saying NO (fetch YES 5, index 13, vacuum 18 of 100; each cause true on 30), and a reader that follows them drops
+  the causes they omitted (FETCH named 5 times vs 51 alone). The tilt cannot restore an omitted cause (2 vs 3 flips against
+  question + peers).
+- Trust here measures the wrong thing: a finding is labelled right when its verdict matches the truth, so a NO on an absent
+  cause counts as right though it tells the reader nothing, and the NO-heavy agents earn the highest trust. In the QA streams a
+  correct answer is the useful one; here verdict correctness and usefulness come apart. Record AUC 0.71.
+- Combination should have acted alone (alone beats reading in every trust bucket: 78 vs 59 at trust 0.4–0.6, 78 vs 67 at
+  0.6–0.8) but consulted on 94 tasks: the record's estimate of the model's own ability rose only from 0.52 (first 50 tasks) to
+  0.60 (last 50; 0.70 at event 100) against a true 78, because one identity coordinate under prior precision 100 needs more than
+  100 events. The same rule with the own ability from a running average of the verified own answers (online) would consult on
+  40 tasks and score 67; with the true value, 24 tasks and 72; choosing right everywhere, 90.
+
+## Why the memory gained so little, and what follows
+
+1. The hit rule cannot reward discounting (a wrong guess is free; chance 65); exact set and set F1 can.
+2. With the 4B there is nothing to weigh (findings near coin flips, answers from a prior).
+3. With the 8B the candidates are per-cause verdicts, so the labels reward NO-heavy agents, and the own-ability estimate learns
+   too slowly for a 100-event stream.
+
+Proposed, not run: (a) each agent reports a diagnosis (its most likely causes) instead of a verdict on its assigned cause, so the
+candidates answer the same question and their labels measure usefulness; (b) estimate the autonomous ability directly from the
+model's verified own answers; (c) a metric that charges wrong guesses as the headline; (d) a longer stream; (e) a compromised agent.
+
+Results page (generated from the events and evaluations, both models, with the diagnosis): https://claude.ai/artifact/YDkUMzyLvTNvrJQYWhwKZt
 
 ## Another central model
 
