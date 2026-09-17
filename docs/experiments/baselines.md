@@ -38,3 +38,31 @@ outputs/eval/q3_4b/<dataset>+own/debate1/, debate2/        generations.jsonl (wi
 outputs/eval/q3_4b/<dataset>+own/vote_peers/, vote_all/, debate_vote/
 outputs/tables/baselines.md                                 every method per misleading rate, in-distribution and OOD
 ```
+
+## Results (2026-09-17, job 20260917-150853)
+
+Qwen3-4B, accuracy %; page: "Multi-Agent Baselines" (https://claude.ai/artifact/LRzXMhXACPWjqmAoqFDHcs).
+
+In-distribution (4,319 questions per rate):
+
+| misleading | question alone | question + peers | vote (peers) | vote (peers + own) | debate 1 | debate 2 | debate + vote | peers + memory | combination |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 69.2 | 74.6 | 64.3 | 68.0 | 73.4 | 73.5 | 68.7 | 76.7 | 76.2 |
+| 25% | 69.2 | 74.2 | 53.0 | 61.8 | 73.1 | 73.2 | 63.0 | 75.5 | 75.4 |
+| 50% | 69.2 | 73.7 | 32.5 | 46.9 | 72.9 | 73.0 | 48.5 | 74.3 | 74.1 |
+| 75% | 69.2 | 72.4 | 14.6 | 27.3 | 72.3 | 72.3 | 28.6 | 73.1 | 72.7 |
+| 100% | 69.2 | 71.3 | 9.4 | 18.8 | 72.0 | 72.1 | 19.9 | 72.4 | 72.0 |
+
+OOD (17,403 questions per rate):
+
+| misleading | question alone | question + peers | vote (peers) | vote (peers + own) | debate 1 | debate 2 | debate + vote | peers + memory | combination |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 67.8 | 69.2 | 64.1 | 68.2 | 71.2 | 71.4 | 68.8 | 73.8 | 75.0 |
+| 25% | 67.8 | 64.0 | 48.7 | 56.8 | 68.3 | 68.6 | 57.4 | 70.4 | 72.4 |
+| 50% | 67.8 | 58.1 | 24.5 | 34.3 | 64.5 | 64.6 | 34.5 | 67.5 | 70.8 |
+| 75% | 67.8 | 51.4 | 5.9 | 10.4 | 60.0 | 60.0 | 10.8 | 62.5 | 70.2 |
+| 100% | 67.8 | 45.8 | 1.2 | 3.0 | 56.2 | 56.1 | 3.3 | 50.7 | 69.3 |
+
+- OOD: combination is the most accurate method at every rate; its lead over debate grows from 3.6 to 13.2 points.
+- Majority vote collapses once misleading answers are the majority; a seventh vote from Qwen3-4B barely helps.
+- In-distribution: combination leads debate by 2.7 points with honest peers, and they are level at 100%.
