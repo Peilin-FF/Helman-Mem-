@@ -322,7 +322,12 @@ def run_swarm(task: dict, llm: str, env, log) -> dict:
     planner = EnginePlanner(graph, SharedMemory(), config.engine_planner, task["task"], model=llm)
     iterations, final, errors = [], "", []
     for it in range(int(task["max_iterations"])):
-        assignment = planner.assign_tasks(planning_method="naive")
+        try:
+            assignment = planner.assign_tasks(planning_method="naive")
+        except Exception as e:   # the benchmark's planner parses the model's JSON; a bad reply costs the iteration, not the task
+            errors.append(f"iteration {it + 1} assign: {type(e).__name__}: {str(e)[:300]}")
+            log(f"    planner failed to assign: {type(e).__name__}: {str(e)[:120]}")
+            assignment = {"tasks": {}, "continue": True}
         tasks = assignment.get("tasks", {}) or {}
         results = []
         for agent_id, t in tasks.items():
@@ -333,9 +338,14 @@ def run_swarm(task: dict, llm: str, env, log) -> dict:
                 errors.append(f"iteration {it + 1} {agent_id}: {type(e).__name__}: {str(e)[:300]}")
                 log(f"    {agent_id} failed: {type(e).__name__}: {str(e)[:120]}")
         summary = summarize_results(results)
-        final = planner.summarize_output(summary, task["task"], task["output_format"]).content or ""
-        planner.update_progress(summary)
-        cont = planner.decide_next_step(results)
+        try:
+            final = planner.summarize_output(summary, task["task"], task["output_format"]).content or final
+            planner.update_progress(summary)
+            cont = planner.decide_next_step(results)
+        except Exception as e:
+            errors.append(f"iteration {it + 1} planner: {type(e).__name__}: {str(e)[:300]}")
+            log(f"    planner failed: {type(e).__name__}: {str(e)[:120]}")
+            cont = True
         iterations.append({"iteration": it + 1, "assignments": tasks, "results": results, "decision": final, "continue": bool(cont)})
         log(f"    iteration {it + 1}: {len(tasks)} assigned, {len(results)} acted, continue={cont}")
         if not cont:
