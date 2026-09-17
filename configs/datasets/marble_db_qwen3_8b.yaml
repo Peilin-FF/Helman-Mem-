@@ -1,0 +1,6 @@
+# MultiAgentBench's database diagnosis run by Qwen3-8B (see marble_db.yaml): the same 100 tasks, with the findings of the 8B's
+# agents as the answers. A swarm stream depends on the model that runs it, so each central model has its own dataset entry.
+path: marble_db_qwen3_8b/test.jsonl
+peers: [swarm_insert_qwen3_8b, swarm_lock_qwen3_8b, swarm_vacuum_qwen3_8b, swarm_index_qwen3_8b, swarm_fetch_qwen3_8b]
+events: 100
+built: swarm

@@ -1,0 +1,3 @@
+# agent1 of MultiAgentBench's database diagnosis when Qwen3-8B runs the swarm: the central model as the agent investigating INSERT_LARGE_DATA.
+model: qwen3_8b
+role: INSERT_LARGE_DATA

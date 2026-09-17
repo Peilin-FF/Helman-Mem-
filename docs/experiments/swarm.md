@@ -52,6 +52,18 @@ dies at once leaves the agents a clean database (the vendored trigger needed the
 The planner assigns two agents per iteration: the benchmark's naive-planning prompt shows a two-agent JSON example and
 Qwen3-4B follows it. That is the benchmark as-is; an agent never assigned gives its finding from an empty memory.
 
+## Another central model
+
+A swarm stream depends on the model that runs it, so each central model has its own dataset entry, five peer entries and an
+experiment that inherits from `swarm.yaml` with its own ports and clusters (they can run beside the Qwen3-4B run):
+
+```
+configs/datasets/marble_db_qwen3_8b.yaml      path marble_db_qwen3_8b/test.jsonl, built: swarm
+configs/peers/swarm_{insert,lock,vacuum,index,fetch}_qwen3_8b.yaml
+configs/experiments/swarm_qwen3_8b.yaml       base: swarm.yaml; central [qwen3_8b]; swarm {port: 8150, pg_port: 5450, shards: 4}
+bash run.sh configs/experiments/swarm_qwen3_8b.yaml --gpus 0,5,6,7
+```
+
 ## Outputs
 
 ```

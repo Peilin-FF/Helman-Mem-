@@ -86,6 +86,24 @@ def test_the_swarm_experiment_runs_the_benchmark_then_the_usual_steps(tmp_path):
         p2.swarm()
 
 
+def test_another_central_model_runs_the_swarm_on_its_own_stream_ports_and_clusters(tmp_path):
+    cfg = load(EXPERIMENTS / "swarm_qwen3_8b.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
+    plan = Plan(cfg, "swarm_qwen3_8b.yaml", smoke=False, gpus=[0, 5, 6, 7])
+    sw = {j.name: j for j in plan.swarm()}
+    assert sorted(sw) == [f"swarm_merge_qwen3_8b_marble_db_qwen3_8b"] + [f"swarm_qwen3_8b_marble_db_qwen3_8b_{k}" for k in range(4)]
+    first = sw["swarm_qwen3_8b_marble_db_qwen3_8b_0"]
+    assert "--model /models/Qwen3-8B --served-name Qwen3-8B" in first.cmd and "--shard 0/4 --port 8150 --pg-port 5450 --pg-data /mnt/data/peilin/pg/5450" in first.cmd
+    assert "--port 8153 --pg-port 5453" in sw["swarm_qwen3_8b_marble_db_qwen3_8b_3"].cmd
+    assert sw["swarm_merge_qwen3_8b_marble_db_qwen3_8b"].done == tmp_path / "data/marble_db_qwen3_8b/test.jsonl"
+    assert cfg["swarm"]["iterations"] == 5 and cfg["swarm"]["tasks"] == "datasets/marble_db/tasks.jsonl"       # inherited from swarm.yaml
+    import yaml
+
+    tags = yaml.safe_load((EXPERIMENTS.parent / "datasets" / "marble_db_qwen3_8b.yaml").read_text())["peers"]
+    peers = Layout(cfg).peer_models(tags)
+    assert [p["role"] for p in peers] == ["INSERT_LARGE_DATA", "LOCK_CONTENTION", "VACUUM", "REDUNDANT_INDEX", "FETCH_LARGE_DATA"]
+    assert {p["model"] for p in peers} == {"qwen3_8b"} and Layout(cfg).stream("marble_db_qwen3_8b")["peers"] == 5
+
+
 def test_a_swarm_smoke_run_builds_its_stream_under_smoke(tmp_path):
     cfg = load(EXPERIMENTS / "swarm.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data"])
     plan = Plan(cfg, "swarm.yaml", smoke=True, gpus=[0])

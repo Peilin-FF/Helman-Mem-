@@ -1,0 +1,3 @@
+# agent4 of MultiAgentBench's database diagnosis when Qwen3-8B runs the swarm: the central model as the agent investigating REDUNDANT_INDEX.
+model: qwen3_8b
+role: REDUNDANT_INDEX

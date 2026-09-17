@@ -15,7 +15,7 @@ conditions:
   verdicts: {mode: swarm, label: agents' verdicts, note: "the causes whose agents said YES, in agent order"}
 swarm:
   tasks: datasets/marble_db/tasks.jsonl
-  served_name: Qwen3-4B                          # vLLM's OpenAI server, started by the job on its GPU (tool calling on, thinking off)
+  # served_name: the model's directory name unless set; vLLM's OpenAI server is started by the job on its GPU (tool calling on, thinking off)
   port: 8123                                     # +k per shard
   pg_port: 5432                                  # PostgreSQL in user space (conda env pg), +k per shard; created under pg_data/<port>
   pg_data: /mnt/data/peilin/pg
