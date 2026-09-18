@@ -133,6 +133,28 @@ configs/experiments/swarm_qwen3_8b.yaml       base: swarm.yaml; central [qwen3_8
 bash run.sh configs/experiments/swarm_qwen3_8b.yaml --gpus 0,5,6,7
 ```
 
+## A pool of peers on every sub-step (`swarm_steps`)
+
+The original method on the swarm's sub-steps. The benchmark's planner splits a task into five sub-steps, "is X a root cause?", one
+per agent. With one model behind every agent there is one source per sub-step, so nothing to choose between. Here every sub-step
+is answered by the pool of the QA streams (Gemma-3-4B, Phi-4-mini, Qwen2.5-Coder-7B, Llama-3.1-8B, DeepSeek-Coder-V2-Lite,
+R1-Distill-Qwen-7B), the injected anomaly verifies every answer, the record tracks every peer, and Qwen3-4B consults the pool
+with the tilt or answers alone. Five of these six cannot make the benchmark's tool call through vLLM, so the pool answers from
+the evidence the benchmark's agent gathered for the sub-step (its queries and results, from a finished swarm run), as the QA peers
+answer a question they are all shown.
+
+```
+pipeline.swarm steps     a finished run's events -> data/marble_db_steps_q/test.jsonl   500 yes/no questions (task type boolqa),
+                                                                                         passage = the task + the agent's evidence
+peers, streams           the six peers answer (marble_db_steps_answers) -> data/marble_db_steps/test.jsonl
+own ... combination      the usual steps: own answer, features, record, question + peers, peers + memory, combination
+pipeline.swarm diagnose  per condition, a task's diagnosis = the causes answered yes, scored by the benchmark's rule, the exact
+                         set and the set F1 -> outputs/tables/swarm_steps_<model>_<dataset>_diagnosis.{json,md}
+bash run.sh configs/experiments/swarm_steps.yaml --gpus 0,1,2,3,4,5,6,7     # needs the swarm and swarm_qwen3_8b runs' events
+```
+
+`marble_db_steps` uses the evidence Qwen3-4B's agents gathered, `marble_db_steps_qwen3_8b` Qwen3-8B's.
+
 ## A team of different models
 
 The benchmark gives the planner and every agent one `llm`, so its five experts are five profiles over one model; its engine also

@@ -31,7 +31,7 @@ import yaml
 from pipeline.config import load, shown
 from pipeline.layout import Layout
 
-ORDER = ["swarm", "peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "table"]
+ORDER = ["swarm", "peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "diagnose", "table"]
 
 
 def stamp() -> str:
@@ -62,7 +62,7 @@ class Plan:
         self.events = int(sm.get("events", 48)) if smoke else None
         asked = self.L.registry.expand(cfg.get("datasets", []))
         self.datasets = self.L.registry.expand(sm["datasets"]) if smoke and "datasets" in sm else asked[:1] if smoke else asked
-        self.shards = 1 if smoke else len(gpus)
+        self.shards = 1 if smoke else int(cfg.get("generation", {}).get("shards", len(gpus)))   # peer answers: shards per peer (default: one per GPU)
         if self.L.own and self.fit() != "self":
             raise SystemExit("own_answer needs record.fit: self (the fit stream has no own answers)")
 
@@ -75,7 +75,7 @@ class Plan:
         out = []
         for d in self.datasets:
             spec = self.L.stream(d)
-            a = d if spec["kind"] == "answers" else spec.get("answers") if spec["kind"] == "misleading" else None
+            a = d if spec["kind"] == "answers" else spec.get("answers") if spec["kind"] == "misleading" or spec.get("built") == "answers" else None
             if a and a not in out:
                 out.append(a)
         return out
@@ -110,16 +110,21 @@ class Plan:
         stream (the agents' findings as the answers), the model's question-alone evaluation, and the swarm conditions."""
         sw, ev = self.cfg.get("swarm", {}), self.cfg.get("evaluation", {})
         jobs = []
+        for d in self.eval_datasets():            # a stream of sub-step questions: built from a finished swarm run's events (CPU)
+            q = self.steps_source(d)
+            if q is not None and q["name"] not in [j.name[len("steps_"):] for j in jobs]:
+                jobs.append(Job("swarm", f"steps_{q['name']}", f"python -m pipeline.swarm steps --events {q['events']} --tasks {q['tasks']} "
+                                f"--out {q['path']}" + (f" --limit {self.events}" if self.events else ""), gpus=0, done=q["path"]))
         for m in self.cfg.get("central", []):
             spec, ck, _ = self.central(m)
             if spec is None:
                 continue
-            if ck is not None:
-                raise SystemExit(f"{m}: the swarm step runs a released model, not a trained checkpoint")
             for d in self.eval_datasets():
                 ds = self.L.stream(d)
                 if ds.get("built") != "swarm":
                     continue
+                if ck is not None:
+                    raise SystemExit(f"{m}: the swarm step runs a released model, not a trained checkpoint")
                 out, stream = self.L.outputs / "swarm" / m / d, ds["path"]
                 tasks = self.L._abs(Path(sw.get("tasks", "datasets/marble_db/tasks.jsonl")))
                 served = str(sw.get("served_name", Path(spec["path"]).name))
@@ -157,6 +162,20 @@ class Plan:
                     jobs.append(Job("swarm", f"swarm_merge_{m}_{d}", merge, gpus=0, done=stream, wave=1))
         return jobs
 
+    def steps_source(self, d: str) -> dict | None:
+        """For a stream built from generated answers on a swarm run's sub-step questions: the question stream, the run's events
+        (always the real outputs, a smoke run included: they are an input) and the benchmark's tasks."""
+        ds = self.L.stream(d)
+        if ds.get("built") != "answers":
+            return None
+        q = self.L.stream(ds["base"])
+        if q.get("built") != "steps":
+            return None
+        src = q["source"]
+        outputs = self.L._abs(Path(self.cfg.get("paths", {}).get("outputs", "outputs")))
+        return {"name": ds["base"], "path": q["path"], "events": outputs / "swarm" / src["model"] / src["dataset"],
+                "tasks": self.L._abs(Path(self.cfg.get("swarm", {}).get("tasks", "datasets/marble_db/tasks.jsonl")))}
+
     def peers(self) -> list[Job]:
         gen = self.cfg.get("generation", {})
         mis = gen.get("misleading", {})
@@ -185,9 +204,29 @@ class Plan:
         jobs = []
         for d in self.eval_datasets():
             spec = self.L.stream(d)
+            if spec.get("built") == "answers":     # the base's questions with the peers' generated answers, in peer order
+                names = " ".join(f"--peer {pm['name']}" for pm in self.L.peer_models(spec["peer_names"]))
+                jobs.append(Job("streams", f"stream_{d}", f"python -m pipeline.streams add --base {self.L.stream(spec['base'])['path']} "
+                                f"--answers {self.L.stream(spec['answers'])['path']} {names} --out {spec['path']}", gpus=0, done=spec["path"]))
+                continue
             if spec["kind"] != "misleading":
                 continue
             jobs.append(Job("streams", f"stream_{d}", streams_command(self.L, d, self.events), gpus=0, done=spec["path"]))
+        return jobs
+
+    def diagnose(self) -> list[Job]:
+        """For streams of a swarm run's sub-steps: every task's diagnosis from the central model's five verdicts, per condition (CPU)."""
+        jobs = []
+        for m in self.cfg.get("central", []):
+            for d in self.eval_datasets():
+                q = self.steps_source(d)
+                if q is None:
+                    continue
+                conds = ["solo"] + list(self.cfg.get("eval_conditions", [])) + (["combination"] if "combination" in self.cfg.get("steps", []) else [])
+                evals = " ".join(f"--eval {c}={self.L.eval_dir(m, self.L.eval_dataset(d, self.cfg.get('conditions', {}).get(c, {})), c)}" for c in conds)
+                out = self.L.outputs / "tables" / f"{self.cfg['name']}_{m}_{d}_diagnosis.json"
+                jobs.append(Job("diagnose", f"diagnose_{m}_{d}", f"python -m pipeline.swarm diagnose --tasks {q['tasks']} --events {q['events']} "
+                                f"--stream {self.L.stream(d)['path']} {evals} --title {shlex.quote(f'{m} on {d}')} --out {out}", gpus=0, done=out))
         return jobs
 
     def own(self) -> list[Job]:

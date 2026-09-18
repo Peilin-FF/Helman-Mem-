@@ -9,6 +9,11 @@
     python -m pipeline.swarm team  ... --agents '{"agent1": {"name": ..., "path": ..., "parser": ...}, ...}' --workers 5
                                    a team whose agents are different models: every distinct model served once, the workers share them
 
+    python -m pipeline.swarm steps    --events outputs/swarm/q3_4b/marble_db --tasks ... --out data/marble_db_steps_q/test.jsonl
+                                      a finished run's sub-steps as yes/no questions for a pool of peers (500 events from 100 tasks)
+    python -m pipeline.swarm diagnose --tasks ... --events ... --stream data/marble_db_steps/test.jsonl --eval tilt=<dir> ... --out <json>
+                                      each task's diagnosis from its five sub-step verdicts, scored by the benchmark's rule
+
 `run` starts vLLM's OpenAI server for the model on the visible GPU and a user-space PostgreSQL if none listens on --pg-port,
 then for every task it claims (the shards share the task list, in file order, and each takes the next free one through
 <out>/claims/, so the work balances; a stopped shard releases its unfinished claims when it restarts): reset the database, run the scenario's schema and benign queries,
@@ -205,6 +210,117 @@ def cmd_team(args) -> None:
                 pr.kill()
 
 
+def evidence_of(event: dict, agent_id: str, chars: int = 6000) -> str:
+    """What one agent gathered on a task: its actions' results over the iterations (the model's text and the tool's result)."""
+    parts = [f"[iteration {it['iteration']}] {res[agent_id]}" for it in event["swarm"]["iterations"] for res in it["results"] if agent_id in res]
+    text = "\n".join(parts) or "(the agent ran no query on this task)"
+    return text if len(text) <= chars else text[: chars // 2] + "\n ... \n" + text[-chars // 2:]
+
+
+def load_events(root: Path) -> dict[str, dict]:
+    rows = {}
+    for f in sorted(glob.glob(str(root / "shard*" / "events.jsonl"))) or [str(root / "events.jsonl")]:
+        if Path(f).exists():
+            for line in open(f):
+                if line.strip():
+                    r = json.loads(line); rows[r["id"]] = r
+    return rows
+
+
+def cmd_steps(args) -> None:
+    """The sub-steps of a finished swarm run as a stream of yes/no questions: one event per task and root cause, 'is X a root
+    cause?', with the task and what the agent assigned to X gathered as the passage. A pool of peers answers each (pipeline.peers)
+    and the verifier is the injected anomaly, so the record tracks every peer on the same question, as in the QA streams."""
+    from feedback_state.swarm import cause_of
+
+    events = load_events(args.events)
+    tasks = load_tasks(args.tasks)
+    if args.limit:
+        tasks = tasks[: args.limit]
+    missing = [t["id"] for t in tasks if t["id"] not in events]
+    if missing:
+        raise SystemExit(f"{len(missing)} tasks have no event under {args.events} (e.g. {missing[:3]}): run the swarm experiment first")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = args.out.with_name(args.out.name + ".tmp")
+    n = yes = 0
+    with tmp.open("w") as f:
+        for t in tasks:
+            ev = events[t["id"]]
+            for a in t["agents"]:
+                cause = cause_of(a["profile"])
+                rec = {"id": f"{t['id']}::{cause}", "task_type": "boolqa", "source": t["scenario"], "task_id": t["id"], "cause": cause,
+                       "agent_id": a["agent_id"], "problem": f"Is {cause} a root cause of this database's performance issue?",
+                       "context": (f"{t['task'].strip()}\n\nThe agent assigned to {cause} investigated the database ({a['profile'].strip()}) "
+                                   f"Its queries and their results:\n{evidence_of(ev, a['agent_id'])}"),
+                       "answer": "yes" if cause in t["root_causes"] else "no", "root_causes": list(t["root_causes"]),
+                       "number_of_labels_pred": int(t["number_of_labels_pred"]), "labels": list(t["labels"]), "evidence_model": ev.get("model"),
+                       "peer_responses": {}, "peer_correct": {}, "correctness_by_peer": {}, "peer_metadata": {}}
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                n += 1; yes += rec["answer"] == "yes"
+    tmp.replace(args.out)
+    (args.out.parent / "manifest.json").write_text(json.dumps({"kind": "steps", "events": n, "yes": yes, "tasks": len(tasks), "source": shown(args.events)}, indent=1))
+    print(f"[swarm] {n} sub-step questions ({yes} yes) from {len(tasks)} tasks of {shown(args.events)} -> {shown(args.out)}")
+
+
+def cmd_diagnose(args) -> None:
+    """A task's diagnosis from its five sub-step verdicts: the causes answered yes, in agent order, scored by the benchmark's rule,
+    the exact set and the set F1, for every condition; beside the pool's majority, the benchmark's planner and the model alone."""
+    from feedback_state.swarm import LABELS, graded
+    from feedback_state.tasks import boolqa_extract_answer
+
+    tasks = {t["id"]: t for t in load_tasks(args.tasks)}
+    events = load_events(args.events)
+    stream = [json.loads(line) for line in args.stream.open()]
+    ids = [t for t in tasks if any(r["task_id"] == t for r in stream)]
+
+    def f1(pred, truth):
+        pred, truth = set(pred), set(truth)
+        return 0.0 if not pred else 2 * len(pred & truth) / (len(pred) + len(truth))
+
+    def score(name, note, answers: dict[str, list[str]], steps_right=None):
+        rows = [graded("Final answer: " + (", ".join(answers.get(t, [])) or "NONE"), tasks[t]) for t in ids]
+        out = {"condition": name, "note": note, "tasks": len(ids), "accuracy": sum(r["correct"] for r in rows) / len(ids),
+               "exact_accuracy": sum(r["exact"] for r in rows) / len(ids),
+               "set_f1": sum(f1(r["predicted"], tasks[t]["root_causes"]) for r, t in zip(rows, ids)) / len(ids),
+               "guesses": sum(len(answers.get(t, [])) for t in ids) / len(ids)}
+        if steps_right is not None:
+            out["substep_accuracy"] = steps_right
+        return out
+
+    def from_verdicts(verdict: dict[str, str]) -> dict[str, list[str]]:
+        return {t: [c for c in LABELS if verdict.get(f"{t}::{c}") == "yes"] for t in ids}
+
+    results = []
+    for spec in args.eval or []:
+        name, directory = spec.split("=", 1)
+        gens = [json.loads(line) for line in (Path(directory) / "generations.jsonl").open()]
+        verdict = {g["id"]: boolqa_extract_answer(g.get("generation", "")) for g in gens}
+        right = sum(g["correct"] for g in gens) / max(1, len(gens))
+        results.append(score(name, f"the central model's sub-step verdicts ({shown(Path(directory))})", from_verdicts(verdict), right))
+    gold = {r["id"]: r["answer"] for r in stream}
+    maj = {}
+    for r in stream:
+        votes = [boolqa_extract_answer(x) for x in r["peer_responses"].values()]
+        maj[r["id"]] = "yes" if votes.count("yes") > votes.count("no") else "no"
+    results.append(score("pool majority", "per sub-step, the majority of the peers' verdicts (ties: no)", from_verdicts(maj),
+                         sum(maj[i] == gold[i] for i in gold) / len(gold)))
+    for k in sorted(stream[0]["peer_responses"], key=lambda x: int(x.split("_")[1])):
+        one = {r["id"]: boolqa_extract_answer(r["peer_responses"][k]) for r in stream}
+        results.append(score(f"{k}: {stream[0]['peer_metadata'][k]['model']}", "one peer's verdicts", from_verdicts(one),
+                             sum(one[i] == gold[i] for i in gold) / len(gold)))
+    results.append(score("MARBLE swarm", "the benchmark's planner", {t: graded(events[t]["swarm"]["final"], tasks[t])["predicted"] for t in ids}))
+    results.append(score("question alone (five queries)", "the central model investigating by itself", {t: graded(events[t]["solo"]["final"], tasks[t])["predicted"] for t in ids}))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps({"stream": shown(args.stream), "events": shown(args.events), "results": results}, indent=1))
+    lines = [f"# {args.title}: task-level diagnosis from the sub-step verdicts", "",
+             "| condition | accuracy | exact set | set F1 | guesses | sub-step accuracy |", "|---|---:|---:|---:|---:|---:|"]
+    for r in results:
+        ss = f"{100 * r['substep_accuracy']:.1f}" if "substep_accuracy" in r else "-"
+        lines.append(f"| {r['condition']} | {100 * r['accuracy']:.1f} | {100 * r['exact_accuracy']:.1f} | {100 * r['set_f1']:.1f} | {r['guesses']:.2f} | {ss} |")
+    args.out.with_suffix(".md").write_text("\n".join(lines) + "\n")
+    print("\n".join(lines))
+
+
 def cmd_merge(args) -> None:
     from feedback_state.swarm import stream_record, verdict_answer
     from pipeline.evaluate import summarise
@@ -292,6 +408,18 @@ def main(argv=None) -> None:
                   ("--anomaly-duration", dict(type=int, default=60)), ("--gpu-memory-utilization", dict(type=float, default=0.6)),
                   ("--max-model-len", dict(type=int, default=16384)), ("--limit", dict(type=int, default=None)), ("--out", dict(type=Path, required=True))):
         t.add_argument(a, **kw)
+    st = sub.add_parser("steps")
+    st.add_argument("--events", type=Path, required=True, help="a finished swarm run: the directory holding shard*/events.jsonl")
+    st.add_argument("--tasks", type=Path, required=True)
+    st.add_argument("--limit", type=int, default=None, help="only the first N tasks")
+    st.add_argument("--out", type=Path, required=True)
+    dg = sub.add_parser("diagnose")
+    dg.add_argument("--tasks", type=Path, required=True)
+    dg.add_argument("--events", type=Path, required=True)
+    dg.add_argument("--stream", type=Path, required=True)
+    dg.add_argument("--eval", action="append", default=None, help="condition=directory (repeatable)")
+    dg.add_argument("--title", default="swarm steps")
+    dg.add_argument("--out", type=Path, required=True)
     m = sub.add_parser("merge")
     m.add_argument("--tasks", type=Path, required=True)
     m.add_argument("--out", type=Path, required=True)
@@ -306,7 +434,7 @@ def main(argv=None) -> None:
     m.add_argument("--partial", action="store_true")
     args = ap.parse_args(argv)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    {"run": cmd_run, "team": cmd_team, "merge": cmd_merge}[args.cmd](args)
+    {"run": cmd_run, "team": cmd_team, "merge": cmd_merge, "steps": cmd_steps, "diagnose": cmd_diagnose}[args.cmd](args)
 
 
 if __name__ == "__main__":

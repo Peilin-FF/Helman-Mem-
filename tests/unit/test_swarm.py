@@ -125,6 +125,53 @@ def test_a_team_of_different_models_serves_each_once_and_gives_every_agent_its_o
     assert route_for("openai/Qwen3-4B", None, "http://one") == "http://one"
 
 
+def test_a_finished_run_becomes_sub_step_questions_for_the_pool_of_peers(tmp_path):
+    from pipeline.swarm import cmd_steps, evidence_of
+
+    tasks = [json.loads(l) for l in TASKS.open()][:2]
+    shard = tmp_path / "run" / "shard0"; shard.mkdir(parents=True)
+    with (shard / "events.jsonl").open("w") as f:
+        for t in tasks:
+            its = [{"iteration": 1, "results": [{"agent2": "Result from the model: checked pg_locks\nResult from the function: []"}]},
+                   {"iteration": 2, "results": [{"agent2": "again"}, {"agent5": "Result from the function: big SELECTs"}]}]
+            f.write(json.dumps({"id": t["id"], "model": "Qwen3-4B", "swarm": {"iterations": its}}) + "\n")
+    ev = json.loads((shard / "events.jsonl").open().readline())
+    assert evidence_of(ev, "agent2").startswith("[iteration 1] Result from the model: checked pg_locks") and "[iteration 2] again" in evidence_of(ev, "agent2")
+    assert evidence_of(ev, "agent1") == "(the agent ran no query on this task)"
+    out = tmp_path / "q" / "test.jsonl"
+    cmd_steps(type("A", (), {"events": tmp_path / "run", "tasks": TASKS, "limit": 2, "out": out})())
+    rows = [json.loads(l) for l in out.open()]
+    assert len(rows) == 10 and rows[0]["id"] == f"{tasks[0]['id']}::INSERT_LARGE_DATA" and rows[0]["task_type"] == "boolqa"
+    assert [r["answer"] for r in rows[:5]] == ["yes" if c in tasks[0]["root_causes"] else "no" for c in
+                                               ["INSERT_LARGE_DATA", "LOCK_CONTENTION", "VACUUM", "REDUNDANT_INDEX", "FETCH_LARGE_DATA"]]
+    assert rows[1]["problem"] == "Is LOCK_CONTENTION a root cause of this database's performance issue?" and "checked pg_locks" in rows[1]["context"]
+    assert rows[1]["peer_responses"] == {} and rows[1]["task_id"] == tasks[0]["id"] and rows[1]["evidence_model"] == "Qwen3-4B"
+
+
+def test_the_steps_experiment_has_the_pool_answer_then_the_usual_steps_then_the_diagnosis(tmp_path):
+    cfg = load(EXPERIMENTS / "swarm_steps.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
+    assert Layout(cfg).registry.problems() == []
+    plan = Plan(cfg, "swarm_steps.yaml", smoke=False, gpus=[0, 1, 2, 3])
+    build = {j.name: j for j in plan.swarm()}
+    assert sorted(build) == ["steps_marble_db_steps_q", "steps_marble_db_steps_qwen3_8b_q"] and all(j.gpus == 0 for j in build.values())
+    assert f"--events {tmp_path}/out/swarm/q3_4b/marble_db --tasks {TASKS} --out {tmp_path}/data/marble_db_steps_q/test.jsonl" in build["steps_marble_db_steps_q"].cmd
+    assert f"--events {tmp_path}/out/swarm/qwen3_8b/marble_db_qwen3_8b " in build["steps_marble_db_steps_qwen3_8b_q"].cmd
+    peers = plan.peers()
+    assert len(peers) == 12 and all("--mode honest" in j.cmd and "--shards 1 --shard 0" in j.cmd for j in peers)                # six peers, two streams, one shard each
+    assert any(f"--stream {tmp_path}/data/marble_db_steps_q/test.jsonl --output {tmp_path}/data/marble_db_steps_answers/gemma-3-4b-it" in j.cmd for j in peers)
+    assert any("DeepSeek-R1-Distill-Qwen-7B" in j.cmd and j.cmd.rstrip().endswith("--reasoning") for j in peers)
+    add = {j.name: j for j in plan.streams()}["stream_marble_db_steps"]
+    assert add.cmd.startswith(f"python -m pipeline.streams add --base {tmp_path}/data/marble_db_steps_q/test.jsonl --answers {tmp_path}/data/marble_db_steps_answers --peer gemma-3-4b-it")
+    assert add.cmd.endswith(f"--peer DeepSeek-R1-Distill-Qwen-7B --out {tmp_path}/data/marble_db_steps/test.jsonl") and add.gpus == 0
+    dg = {j.name: j for j in plan.diagnose()}["diagnose_q3_4b_marble_db_steps"]
+    assert f"--eval solo={tmp_path}/out/eval/q3_4b/marble_db_steps/solo --eval tilt={tmp_path}/out/eval/q3_4b/marble_db_steps+own/tilt" in dg.cmd
+    assert f"--eval combination={tmp_path}/out/eval/q3_4b/marble_db_steps+own/combination" in dg.cmd and f"--events {tmp_path}/out/swarm/q3_4b/marble_db " in dg.cmd
+    assert all("--peers 7 " in j.cmd for j in plan.features()) and plan.record()[0].cmd.endswith("--own-slot 6")                # the pool of six and the model's own answer
+    smoke = Plan(cfg, "swarm_steps.yaml", smoke=True, gpus=[0])
+    sj = smoke.swarm()[0]
+    assert sj.cmd.endswith("--limit 4") and f"--events {tmp_path}/out/swarm/q3_4b/marble_db " in sj.cmd and str(sj.done).startswith(f"{tmp_path}/out/smoke/data/")
+
+
 def test_shards_claim_tasks_and_a_stopped_shard_gives_its_unfinished_ones_back(tmp_path):
     from pipeline.swarm import all_done_ids, claim, release_stale_claims
 

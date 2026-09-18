@@ -1,0 +1,4 @@
+# The pool's answers to every sub-step question of marble_db_steps_qwen3_8b_q (pipeline.peers --mode honest), one directory per peer.
+kind: answers
+base: marble_db_steps_qwen3_8b_q
+mode: honest
