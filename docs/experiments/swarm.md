@@ -108,6 +108,36 @@ Same experiment (`configs/experiments/swarm_qwen3_8b.yaml`), 100 tasks, `outputs
   100 events. The same rule with the own ability from a running average of the verified own answers (online) would consult on
   40 tasks and score 67; with the true value, 24 tasks and 72; choosing right everywhere, 90.
 
+## Results: a pool of different models (2026-09-18)
+
+Qwen3-4B central, the six QA peers as candidates, every answer verified against the injected anomaly; one injection per task, all
+seven models on the same database at once (read-only sessions, the prompted query protocol).
+
+`swarm_solvers`, every model a whole-problem solver, 100 events (`outputs/tables/swarm_solvers.md`, `data/marble_db_solvers/solvers.json`):
+
+| | accuracy | exact set | set F1 | guesses | queries that ran |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-4B alone (own diagnosis) | 46.0 | 8.0 | 30.4 | 1.75 | 8% |
+| Gemma-3-4B / Phi-4-mini / R1-Distill alone | 46 / 48 / 46 | 6 / 4 / 2 | 30.2 / 28.9 / 27.4 | 1.57 / 1.66 / 1.82 | 33% / 38% / 5% |
+| Qwen2.5-Coder / Llama-3.1 / DeepSeek-Coder alone | 56 / 54 / 56 | 6 / 7 / 7 | 33.5 / 34.9 / 34.4 | 2.05 / 2.07 / 2.03 | 63% / 33% / 54% |
+| question + peers | 54.0 | 5.0 | 34.1 | 2.10 | |
+| peers + memory | 51.0 | 6.0 | 32.5 | 2.06 | |
+| combination (consulted 67%) | 49.0 | | | | |
+| always guess the maximum (chance) | 65.0 | – | 37.3 | 2.50 | |
+
+Record AUC 0.54; on average 3.06 of the 6 peers are right on a task, with no stable pattern by peer. Consulting lifts Qwen3-4B by 8
+points, mostly by making it name more causes; the memory adds nothing because there is nothing systematic to learn.
+
+`swarm_pool`, the pool on every sub-step, 500 events (`outputs/tables/swarm_pool*.md`, `data/marble_db_pool/teams.json`): sub-step
+accuracy alone 66.0, question + peers 66.2, peers + memory 68.8, combination 69.0 (record AUC 0.66; reading beats alone where trust is
+high: 68.7 vs 64.8 at 0.6-0.8, 82.2 vs 79.2 above 0.8), but always answering no scores 70, a peer's yes is right about a third of the
+time (the base rate), and the diagnosis assembled from the yes-verdicts collapses at task level (7-10 against 24 alone). `swarm_steps`
+(the pool reading evidence one agent gathered) was run once with the central model blind to the evidence; it is a baseline only.
+
+Why: 37% to 95% of each model's queries fail, almost always on invented column names for `pg_stat_statements` (`query_time`,
+`duration`, `operation`), so diagnoses come from a prior (INSERT + LOCK), every solver is below the 65 of maximal guessing, and a
+reliability memory needs sources whose reliability differs. The environment is real; models of this size cannot operate it.
+
 ## Why the memory gained so little, and what follows
 
 1. The hit rule cannot reward discounting (a wrong guess is free; chance 65); exact set and set F1 can.
