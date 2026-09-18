@@ -144,7 +144,8 @@ def test_a_finished_run_becomes_sub_step_questions_for_the_pool_of_peers(tmp_pat
     assert len(rows) == 10 and rows[0]["id"] == f"{tasks[0]['id']}::INSERT_LARGE_DATA" and rows[0]["task_type"] == "boolqa"
     assert [r["answer"] for r in rows[:5]] == ["yes" if c in tasks[0]["root_causes"] else "no" for c in
                                                ["INSERT_LARGE_DATA", "LOCK_CONTENTION", "VACUUM", "REDUNDANT_INDEX", "FETCH_LARGE_DATA"]]
-    assert rows[1]["problem"] == "Is LOCK_CONTENTION a root cause of this database's performance issue?" and "checked pg_locks" in rows[1]["context"]
+    assert rows[1]["problem"].endswith("Question: is LOCK_CONTENTION a root cause of this database's performance issue?")
+    assert "checked pg_locks" in rows[1]["problem"] and rows[1]["problem"].startswith(tasks[0]["task"].strip()[:40]) and rows[1]["context"] == ""
     assert rows[1]["peer_responses"] == {} and rows[1]["task_id"] == tasks[0]["id"] and rows[1]["evidence_model"] == "Qwen3-4B"
 
 
@@ -170,6 +171,16 @@ def test_the_steps_experiment_has_the_pool_answer_then_the_usual_steps_then_the_
     smoke = Plan(cfg, "swarm_steps.yaml", smoke=True, gpus=[0])
     sj = smoke.swarm()[0]
     assert sj.cmd.endswith("--limit 4") and f"--events {tmp_path}/out/swarm/q3_4b/marble_db " in sj.cmd and str(sj.done).startswith(f"{tmp_path}/out/smoke/data/")
+
+
+def test_any_model_can_query_the_database_its_statement_is_parsed_from_its_reply():
+    from feedback_state.swarm import extract_sql
+
+    assert extract_sql("Locks first.\n```sql\nSELECT * FROM pg_locks WHERE NOT granted;\n```") == "SELECT * FROM pg_locks WHERE NOT granted;"
+    assert extract_sql("<think>```sql\nSELECT 1;\n```</think>Check waits.\n```SQL\nSELECT 2;\n```\n```sql\nSELECT 3;\n```") == "SELECT 3;"   # after thinking, the last block
+    assert extract_sql("```\nselect count(*) from pg_stat_activity\n```") == "select count(*) from pg_stat_activity"
+    assert extract_sql("I would run:\nSELECT query FROM pg_stat_statements ORDER BY calls DESC;\nthat is all") == "SELECT query FROM pg_stat_statements ORDER BY calls DESC;"
+    assert extract_sql("I cannot query the database.") is None and extract_sql("") is None
 
 
 def test_a_pool_of_peers_investigates_every_sub_step_and_becomes_a_stream(tmp_path):
@@ -208,6 +219,7 @@ def test_a_pool_of_peers_investigates_every_sub_step_and_becomes_a_stream(tmp_pa
     assert len(rows) == 10 and rows[0]["task_type"] == "boolqa" and sorted(rows[0]["peer_responses"]) == ["peer_0", "peer_1"]
     first = rows[[r["cause"] for r in rows[:5]].index(tasks[0]["root_causes"][0])]
     assert first["answer"] == "yes" and first["peer_correct"] == {"peer_0": 1.0, "peer_1": 0.0} and first["peer_metadata"]["peer_0"]["model"] == "A"
+    assert first["problem"].startswith(tasks[0]["task"].strip()[:40]) and first["problem"].endswith("a root cause of this database's performance issue?")
     own = [json.loads(l) for l in (ns.solo / "generations.jsonl").open()]
     assert len(own) == 10 and sum(r["correct"] for r in own) == 10 - sum(len(t["root_causes"]) for t in tasks)      # the own team says no everywhere
     assert json.load((ns.solo / "eval_metrics.json").open())["mode"] == "solo" and json.load((ns.stream.parent / "teams.json").open())["A"]["yes_rate"] == 1.0

@@ -112,10 +112,11 @@ def cmd_run(args) -> None:
         api_base = f"http://localhost:{args.port}/v1"
     else:
         api_base = args.api_base
-    patch_llm(api_base, thinking=False, routes=routes, force_tool=args.force_tool)
     llm = f"openai/{args.served_name}"
     agent_llms = {a: f"openai/{name}" for a, name in json.loads(args.agent_models).items()} if args.agent_models else None
     teams = {n: {"llm": f"openai/{n}", "reasoning": bool(v.get("reasoning"))} for n, v in json.loads(args.teams).items()} if args.teams else None
+    patch_llm(api_base, thinking=False, routes=routes, force_tool=args.force_tool,
+              reasoning_models=tuple(n for n, v in (teams or {}).items() if v["reasoning"]))
     env = make_env(db)
     try:
         ran = 0
@@ -271,9 +272,11 @@ def cmd_steps(args) -> None:
             for a in t["agents"]:
                 cause = cause_of(a["profile"])
                 rec = {"id": f"{t['id']}::{cause}", "task_type": "boolqa", "source": t["scenario"], "task_id": t["id"], "cause": cause,
-                       "agent_id": a["agent_id"], "problem": f"Is {cause} a root cause of this database's performance issue?",
-                       "context": (f"{t['task'].strip()}\n\nThe agent assigned to {cause} investigated the database ({a['profile'].strip()}) "
-                                   f"Its queries and their results:\n{evidence_of(ev, a['agent_id'])}"),
+                       "agent_id": a["agent_id"],
+                       # everything in the question itself: the central model's prompt shows a passage only for the reading task type
+                       "problem": (f"{t['task'].strip()}\n\nThe agent assigned to {cause} investigated the database ({a['profile'].strip()}) "
+                                   f"Its queries and their results:\n{evidence_of(ev, a['agent_id'])}\n\n"
+                                   f"Question: is {cause} a root cause of this database's performance issue?"), "context": "",
                        "answer": "yes" if cause in t["root_causes"] else "no", "root_causes": list(t["root_causes"]),
                        "number_of_labels_pred": int(t["number_of_labels_pred"]), "labels": list(t["labels"]), "evidence_model": ev.get("model"),
                        "peer_responses": {}, "peer_correct": {}, "correctness_by_peer": {}, "peer_metadata": {}}
@@ -380,7 +383,7 @@ def cmd_merge_pool(args) -> None:
             for cause in LABELS:
                 gold = cause in t["root_causes"]
                 rec = {"id": f"{t['id']}::{cause}", "task_type": "boolqa", "source": t["scenario"], "task_id": t["id"], "cause": cause,
-                       "problem": f"Is {cause} a root cause of this database's performance issue?", "context": t["task"].strip(),
+                       "problem": f"{t['task'].strip()}\n\nQuestion: is {cause} a root cause of this database's performance issue?", "context": "",
                        "answer": "yes" if gold else "no", "root_causes": list(t["root_causes"]), "number_of_labels_pred": int(t["number_of_labels_pred"]),
                        "labels": list(t["labels"]), "peer_responses": {}, "peer_correct": {}, "correctness_by_peer": {}, "peer_metadata": {}}
                 for k, team in enumerate(peers):
@@ -502,7 +505,7 @@ def main(argv=None) -> None:
     r.add_argument("--routes", default=None, help="JSON, served name -> base URL: the servers of a team (started by `team`)")
     r.add_argument("--agent-models", default=None, help="JSON, agent id -> served name: an agent's own model (default: the planner's)")
     r.add_argument("--teams", default=None, help="JSON, served name -> {reasoning}: a pool of peers, one team (all five agents) per model")
-    r.add_argument("--force-tool", default=None, help="name the tool in an agent's action, so every model makes the call (e.g. query_db)")
+    r.add_argument("--force-tool", default=None, help="an agent's action is this tool, asked for as one SQL statement in a code block and parsed here: every model can query (e.g. query_db)")
     t = sub.add_parser("team")
     for a, kw in (("--tasks", dict(type=Path, required=True)), ("--model", dict(required=True)), ("--served-name", dict(required=True)),
                   ("--tool-parser", dict(default="hermes")), ("--agents", dict(default=None, help="JSON, agent id -> {name, path, parser}")),

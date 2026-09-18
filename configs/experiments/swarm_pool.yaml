@@ -14,8 +14,8 @@ record: {fit: self}
 eval_conditions: [tilt, peers]
 swarm:
   tasks: datasets/marble_db/tasks.jsonl
-  force_tool: query_db                           # an agent's action names the tool, so every model makes the call (guided decoding);
-                                                 # left to choose, several of the peers answer in prose and never query
+  force_tool: query_db                           # an agent's action is this tool: the model writes one SQL statement in a code block,
+                                                 # parsed in our wrapper (no function-calling API), so every model can query
   workers: 5                                     # task loops sharing the seven servers, each with its own PostgreSQL cluster
   port: 8180                                     # +i per served model
   pg_port: 5470                                  # +k per worker; clusters under pg_data/<port>

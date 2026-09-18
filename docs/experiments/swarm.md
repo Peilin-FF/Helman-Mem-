@@ -142,9 +142,13 @@ R1-Distill-Qwen-7B) and Qwen3-4B itself (its own answer). Every sub-step, "is X 
 from that peer's own queries, ending `Final answer: yes|no`; the injected anomaly verifies every one, the record tracks every peer,
 and Qwen3-4B consults the pool with the tilt or answers alone. A task's diagnosis is the causes it answers yes to.
 
-Every model can make the benchmark's tool call when the call is named: `swarm.force_tool: query_db` sets a named tool choice on an
-agent's action, and vLLM constrains the output to valid arguments by guided decoding, no tool-call parser needed. Left to choose
-(`tool_choice: auto`, the benchmark's default), Phi-4-mini and Qwen2.5-Coder answer in prose and never query.
+Every model can query the database; what differs is the function-calling plumbing. Left to choose (`tool_choice: auto`, the
+benchmark's default, with vLLM's parsers) Phi-4-mini and Qwen2.5-Coder answer in prose and never call the tool; a server-side forced
+call (named tool choice, guided decoding) works for those two but returns empty arguments for Gemma-3, cut-off JSON for R1-Distill
+and server errors for DeepSeek-Coder-V2-Lite (probed 2026-09-18). So `swarm.force_tool: query_db` uses no function-calling API: in
+our litellm wrapper an agent's action asks the model for one PostgreSQL statement in a ```sql block (after its thinking, for a
+reasoning model), parses it, and hands the benchmark's agent a regular tool call. One protocol for the whole pool; the benchmark's
+agent code is untouched.
 
 ```bash
 bash run.sh configs/experiments/swarm_pool.yaml --smoke --gpus 0,1,2,3,4,5,6

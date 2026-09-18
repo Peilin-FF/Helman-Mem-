@@ -224,8 +224,24 @@ def route_for(model: str, routes: dict | None, default: str) -> str:
     return (routes or {}).get(str(model or "").split("/", 1)[-1], default)
 
 
+TOOL_PROTOCOL = ("\n\nTo act you must query the database: reply with your reasoning in a sentence or two, then exactly one PostgreSQL statement "
+                 "inside a ```sql code block, and nothing after it.")
+
+
+def extract_sql(text: str) -> str | None:
+    """The SQL statement a model wrote: the last ```sql block after a think block (any fenced block, else a trailing statement)."""
+    text = str(text or "").rsplit("</think>", 1)[-1]
+    blocks = re.findall(r"```(?:sql|postgresql|postgres|psql)\s*\n(.*?)```", text, flags=re.IGNORECASE | re.DOTALL) \
+        or re.findall(r"```\w*\s*\n(.*?)```", text, flags=re.DOTALL)
+    sql = blocks[-1].strip() if blocks else None
+    if not sql:
+        m = re.findall(r"(?:^|\n)\s*((?:SELECT|WITH|EXPLAIN|SHOW)\b[^;]*;)", text, flags=re.IGNORECASE)
+        sql = m[-1].strip() if m else None
+    return sql or None
+
+
 def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, timeout: int = 300, routes: dict | None = None,
-              force_tool: str | None = None) -> None:
+              force_tool: str | None = None, reasoning_models: tuple = ()) -> None:
     """Route the benchmark's litellm calls to local OpenAI-compatible servers, thinking off: every model to api_base, or, with
     routes (served name -> base URL), each model to its own server (a team whose agents are different models)."""
     for k in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -240,21 +256,40 @@ def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, tim
 
     def completion(*args, **kwargs):
         kwargs.setdefault("api_base", route_for(kwargs.get("model", args[0] if args else ""), routes, api_base))
-        if force_tool and kwargs.get("tools"):
-            # An agent's action: name the tool, so the server constrains the output to valid arguments for it (guided decoding).
-            # Left to choose, several models answer in prose and never call the tool; named, every model queries the database.
-            named = [t for t in kwargs["tools"] if t.get("function", {}).get("name") == force_tool]
-            if named:
-                kwargs["tools"], kwargs["tool_choice"] = named, {"type": "function", "function": {"name": force_tool}}
         kwargs.setdefault("api_key", api_key)
         kwargs.setdefault("timeout", timeout)
+        named = [t for t in kwargs.get("tools") or [] if t.get("function", {}).get("name") == force_tool] if force_tool else []
+        if named:
+            # An agent's action, for any model: no function-calling API (several peers never call the tool when left to choose, and a
+            # server-side forced call breaks on others). The model is asked for one SQL statement in a code block; we parse it and
+            # hand the benchmark's agent a regular tool call. The benchmark's agent code is untouched.
+            params = named[0]["function"].get("parameters", {})
+            arg = (params.get("required") or list(params.get("properties", {"sql": 0})))[0]
+            kwargs.pop("tools", None); kwargs.pop("tool_choice", None)
+            msgs = [dict(m) for m in kwargs.get("messages") or []]
+            if msgs:
+                msgs[-1]["content"] = str(msgs[-1].get("content") or "") + TOOL_PROTOCOL
+                kwargs["messages"] = msgs
+            model = str(kwargs.get("model", args[0] if args else "")).split("/", 1)[-1]
+            if model in reasoning_models:
+                kwargs["max_tokens"] = max(int(kwargs.get("max_tokens") or 0), 3072)     # room to think before the statement
         if not thinking:
             extra = dict(kwargs.get("extra_body") or {})
             ct = dict(extra.get("chat_template_kwargs") or {})
             ct.setdefault("enable_thinking", False)
             extra["chat_template_kwargs"] = ct
             kwargs["extra_body"] = extra
-        return original(*args, **kwargs)
+        resp = original(*args, **kwargs)
+        if named:
+            from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+            msg = resp.choices[0].message
+            sql = extract_sql(msg.content)
+            if sql:
+                msg.tool_calls = [ChatCompletionMessageToolCall(id=f"call_{int(time.time() * 1000) % 10 ** 9}", type="function",
+                                                                function=Function(name=force_tool, arguments=json.dumps({arg: sql})))]
+                msg.content = str(msg.content or "").rsplit("</think>", 1)[-1].split("```", 1)[0].strip()
+        return resp
 
     litellm.completion = completion
 
