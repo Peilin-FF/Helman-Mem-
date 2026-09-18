@@ -502,6 +502,10 @@ def _dbdiag_prompt(record: dict[str, Any], with_context: bool) -> str:
 REGISTRY: dict[str, TaskSpec] = {
     # database diagnosis (the swarm): the agents' findings carry their own verdict labels, the central model's diagnosis is graded
     "dbdiag": TaskSpec("dbdiag", _dbdiag_target, _dbdiag_correct, _dbdiag_extract, _dbdiag_prompt, precomputed=True),
+    # ClassEval, one method per event (feedback_state.classeval): a candidate's label is its executed tests, stored per candidate
+    # like code; the question (record["problem"]) already is the full prompt every candidate writer gets.
+    "classeval": TaskSpec("classeval", _code_target, _code_correct, code_extract_answer, lambda record, with_context: str(record.get("problem", "")),
+                          precomputed=True),
     "math": TaskSpec("math", _math_target, _math_correct, extract_final_answer, _math_prompt),
     "rag": TaskSpec("rag", _rag_target, _rag_correct, qa_extract_answer, _rag_prompt),
     "boolqa": TaskSpec(

@@ -27,6 +27,7 @@ INSTRUCTIONS = {
     "shortqa": "Answer briefly. End with a line of the form 'Final answer: <answer>'.",
     "code": "Write a complete Python program that reads from standard input and writes the answer to standard "
             "output (use input()/sys.stdin and print()). Return the program inside a single ```python code block.",
+    "classeval": "Write the method. Return only that method, the full `def` with its body, inside a single ```python code block.",
     "dbdiag": "Decide which of the possible root causes explain the database's performance issue, most likely first (one to three). "
               "Reason briefly from the evidence, then end with a line of the form 'Final answer: <CAUSE_1>, <CAUSE_2>' using the exact names.",
 }
