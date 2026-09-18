@@ -2,3 +2,4 @@
 hf_id: meta-llama/Llama-3.1-8B-Instruct
 path: Meta-Llama-3.1-8B-Instruct
 engine: vllm
+tool_parser: llama3_json               # vLLM's tool-call parser, for the agent swarm (pipeline.swarm)

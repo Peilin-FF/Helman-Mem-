@@ -1,0 +1,3 @@
+# agent1 of MultiAgentBench's database diagnosis in the team of different models: llama31 as the agent investigating INSERT_LARGE_DATA.
+model: llama31
+role: INSERT_LARGE_DATA

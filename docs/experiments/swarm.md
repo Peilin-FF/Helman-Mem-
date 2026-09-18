@@ -133,6 +133,21 @@ configs/experiments/swarm_qwen3_8b.yaml       base: swarm.yaml; central [qwen3_8
 bash run.sh configs/experiments/swarm_qwen3_8b.yaml --gpus 0,5,6,7
 ```
 
+## A team of different models
+
+The benchmark gives the planner and every agent one `llm`, so its five experts are five profiles over one model; its engine also
+reads an optional `llm` per agent. `swarm_team` uses that: Qwen3-4B stays the planner and the central model, and agent1 ... agent5
+are the models registered as the dataset's peers (`configs/datasets/marble_db_team.yaml`, `configs/peers/swarm_team_*.yaml`:
+Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, Mistral-7B-v0.3, Qwen3-8B). An agent model must make the `query_db` tool call through vLLM,
+with the parser named in its model file (`tool_parser:`). Whenever a swarm dataset's peers are not the central model, the swarm step
+runs `python -m pipeline.swarm team`: every distinct model is served once, on its own GPU when there are enough, and `swarm.workers`
+task loops, each with its own PostgreSQL cluster, share the servers.
+
+```bash
+bash run.sh configs/experiments/swarm_team.yaml --smoke --gpus 0,1,2,3,4,5
+bash run.sh configs/experiments/swarm_team.yaml --gpus 0,1,2,3,4,5
+```
+
 ## Outputs
 
 ```

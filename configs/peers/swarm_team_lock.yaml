@@ -1,0 +1,3 @@
+# agent2 of MultiAgentBench's database diagnosis in the team of different models: ministral as the agent investigating LOCK_CONTENTION.
+model: ministral
+role: LOCK_CONTENTION

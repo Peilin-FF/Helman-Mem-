@@ -2,3 +2,4 @@
 hf_id: Qwen/Qwen2.5-7B-Instruct
 path: Qwen2.5-7B-Instruct
 engine: vllm
+tool_parser: hermes               # vLLM's tool-call parser, for the agent swarm (pipeline.swarm)

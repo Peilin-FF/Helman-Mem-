@@ -214,8 +214,14 @@ class MarbleDB:
 
 
 # --- the LLM behind the benchmark's agents ---------------------------------------------------------------------------------
-def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, timeout: int = 300) -> None:
-    """Route the benchmark's litellm calls to a local OpenAI-compatible server, thinking off."""
+def route_for(model: str, routes: dict | None, default: str) -> str:
+    """The server of a model: routes maps a served name (with or without litellm's 'openai/' prefix) to its base URL."""
+    return (routes or {}).get(str(model or "").split("/", 1)[-1], default)
+
+
+def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, timeout: int = 300, routes: dict | None = None) -> None:
+    """Route the benchmark's litellm calls to local OpenAI-compatible servers, thinking off: every model to api_base, or, with
+    routes (served name -> base URL), each model to its own server (a team whose agents are different models)."""
     for k in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
         os.environ.pop(k, None)
     os.environ["NO_PROXY"] = os.environ["no_proxy"] = "localhost,127.0.0.1"
@@ -227,7 +233,7 @@ def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, tim
     original = litellm.completion
 
     def completion(*args, **kwargs):
-        kwargs.setdefault("api_base", api_base)
+        kwargs.setdefault("api_base", route_for(kwargs.get("model", args[0] if args else ""), routes, api_base))
         kwargs.setdefault("api_key", api_key)
         kwargs.setdefault("timeout", timeout)
         if not thinking:
@@ -241,27 +247,41 @@ def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, tim
     litellm.completion = completion
 
 
-def serve_vllm(model_path: str, served_name: str, port: int, log: Path, gpu_memory_utilization: float = 0.6, max_model_len: int = 16384):
-    """Start vLLM's OpenAI server for the swarm's model on the visible GPU and wait for it; returns the process."""
-    import urllib.request
-
+def start_vllm(model_path: str, served_name: str, port: int, log: Path, gpu_memory_utilization: float = 0.6, max_model_len: int = 16384,
+               tool_parser: str = "hermes", gpu: str | None = None):
+    """Start vLLM's OpenAI server for one model (tool calling on, with the model's parser), on `gpu` if given, else the visible GPU."""
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["vllm", "serve", model_path, "--served-model-name", served_name, "--port", str(port), "--max-model-len", str(max_model_len),
-           "--gpu-memory-utilization", str(gpu_memory_utilization), "--enable-auto-tool-choice", "--tool-call-parser", "hermes"]
+           "--gpu-memory-utilization", str(gpu_memory_utilization), "--enable-auto-tool-choice", "--tool-call-parser", tool_parser]
     env = {k: v for k, v in os.environ.items() if k.lower() not in ("all_proxy", "https_proxy", "http_proxy")}
-    proc = subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)
-    for _ in range(240):
+    if gpu is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)
+
+
+def wait_vllm(proc, served_name: str, port: int, log: Path, minutes: int = 20) -> None:
+    import urllib.request
+
+    for _ in range(minutes * 12):
         if proc.poll() is not None:
             raise SystemExit(f"vLLM exited with {proc.returncode}; see {log}")
         try:
             with urllib.request.urlopen(f"http://localhost:{port}/v1/models", timeout=3) as r:
                 if served_name in r.read().decode():
-                    return proc
+                    return
         except Exception:
             pass
         time.sleep(5)
     proc.terminate()
-    raise SystemExit(f"vLLM on port {port} did not come up in 20 minutes; see {log}")
+    raise SystemExit(f"vLLM on port {port} did not come up in {minutes} minutes; see {log}")
+
+
+def serve_vllm(model_path: str, served_name: str, port: int, log: Path, gpu_memory_utilization: float = 0.6, max_model_len: int = 16384,
+               tool_parser: str = "hermes", gpu: str | None = None):
+    """Start vLLM's OpenAI server for the swarm's model and wait for it; returns the process."""
+    proc = start_vllm(model_path, served_name, port, log, gpu_memory_utilization, max_model_len, tool_parser, gpu)
+    wait_vllm(proc, served_name, port, log)
+    return proc
 
 
 # --- the benchmark's swarm, per task -----------------------------------------------------------------------------------------
@@ -304,9 +324,10 @@ def summarize_results(agents_results: list[dict]) -> str:
     return summary
 
 
-def run_swarm(task: dict, llm: str, env, log) -> dict:
+def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None) -> dict:
     """The benchmark's star coordination on one task: the planner assigns, the agents act, the planner summarises and
-    decides, for up to max_iterations. Returns the planner's final decision, the iterations, and each agent's finding."""
+    decides, for up to max_iterations. Returns the planner's final decision, the iterations, and each agent's finding.
+    llm is the planner's model; agent_llms (agent id -> model) gives an agent its own, as the benchmark's per-agent `llm` does."""
     marble_on_path()
     from marble.agent.base_agent import BaseAgent
     from marble.engine.engine_planner import EnginePlanner
@@ -315,7 +336,7 @@ def run_swarm(task: dict, llm: str, env, log) -> dict:
     from marble.memory.shared_memory import SharedMemory
 
     config = marble_config(task, llm)
-    agents = [BaseAgent(config=a, env=env, model=llm) for a in task["agents"]]
+    agents = [BaseAgent(config=a, env=env, model=(agent_llms or {}).get(a["agent_id"], llm)) for a in task["agents"]]
     graph = AgentGraph(agents, config)
     for a in agents:
         a.set_agent_graph(graph)
@@ -361,12 +382,12 @@ def run_swarm(task: dict, llm: str, env, log) -> dict:
                   f"or 'Root cause investigated: {cause}. Verdict: NO' (YES if {cause} is a root cause of the performance issue, NO if it is not), "
                   f"then give the evidence in at most six sentences.")
         try:
-            text = model_prompting(llm_model=llm, messages=[{"role": "user", "content": prompt}], return_num=1, max_token_num=400,
-                                   temperature=0.0)[0].content or ""
+            text = model_prompting(llm_model=a.llm, messages=[{"role": "user", "content": prompt}], return_num=1, max_token_num=400,
+                                   temperature=0.0)[0].content or ""               # the agent reports with its own model
         except Exception as e:
             errors.append(f"finding {a.agent_id}: {type(e).__name__}: {str(e)[:300]}")
             text = f"Root cause investigated: {cause}. Verdict: NO\n(The agent failed to report: {type(e).__name__}.)"
-        findings.append({"agent_id": a.agent_id, "cause": cause, "text": text, "verdict": verdict_of(text),
+        findings.append({"agent_id": a.agent_id, "cause": cause, "model": str(a.llm).split("/", 1)[-1], "text": text, "verdict": verdict_of(text),
                          "correct": finding_correct(text, cause, task["root_causes"])})
     return {"final": final, "iterations": iterations, "findings": findings, "errors": errors}
 
@@ -421,7 +442,7 @@ def stream_record(event: dict, task: dict, model_name: str) -> dict:
         rec["peer_responses"][key] = f["text"]
         rec["peer_correct"][key] = float(f["correct"])
         rec["correctness_by_peer"][key] = int(f["correct"])
-        rec["peer_metadata"][key] = {"model": model_name, "agent_id": f["agent_id"], "cause": f["cause"], "verdict": f["verdict"],
+        rec["peer_metadata"][key] = {"model": f.get("model") or model_name, "agent_id": f["agent_id"], "cause": f["cause"], "verdict": f["verdict"],
                                      "received_context": True, "num_samples": 1}
     return rec
 

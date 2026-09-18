@@ -6,6 +6,9 @@
                                    --solo outputs/eval/q3_4b/marble_db/solo --swarm outputs/eval/q3_4b/marble_db+own/swarm \
                                    --verdicts outputs/eval/q3_4b/marble_db+own/verdicts --model /models/Qwen3-4B
 
+    python -m pipeline.swarm team  ... --agents '{"agent1": {"name": ..., "path": ..., "parser": ...}, ...}' --workers 5
+                                   a team whose agents are different models: every distinct model served once, the workers share them
+
 `run` starts vLLM's OpenAI server for the model on the visible GPU and a user-space PostgreSQL if none listens on --pg-port,
 then for every task it claims (the shards share the task list, in file order, and each takes the next free one through
 <out>/claims/, so the work balances; a stopped shard releases its unfinished claims when it restarts): reset the database, run the scenario's schema and benign queries,
@@ -95,14 +98,18 @@ def cmd_run(args) -> None:
     ensure_postgres(args.pg_port, args.pg_data)
     db = MarbleDB(args.pg_port)
     proc = None
-    if not args.api_base:
+    routes = json.loads(args.routes) if args.routes else None        # a team: served name -> base URL, servers started by `team`
+    if routes:
+        api_base = routes[args.served_name]
+    elif not args.api_base:
         proc = serve_vllm(args.model, args.served_name, args.port, out / "vllm.log", gpu_memory_utilization=args.gpu_memory_utilization,
-                          max_model_len=args.max_model_len)
+                          max_model_len=args.max_model_len, tool_parser=args.tool_parser)
         api_base = f"http://localhost:{args.port}/v1"
     else:
         api_base = args.api_base
-    patch_llm(api_base, thinking=False)
+    patch_llm(api_base, thinking=False, routes=routes)
     llm = f"openai/{args.served_name}"
+    agent_llms = {a: f"openai/{name}" for a, name in json.loads(args.agent_models).items()} if args.agent_models else None
     env = make_env(db)
     try:
         ran = 0
@@ -117,7 +124,7 @@ def cmd_run(args) -> None:
             inject = db.inject(task["anomalies"], args.anomaly_duration)
             log(f"    injected {[x['anomaly'] for x in task['anomalies']]} in {sum(x['seconds'] for x in inject):.0f}s")
             t1 = time.time()
-            swarm = run_swarm(task, llm, env, log)
+            swarm = run_swarm(task, llm, env, log, agent_llms)
             swarm.update(graded(swarm["final"], task))
             t2 = time.time()
             solo = run_solo(task, llm, env, args.iterations, log)
@@ -140,6 +147,62 @@ def cmd_run(args) -> None:
                 proc.wait(30)
             except Exception:
                 proc.kill()
+
+
+def cmd_team(args) -> None:
+    """A team whose agents are different models: serve every distinct model once (the planner's and the agents'), each with its
+    tool-call parser, spread over the visible GPUs; run the workers (each `run --shard k/N` with its own PostgreSQL cluster)
+    against those servers; stop the servers."""
+    import subprocess
+    import sys
+
+    from feedback_state.swarm import start_vllm, wait_vllm
+
+    agents = json.loads(args.agents)                                  # agent id -> {"name", "path", "parser"}
+    models = {args.served_name: {"path": args.model, "parser": args.tool_parser}}
+    for a in agents.values():
+        models.setdefault(a["name"], {"path": a["path"], "parser": a.get("parser", "hermes")})
+    gpus = [g for g in os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",") if g != ""] or ["0"]
+    per_gpu = {g: 0 for g in gpus}
+    for i, name in enumerate(models):
+        models[name]["gpu"] = gpus[i % len(gpus)]; per_gpu[models[name]["gpu"]] += 1
+    args.out.mkdir(parents=True, exist_ok=True)
+    procs, routes = [], {}
+    try:
+        for i, (name, m) in enumerate(models.items()):
+            port = args.port + i
+            share = min(float(args.gpu_memory_utilization), 0.88 / per_gpu[m["gpu"]])
+            m["port"], m["log"] = port, args.out / f"vllm_{name}.log"
+            m["proc"] = start_vllm(m["path"], name, port, m["log"], gpu_memory_utilization=round(share, 2), max_model_len=args.max_model_len,
+                                   tool_parser=m["parser"], gpu=m["gpu"])
+            procs.append(m["proc"]); routes[name] = f"http://localhost:{port}/v1"
+            print(f"[swarm team] serving {name} (parser {m['parser']}) on GPU {m['gpu']} port {port}", flush=True)
+        for name, m in models.items():
+            wait_vllm(m["proc"], name, m["port"], m["log"])
+        print(f"[swarm team] {len(models)} servers up; agents {({a: v['name'] for a, v in agents.items()})}", flush=True)
+        common = [sys.executable, "-m", "pipeline.swarm", "run", "--tasks", str(args.tasks), "--model", str(args.model), "--served-name", args.served_name,
+                  "--iterations", str(args.iterations), "--anomaly-duration", str(args.anomaly_duration), "--out", str(args.out),
+                  "--routes", json.dumps(routes), "--agent-models", json.dumps({a: v["name"] for a, v in agents.items()})]
+        if args.limit:
+            common += ["--limit", str(args.limit)]
+        workers = []
+        for k in range(args.workers):
+            cmd = common + ["--pg-port", str(args.pg_port + k), "--pg-data", str(Path(args.pg_data) / str(args.pg_port + k))]
+            cmd += ["--shard", f"{k}/{args.workers}"] if args.workers > 1 else []
+            wlog = (args.out / f"worker{k}.log").open("a")
+            workers.append(subprocess.Popen(cmd, stdout=wlog, stderr=subprocess.STDOUT))
+        codes = [w.wait() for w in workers]
+        print(f"[swarm team] workers exited {codes}", flush=True)
+        if any(codes):
+            raise SystemExit(f"a worker failed ({codes}); see {args.out}/worker*.log")
+    finally:
+        for pr in procs:
+            pr.terminate()
+        for pr in procs:
+            try:
+                pr.wait(30)
+            except Exception:
+                pr.kill()
 
 
 def cmd_merge(args) -> None:
@@ -218,6 +281,17 @@ def main(argv=None) -> None:
     r.add_argument("--limit", type=int, default=None)
     r.add_argument("--shard", default=None, help="k/N: tasks k, k+N, ...")
     r.add_argument("--out", type=Path, required=True)
+    r.add_argument("--tool-parser", default="hermes", help="vLLM's tool-call parser for the model")
+    r.add_argument("--routes", default=None, help="JSON, served name -> base URL: the servers of a team (started by `team`)")
+    r.add_argument("--agent-models", default=None, help="JSON, agent id -> served name: an agent's own model (default: the planner's)")
+    t = sub.add_parser("team")
+    for a, kw in (("--tasks", dict(type=Path, required=True)), ("--model", dict(required=True)), ("--served-name", dict(required=True)),
+                  ("--tool-parser", dict(default="hermes")), ("--agents", dict(required=True, help="JSON, agent id -> {name, path, parser}")),
+                  ("--workers", dict(type=int, default=4)), ("--port", dict(type=int, default=8170)), ("--pg-port", dict(type=int, default=5460)),
+                  ("--pg-data", dict(type=Path, required=True)), ("--iterations", dict(type=int, default=5)),
+                  ("--anomaly-duration", dict(type=int, default=60)), ("--gpu-memory-utilization", dict(type=float, default=0.6)),
+                  ("--max-model-len", dict(type=int, default=16384)), ("--limit", dict(type=int, default=None)), ("--out", dict(type=Path, required=True))):
+        t.add_argument(a, **kw)
     m = sub.add_parser("merge")
     m.add_argument("--tasks", type=Path, required=True)
     m.add_argument("--out", type=Path, required=True)
@@ -232,7 +306,7 @@ def main(argv=None) -> None:
     m.add_argument("--partial", action="store_true")
     args = ap.parse_args(argv)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    {"run": cmd_run, "merge": cmd_merge}[args.cmd](args)
+    {"run": cmd_run, "team": cmd_team, "merge": cmd_merge}[args.cmd](args)
 
 
 if __name__ == "__main__":

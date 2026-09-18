@@ -1,0 +1,5 @@
+# An agent of the swarm's team of different models (configs/datasets/marble_db_team.yaml); not a central model or a QA peer.
+hf_id: mistralai/Mistral-7B-Instruct-v0.3
+path: Mistral-7B-Instruct-v0.3
+engine: vllm
+tool_parser: mistral               # vLLM's tool-call parser, for the agent swarm (pipeline.swarm)

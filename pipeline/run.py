@@ -125,7 +125,8 @@ class Plan:
                 served = str(sw.get("served_name", Path(spec["path"]).name))
                 base = (f"--tasks {tasks} --model {spec['path']} --served-name {served} --iterations {int(sw.get('iterations', 5))} "
                         f"--anomaly-duration {int(sw.get('anomaly_duration', 60))} --gpu-memory-utilization {sw.get('gpu_memory_utilization', 0.6)} "
-                        f"--max-model-len {int(sw.get('max_model_len', 16384))} --out {out}" + (f" --limit {self.events}" if self.events else ""))
+                        f"--max-model-len {int(sw.get('max_model_len', 16384))} --out {out} --tool-parser {spec.get('tool_parser', 'hermes')}"
+                        + (f" --limit {self.events}" if self.events else ""))
                 merge = (f"python -m pipeline.swarm merge --tasks {tasks} --out {out} --stream {stream} "
                          f"--solo {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --swarm {self.L.eval_dir(m, d, 'swarm')} "
                          f"--verdicts {self.L.eval_dir(m, d, 'verdicts')} --model {spec['path']} --served-name {served} "
@@ -133,6 +134,18 @@ class Plan:
                 port, pg_port, pg_data = int(sw.get("port", 8123)), int(sw.get("pg_port", 5432)), str(sw.get("pg_data", "/mnt/data/peilin/pg"))
                 shards = 1 if self.smoke else max(1, min(int(sw.get("shards", 1)), len(self.gpus)))
                 pre = self.model_env(spec)
+                peers = self.L.peer_models(ds["peer_names"])
+                if any(pm["model"] != m for pm in peers):
+                    # a team: the dataset's registered peers are other models than the central one. agent<i> is peer_<i-1>'s model
+                    # (the benchmark's per-agent `llm`); every distinct model is served once and the workers share the servers.
+                    agents = {f"agent{i + 1}": {"name": pm["name"], "path": str(pm["path"]), "parser": pm.get("tool_parser", "hermes")}
+                              for i, pm in enumerate(peers)}
+                    n_models = len({served} | {a["name"] for a in agents.values()})
+                    workers = 1 if self.smoke else max(1, int(sw.get("workers", 4)))
+                    team = (f"{pre}python -m pipeline.swarm team {base} --agents {shlex.quote(json.dumps(agents))} --workers {workers} "
+                            f"--port {port} --pg-port {pg_port} --pg-data {pg_data}")
+                    jobs.append(Job("swarm", f"swarm_{m}_{d}", f"{team} && {merge}", gpus=max(1, min(len(self.gpus), n_models)), done=stream))
+                    continue
                 if shards == 1:
                     jobs.append(Job("swarm", f"swarm_{m}_{d}", f"{pre}python -m pipeline.swarm run {base} --port {port} --pg-port {pg_port} "
                                     f"--pg-data {pg_data}/{pg_port} && {merge}", done=stream))

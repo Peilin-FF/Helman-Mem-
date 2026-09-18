@@ -1,0 +1,3 @@
+# agent5 of MultiAgentBench's database diagnosis in the team of different models: qwen3_8b as the agent investigating FETCH_LARGE_DATA.
+model: qwen3_8b
+role: FETCH_LARGE_DATA

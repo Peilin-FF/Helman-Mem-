@@ -104,6 +104,27 @@ def test_another_central_model_runs_the_swarm_on_its_own_stream_ports_and_cluste
     assert {p["model"] for p in peers} == {"qwen3_8b"} and Layout(cfg).stream("marble_db_qwen3_8b")["peers"] == 5
 
 
+def test_a_team_of_different_models_serves_each_once_and_gives_every_agent_its_own(tmp_path):
+    from feedback_state.swarm import route_for
+
+    cfg = load(EXPERIMENTS / "swarm_team.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
+    assert Layout(cfg).registry.problems() == []
+    jobs = Plan(cfg, "swarm_team.yaml", smoke=False, gpus=[0, 1, 2, 3, 4, 5, 6, 7]).swarm()
+    assert [j.name for j in jobs] == ["swarm_q3_4b_marble_db_team"] and jobs[0].gpus == 6                # the planner's model and five agents'
+    cmd = jobs[0].cmd
+    assert "python -m pipeline.swarm team --tasks" in cmd and "--model /models/Qwen3-4B --served-name Qwen3-4B" in cmd and "--tool-parser hermes" in cmd
+    assert "--workers 5 --port 8170 --pg-port 5460 --pg-data /mnt/data/peilin/pg && python -m pipeline.swarm merge" in cmd
+    agents = json.loads(cmd.split("--agents '")[1].split("' --workers")[0])
+    assert agents["agent1"] == {"name": "Meta-Llama-3.1-8B-Instruct", "path": "/models/Meta-Llama-3.1-8B-Instruct", "parser": "llama3_json"}
+    assert [agents[f"agent{i}"]["parser"] for i in range(1, 6)] == ["llama3_json", "mistral", "hermes", "mistral", "hermes"]
+    assert jobs[0].done == tmp_path / "data/marble_db_team/test.jsonl"
+    smoke = Plan(cfg, "swarm_team.yaml", smoke=True, gpus=[0, 1, 2]).swarm()[0]
+    assert "--workers 1 " in smoke.cmd and smoke.gpus == 3 and smoke.cmd.endswith("--partial")            # fewer GPUs than models: they share
+    routes = {"Qwen3-4B": "http://localhost:8170/v1", "Qwen2.5-7B-Instruct": "http://localhost:8173/v1"}
+    assert route_for("openai/Qwen2.5-7B-Instruct", routes, "x") == "http://localhost:8173/v1" and route_for("openai/unknown", routes, "x") == "x"
+    assert route_for("openai/Qwen3-4B", None, "http://one") == "http://one"
+
+
 def test_shards_claim_tasks_and_a_stopped_shard_gives_its_unfinished_ones_back(tmp_path):
     from pipeline.swarm import all_done_ids, claim, release_stale_claims
 
