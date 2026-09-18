@@ -143,8 +143,9 @@ def ensure_postgres(port: int, data_dir: Path) -> None:
 class MarbleDB:
     """The benchmark's database on our server: reset, initialise, inject, query."""
 
-    def __init__(self, port: int):
+    def __init__(self, port: int, read_only: bool = False):
         self.port = int(port)
+        self.read_only = bool(read_only)   # a pool of teams shares one injected database: an agent's statement must not change what the others see
 
     def connect(self, dbname: str = DB_NAME):
         import psycopg2
@@ -202,6 +203,8 @@ class MarbleDB:
 
         try:
             conn = self.connect()
+            if self.read_only:
+                conn.set_session(readonly=True, autocommit=True)   # a write fails with PostgreSQL's own error, which the agent reads
             cur = conn.cursor()
             statements = split_sql_statements(sql)
             for s in statements:
@@ -301,7 +304,8 @@ def start_vllm(model_path: str, served_name: str, port: int, log: Path, gpu_memo
     env_vars, prefix_caching and trust_remote_code are the model's registered settings (configs/models/)."""
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["vllm", "serve", model_path, "--served-model-name", served_name, "--port", str(port), "--max-model-len", str(max_model_len),
-           "--gpu-memory-utilization", str(gpu_memory_utilization), "--enable-auto-tool-choice", "--tool-call-parser", tool_parser]
+           "--gpu-memory-utilization", str(gpu_memory_utilization), "--enable-auto-tool-choice", "--tool-call-parser", tool_parser,
+           "--dtype", "bfloat16"]     # as everywhere in the pipeline; on auto, Gemma-3 runs in half precision and emits only padding
     cmd += [] if prefix_caching else ["--no-enable-prefix-caching"]
     cmd += ["--trust-remote-code"] if trust_remote_code else []
     env = {k: v for k, v in os.environ.items() if k.lower() not in ("all_proxy", "https_proxy", "http_proxy")}

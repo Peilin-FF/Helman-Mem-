@@ -101,7 +101,7 @@ def cmd_run(args) -> None:
         (out / "complete.json").write_text(json.dumps({"tasks": len(tasks)}))
         return
     ensure_postgres(args.pg_port, args.pg_data)
-    db = MarbleDB(args.pg_port)
+    db = MarbleDB(args.pg_port, read_only=bool(args.teams))   # teams share each injected database, so their agents only read it
     proc = None
     routes = json.loads(args.routes) if args.routes else None        # a team: served name -> base URL, servers started by `team`
     if routes:

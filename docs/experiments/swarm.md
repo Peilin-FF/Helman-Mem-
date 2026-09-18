@@ -155,6 +155,10 @@ bash run.sh configs/experiments/swarm_pool.yaml --smoke --gpus 0,1,2,3,4,5,6
 bash run.sh configs/experiments/swarm_pool.yaml --gpus 0,1,2,3,4,5,6        # seven servers, five task loops; outputs/tables/swarm_pool*.md
 ```
 
+The seven teams share each injected database, so their agents' statements run in read-only sessions: a write (a `CREATE INDEX`, say)
+fails with PostgreSQL's own error, which the agent reads, and cannot change what the other teams observe. The servers run in
+bfloat16 like the rest of the pipeline (on auto, Gemma-3 runs in half precision and emits only padding).
+
 `data/marble_db_pool/teams.json` has each team as a swarm of its own (the planner's accuracy with that model behind the agents, how
 often its findings are right, how often it says yes).
 
