@@ -6,7 +6,8 @@
     bash run.sh configs/experiments/main.yaml --dry-run           print the jobs and whether each is done
     bash run.sh configs/experiments/main.yaml --set evaluation.max_new_tokens=1024 --gpus 4,5,6,7
 
-Steps run in the order swarm -> peers -> streams -> own -> features -> record -> train -> evaluate -> vote -> combination -> table; the jobs of a step run in
+Steps run in the order swarm -> questions -> peers -> streams -> own -> features -> record -> train -> evaluate -> vote -> combination
+-> online -> diagnose -> table; the jobs of a step run in
 parallel, one GPU each (or as many as a training job asks for). A job is skipped when its output exists; a sharded
 output counts only once all its shards finished (a complete.json is written then); an evaluation is skipped only if the
 stored settings match the requested ones, and a mismatch stops the job instead of silently reusing the old result.
@@ -31,7 +32,8 @@ import yaml
 from pipeline.config import load, shown
 from pipeline.layout import Layout
 
-ORDER = ["swarm", "peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "diagnose", "table"]
+ORDER = ["swarm", "questions", "peers", "streams", "own", "features", "record", "train", "evaluate", "vote", "combination", "online",
+         "diagnose", "table"]
 
 
 def stamp() -> str:
@@ -198,6 +200,29 @@ class Plan:
         return {"name": ds["base"], "path": q["path"], "events": outputs / "swarm" / src["model"] / src["dataset"],
                 "tasks": self.L._abs(Path(self.cfg.get("swarm", {}).get("tasks", "datasets/marble_db/tasks.jsonl")))}
 
+    def classeval_questions(self, d: str) -> str | None:
+        """The ClassEval question stream (`built: classeval`) a dataset is, or is built on; None for any other dataset."""
+        spec = self.L.stream(d)
+        for name in (d, spec.get("base")):
+            if name and self.L.stream(name).get("built") == "classeval":
+                return name
+        return None
+
+    def questions(self) -> list[Job]:
+        """Question streams built from a benchmark's own data (CPU): ClassEval's methods, each run through its hidden tests first."""
+        jobs, seen = [], set()
+        for d in self.datasets:
+            q = self.classeval_questions(d)
+            if q is None or q in seen:
+                continue
+            seen.add(q)
+            spec = self.L.stream(q)
+            src = self.L._abs(Path(spec.get("source", "datasets/classeval/ClassEval_data.json")))
+            jobs.append(Job("questions", f"questions_{q}", f"python -m pipeline.classeval setup --source {src} && "   # the data, nltk's corpora
+                            f"python -m pipeline.classeval build --source {src} --class-order {spec.get('class_order', 'shuffled0')} "
+                            f"--out {spec['path']}" + (f" --limit {self.events}" if self.events else ""), gpus=0, done=spec["path"]))
+        return jobs
+
     def peers(self) -> list[Job]:
         gen = self.cfg.get("generation", {})
         mis = gen.get("misleading", {})
@@ -214,6 +239,8 @@ class Plan:
                     if mode == "misleading":
                         cmd += f" --max-attempts {mis.get('max_attempts', 3)} --temperatures {mis.get('temperatures', '0.2,0.7,1.0')}"
                         cmd += "" if mis.get("force", True) else " --no-force"
+                    if int(answers.get("turns", 1)) > 1:   # agentic peers: they revise on the task's visible check
+                        cmd += f" --turns {int(answers['turns'])}"
                     cmd += " --reasoning" if p.get("reasoning") else ""
                     cmd += " --no-prefix-caching" if p.get("prefix_caching") is False else ""
                     cmd += " --trust-remote-code" if p.get("trust_remote_code") else ""
@@ -249,6 +276,107 @@ class Plan:
                 out = self.L.outputs / "tables" / f"{self.cfg['name']}_{m}_{d}_diagnosis.json"
                 jobs.append(Job("diagnose", f"diagnose_{m}_{d}", f"python -m pipeline.swarm diagnose --tasks {q['tasks']} --events {q['events']} "
                                 f"--stream {self.L.stream(d)['path']} {evals} --title {shlex.quote(f'{m} on {d}')} --out {out}", gpus=0, done=out))
+        jobs += self.classeval_reports() + self.marble_reports()
+        return jobs
+
+    def marble_reports(self) -> list[Job]:
+        """For the database swarm: the verdicts, the diagnoses, the peers, and each record against reliability tables (CPU)."""
+        jobs = []
+        for m in self.cfg.get("central", []):
+            for d in self.eval_datasets():
+                ds = self.L.stream(d)
+                names = self.online_conditions()
+                if ds.get("built") != "marble_online" or not names:
+                    continue
+                evals = " ".join(f"--eval {c}={self.L.eval_dir(m, d, c)}" for c in names)
+                out = self.L.outputs / "tables" / f"{self.cfg['name']}_{m}_{d}_marble.json"
+                jobs.append(Job("diagnose", f"marble_report_{m}_{d}", f"python -m pipeline.marble_online report --tasks {self.L._abs(Path(ds['tasks']))} "
+                                f"{evals} --title {shlex.quote(f'{m} on {d}')} --out {out}", gpus=0))
+        return jobs
+
+    def classeval_reports(self) -> list[Job]:
+        """For ClassEval streams: class pass per condition and per peer, and the record against reliability tables (CPU)."""
+        jobs = []
+        conds = self.cfg.get("conditions", {})
+        for m in self.cfg.get("central", []):
+            for d in self.eval_datasets():
+                q = self.classeval_questions(d)
+                if q is None:
+                    continue
+                if q == d:   # the swarm, run on the question stream itself: its online tracks
+                    path, record, names = self.L.stream(d)["path"], None, self.online_conditions()
+                else:        # the teacher-forced stream: every condition that may have run on it (a missing one is skipped)
+                    path, record = self.source(m, d)[0], self.L.record_file(m, d)
+                    names = ["solo"] + [c for c in self.cfg.get("eval_conditions", []) if c != "solo"] + ["combination"]
+                if not names:
+                    continue
+                evals = " ".join(f"--eval {c}={self.L.eval_dir(m, self.L.eval_dataset(d, conds.get(c, {})), c)}" for c in names)
+                out = self.L.outputs / "tables" / f"{self.cfg['name']}_{m}_{d}_classeval.json"
+                jobs.append(Job("diagnose", f"classeval_report_{m}_{d}", f"python -m pipeline.classeval report --stream {path} "
+                                + (f"--record {record} " if record else "") + f"{evals} --title {shlex.quote(f'{m} on {d}')} --out {out}", gpus=0))
+        return jobs
+
+    def online_conditions(self) -> list[str]:
+        return [c for c in self.cfg.get("online", {}).get("conditions", []) if c in self.cfg.get("conditions", {})] if "online" in self.cfg.get("steps", []) else []
+
+    def online(self) -> list[Job]:
+        """The swarm on ClassEval (pipeline.classeval online): one job per central model and question stream holds every online
+        condition as a track; it serves the stream's peers (one GPU each) and runs the central model and its judge on one more.
+        The record's addresses (PCA, label-free) are fit beforehand on a registered stream's judge features, `online.fit:
+        train6` by default as in the paper (its feature jobs run first, and are skipped when the main experiment made them), or
+        on the swarm's own first methods (`online.fit: warmup`)."""
+        oc, conds = self.cfg.get("online", {}), self.cfg.get("conditions", {})
+        names = oc.get("conditions", [])
+        missing = [c for c in names if conds.get(c, {}).get("mode") != "online"]
+        if missing or not names:
+            raise SystemExit(f"online conditions {missing or '(none)'} must be listed under online.conditions and defined under "
+                             f"conditions: with mode: online")
+        rec = self.cfg.get("record", {})
+        dim = int(self.cfg.get("smoke", {}).get("dim", 32)) if self.smoke else int(rec.get("dim", 256))
+        jobs, fitted = [], set()
+        for m in self.cfg.get("central", []):
+            spec, ck, _ = self.central(m)
+            if spec is None:
+                continue
+            if ck is not None:
+                raise SystemExit(f"{m}: the online step runs a released model, not a trained checkpoint")
+            for d in self.eval_datasets():
+                ds = self.L.stream(d)
+                q = self.classeval_questions(d)
+                marble = ds.get("built") == "marble_online"
+                if q is None and not marble:
+                    continue
+                peers = [{"name": p["name"], "path": str(p["path"]), "reasoning": bool(p.get("reasoning")), "env_vars": p.get("env_vars"),
+                          "prefix_caching": p.get("prefix_caching", True), "trust_remote_code": bool(p.get("trust_remote_code")),
+                          "tool_parser": p.get("tool_parser", "hermes")} for p in self.L.peer_models(ds["peer_names"])]
+                tracks = {c: {"kind": conds[c]["kind"], "gamma": float(conds[c].get("gamma", 3.0))} for c in names}
+                out_root = self.L.eval_dir(m, d, names[-1]).parent
+                fit = oc.get("fit", "train6")
+                if fit == "warmup":
+                    fit_args = f"--warmup {3 if self.smoke else int(oc.get('warmup', 64))}"
+                else:
+                    path, n = self.source(m, fit)
+                    fit_args = f"--fit-stream {path} --fit-features {self.L.features_dir(m, fit)} --fit-peers {n}"
+                    if (m, fit) not in fitted:   # the fit stream's features first (wave 0), skipped once complete
+                        fitted.add((m, fit))
+                        jobs += self.feature_jobs(m, self.central(m)[2], fit, step="online")
+                common = (f"--model {spec['path']} --peers {shlex.quote(json.dumps(peers))} --conditions {shlex.quote(json.dumps(tracks))} "
+                          f"{fit_args} --out-root {out_root} --design {rec.get('design', 'qc')} --dim {dim} --lam {rec.get('lam', 100.0)} "
+                          f"--lanes {int(oc.get('lanes', 1))} --max-new-tokens {self.cfg.get('evaluation', {}).get('max_new_tokens', 1024)}")
+                if marble:   # MultiAgentBench's database: one planner per track, the peers investigating every root cause
+                    cmd = (f"{self.model_env(spec)}python -m pipeline.marble_online online --tasks {self.L._abs(Path(ds['tasks']))} "
+                           f"--served-name {Path(spec['path']).name} {common} --queries {int(oc.get('queries', 3))} --port {int(oc.get('port', 8400))} "
+                           f"--central-port {int(oc.get('central_port', 8410))} --pg-port {int(oc.get('pg_port', 5490))} "
+                           f"--pg-data {oc.get('pg_data', '/mnt/data/peilin/pg')} --anomaly-duration {int(oc.get('anomaly_duration', 60))}"
+                           + (f" --limit {int(oc.get('smoke_tasks', 2))}" if self.smoke else ""))
+                    n_gpus = 2 + len(peers)   # the central model in-process, the peers, the central model's server
+                else:        # ClassEval: the classes built one method at a time
+                    cmd = (f"{self.model_env(spec)}python -m pipeline.classeval online --questions {self.L.stream(q)['path']} {common} "
+                           f"--turns {int(oc.get('turns', 3))} --port {int(oc.get('port', 8300))}"
+                           + (f" --limit-classes {int(oc.get('smoke_classes', 2))}" if self.smoke else ""))
+                    n_gpus = 1 + len(peers)
+                jobs.append(Job("online", f"online_{m}_{d}", cmd, gpus=max(1, min(len(self.gpus), n_gpus)),
+                                done=out_root / names[-1] / "eval_metrics.json", wave=1))
         return jobs
 
     def own(self) -> list[Job]:
@@ -278,18 +406,24 @@ class Plan:
         return ([self.fit()] if self.fit() != "self" else []) + self.eval_datasets()
 
     def features(self) -> list[Job]:
-        fe = self.cfg.get("features", {})
         jobs = []
         for m in self.cfg.get("central", []):
             spec = self.central(m)[2]                     # the judge: the model itself, or a trained run's named judge
             for s in self.feature_streams():
-                (path, answers), out = self.source(m, s), self.L.features_dir(m, s)
-                for k in range(self.shards):
-                    cmd = (f"{self.model_env(spec)}python -m pipeline.features --stream {path} --model {spec['path']} "
-                           f"--output {out}/shard{k}of{self.shards}.pt --shards {self.shards} --shard {k} --peers {answers} "
-                           f"--max-length {fe.get('max_length', 8192)} --dtype {fe.get('dtype', 'bfloat16')}"
-                           + (f" --max-examples {self.events}" if self.events else ""))
-                    jobs.append(Job("features", f"features_{m}_{s}_{k}", cmd, done=out / f"shard{k}of{self.shards}.pt", group=out, group_size=self.shards))
+                jobs += self.feature_jobs(m, spec, s)
+        return jobs
+
+    def feature_jobs(self, m: str, spec: dict, s: str, step: str = "features") -> list[Job]:
+        """The judge's features of stream s, one job per shard (skipped once the shards are complete)."""
+        fe = self.cfg.get("features", {})
+        (path, answers), out = self.source(m, s), self.L.features_dir(m, s)
+        jobs = []
+        for k in range(self.shards):
+            cmd = (f"{self.model_env(spec)}python -m pipeline.features --stream {path} --model {spec['path']} "
+                   f"--output {out}/shard{k}of{self.shards}.pt --shards {self.shards} --shard {k} --peers {answers} "
+                   f"--max-length {fe.get('max_length', 8192)} --dtype {fe.get('dtype', 'bfloat16')}"
+                   + (f" --max-examples {self.events}" if self.events else ""))
+            jobs.append(Job(step, f"features_{m}_{s}_{k}", cmd, done=out / f"shard{k}of{self.shards}.pt", group=out, group_size=self.shards))
         return jobs
 
     def record(self) -> list[Job]:

@@ -164,6 +164,11 @@ class TaskSpec:
     prompt_fn: Callable[[dict[str, Any], bool], str]
     # True if correctness is precomputed per-peer (read from record["peer_correct"])
     precomputed: bool = False
+    # (record, answer) -> (passed, message): what an agent observes after acting (a visible check, never the label); with
+    # it, pipeline.peers --turns N lets a peer revise on the message. None: the task has no tool feedback
+    feedback_fn: Callable[[dict[str, Any], str], tuple[bool, str]] | None = None
+    # (record, response) -> the answer text the stream shows the judge and the central model; None: the response as it is
+    display_fn: Callable[[dict[str, Any], str], str] | None = None
 
 
 def _math_target(text: str, record: dict[str, Any]) -> float:
@@ -499,13 +504,46 @@ def _dbdiag_prompt(record: dict[str, Any], with_context: bool) -> str:
             "of the form 'Final answer: <CAUSE_1>, <CAUSE_2>' using the exact names.")
 
 
+# ClassEval's methods, one sub-step each (feedback_state.classeval): graded by the method's hidden tests in the gold class
+def _classeval_target(text: str, record: dict[str, Any]) -> float:
+    from feedback_state.classeval import target
+
+    return target(text, record)
+
+
+def _classeval_correct(text: str, record: dict[str, Any]) -> bool:
+    return _classeval_target(text, record) >= 0.5
+
+
+def _classeval_extract(text: str) -> str:
+    from feedback_state.classeval import extract
+
+    return extract(text)
+
+
+def _classeval_prompt(record: dict[str, Any], with_context: bool) -> str:
+    from feedback_state.classeval import prompt
+
+    return prompt(record, with_context)
+
+
+def _classeval_feedback(record: dict[str, Any], text: str) -> tuple[bool, str]:
+    from feedback_state.classeval import visible_check
+
+    return visible_check(record, text)
+
+
+def _classeval_display(record: dict[str, Any], text: str) -> str:
+    from feedback_state.classeval import display
+
+    return display(record, text)
+
+
 REGISTRY: dict[str, TaskSpec] = {
+    "classeval": TaskSpec("classeval", _classeval_target, _classeval_correct, _classeval_extract, _classeval_prompt,
+                          feedback_fn=_classeval_feedback, display_fn=_classeval_display),
     # database diagnosis (the swarm): the agents' findings carry their own verdict labels, the central model's diagnosis is graded
     "dbdiag": TaskSpec("dbdiag", _dbdiag_target, _dbdiag_correct, _dbdiag_extract, _dbdiag_prompt, precomputed=True),
-    # ClassEval, one method per event (feedback_state.classeval): a candidate's label is its executed tests, stored per candidate
-    # like code; the question (record["problem"]) already is the full prompt every candidate writer gets.
-    "classeval": TaskSpec("classeval", _code_target, _code_correct, code_extract_answer, lambda record, with_context: str(record.get("problem", "")),
-                          precomputed=True),
     "math": TaskSpec("math", _math_target, _math_correct, extract_final_answer, _math_prompt),
     "rag": TaskSpec("rag", _rag_target, _rag_correct, qa_extract_answer, _rag_prompt),
     "boolqa": TaskSpec(

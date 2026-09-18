@@ -38,6 +38,18 @@ def peer_text(response: str) -> str:
     return text
 
 
+def shown_text(record: dict, response: str) -> str:
+    """An answer as the stream shows it to the judge and the central model: the task's display (TaskSpec.display_fn, e.g.
+    ClassEval's extracted method) where it has one, else peer_text."""
+    from feedback_state.tasks import get_task, task_type_of
+
+    try:
+        display = get_task(task_type_of(record)).display_fn
+    except KeyError:
+        display = None
+    return display(record, response) if display else peer_text(response)
+
+
 def load_answers(directory: Path) -> tuple[dict[str, dict], dict]:
     """{event id -> answer row} and the generation summary of one peer's pipeline.peers output."""
     rows = {}
@@ -96,7 +108,7 @@ def cmd_add(args) -> None:
                 k = f"peer_{len(keys)}"
                 r = rows[rid]
                 gp = summary.get("generation_params", {})
-                rec["peer_responses"][k] = peer_text(r["response"])
+                rec["peer_responses"][k] = shown_text(rec, r["response"])
                 rec.setdefault("peer_metadata", {})[k] = {"model": summary.get("model", name), "received_context": bool(gp.get("context", True)),
                                                           "num_samples": 1, "generation_params": gp}
                 rec.setdefault("peer_correct", {})[k] = float(r.get("target", r["correct"]))

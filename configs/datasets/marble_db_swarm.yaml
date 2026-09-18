@@ -1,0 +1,9 @@
+# MultiAgentBench's database diagnosis as the online swarm (docs/experiments/marble_db_online.md): the benchmark's 100 tasks,
+# each a database with an injected anomaly; every root cause the planner assigns is investigated by the six peers below (in
+# peer_0 ... order), each a MARBLE agent on its own model querying the database. Nothing is built ahead: the run's events (one
+# per task and root cause, 500) are its outputs, each labelled against the injected anomaly as it happens.
+path: marble_db_swarm/test.jsonl   # not read: the events are made by the run (pipeline.marble_online online)
+peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]
+events: 500
+built: marble_online
+tasks: datasets/marble_db/tasks.jsonl

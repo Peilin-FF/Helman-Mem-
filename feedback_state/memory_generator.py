@@ -27,9 +27,9 @@ INSTRUCTIONS = {
     "shortqa": "Answer briefly. End with a line of the form 'Final answer: <answer>'.",
     "code": "Write a complete Python program that reads from standard input and writes the answer to standard "
             "output (use input()/sys.stdin and print()). Return the program inside a single ```python code block.",
-    "classeval": "Write the method. Return only that method, the full `def` with its body, inside a single ```python code block.",
     "dbdiag": "Decide which of the possible root causes explain the database's performance issue, most likely first (one to three). "
               "Reason briefly from the evidence, then end with a line of the form 'Final answer: <CAUSE_1>, <CAUSE_2>' using the exact names.",
+    "classeval": "Write the complete method (its def line and body) in a single ```python code block. Do not repeat the rest of the class.",
 }
 
 
@@ -57,6 +57,8 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, i
         ctx = _rag_context_text(record)
         if ctx:
             parts.append(f"Context / Evidence:\n{ctx}")
+    if include_context and task == "classeval":   # the class so far; methods with a body of `...` exist and may be called
+        parts.append(f"The class so far (methods whose body is `...` are implemented elsewhere):\n```python\n{str(record.get('context', '')).rstrip()}\n```")
     if mode == "peers":
         parts.append("Peer answers:\n\n" + "\n\n".join(peer_block(i, t, char_limit=char_limit) for i, t in enumerate(texts)))
     parts.append("Instruction: " + INSTRUCTIONS.get(task, INSTRUCTIONS["shortqa"]))
@@ -107,6 +109,9 @@ def grade(record: dict[str, Any], text: str, *, code_timeout: float = 10.0) -> b
             return False
         from data.builders.common.code_grading import score_code_record  # sandboxed subprocess execution
         return bool(score_code_record(record, program, timeout=code_timeout).passed)
+    if task == "classeval":   # the method's hidden tests, the answer put into the gold class
+        from feedback_state.classeval import hidden_test
+        return bool(hidden_test(record, text).passed)
     return bool(peer_is_correct(record, None, text))
 
 

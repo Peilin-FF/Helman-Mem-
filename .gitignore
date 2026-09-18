@@ -19,3 +19,6 @@ artifacts/*
 .ray/
 *.egg-info/
 wandb/
+
+# ClassEval (pipeline.classeval setup downloads the pinned data here)
+datasets/classeval/

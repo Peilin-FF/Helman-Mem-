@@ -1,0 +1,36 @@
+# The online swarm on MultiAgentBench's database diagnosis (docs/experiments/marble_db_online.md). Per task the anomaly is
+# injected once; each track runs the benchmark's star loop with its own planner (Qwen3-4B); every root cause the planner assigns
+# is investigated by the same six peers (MARBLE agents on their own models, three queries each) and, on the record tracks, by
+# Qwen3-4B itself; Qwen3-4B reads the six findings (with the tilt on the record tracks) and commits the cause's verdict, which
+# the planner reads. Every finding and verdict is labelled against the injected anomaly as soon as it is in, and written into
+# the record before the next iteration is read. All five causes are investigated on every task (the planner chooses the order).
+base: ../base.yaml
+name: marble_db_online
+steps: [online, diagnose, table]
+central: [q3_4b]
+datasets: [marble_db_swarm]
+record: {design: qc, dim: 256, lam: 100.0}   # the paper's record
+online:
+  conditions: [online_solo, online_peers, online_tilt, online_combination]
+  fit: train6                      # the addresses (PCA, label-free) fit on the judge's features of train6, as in the paper
+  warmup: 64                       # with fit: warmup, each record track's first 64 events instead
+  lanes: 1                         # one task at a time: every iteration's labels are in the record before the next one is read
+  queries: 3                       # an investigator's queries per root cause
+  port: 8400                       # the peers' vLLM servers: 8400 ... 8405
+  central_port: 8410               # the central model's server (its planner and its own investigations)
+  pg_port: 5490                    # PostgreSQL in user space (conda env pg), + lane; clusters under pg_data/<port>
+  pg_data: /mnt/data/peilin/pg
+  anomaly_duration: 60             # seconds per anomaly workload (the benchmark's default)
+  smoke_tasks: 2
+conditions:
+  online_solo:        {mode: online, kind: solo, label: question alone}
+  online_peers:       {mode: online, kind: peers, label: question + peers}
+  online_tilt:        {mode: online, kind: tilt, gamma: 3.0, label: peers + memory}
+  online_combination: {mode: online, kind: combination, gamma: 3.0, label: combination}
+evaluation: {max_new_tokens: 768}
+
+table:
+  rows: models
+  columns: [online_solo, online_peers, online_tilt, online_combination]
+
+smoke: {events: 10, dim: 8}        # two tasks end to end, under outputs/smoke/

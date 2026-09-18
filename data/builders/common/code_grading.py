@@ -62,8 +62,16 @@ def run_python(
     timeout: float = DEFAULT_TIMEOUT,
     mem_mb: int = DEFAULT_MEM_MB,
     stdin: str | None = None,
+    env: dict | None = None,
+    tail: int = 500,
+    private_tmp: bool = False,
 ) -> ExecResult:
-    """Run a standalone Python program; pass == clean exit code 0."""
+    """Run a standalone Python program; pass == clean exit code 0.
+
+    env: variables added to the inherited environment (e.g. single-threaded BLAS); tail: characters of stderr kept on failure;
+    private_tmp: the program's tempfile.gettempdir() is its own directory (tests that write to gettempdir()/<fixed name>
+    otherwise collide when programs run in parallel).
+    """
     if os.environ.get("FEEDBACK_CODE_EXEC_ALLOW") != "1":
         raise RuntimeError(
             "Refusing to execute model-generated code. Set FEEDBACK_CODE_EXEC_ALLOW=1 "
@@ -73,6 +81,11 @@ def run_python(
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "prog.py"
         script.write_text(source)
+        extra = {str(k): str(v) for k, v in (env or {}).items()}
+        if private_tmp:
+            own = Path(tmp) / "tmp"
+            own.mkdir()
+            extra.update(TMPDIR=str(own), TEMP=str(own), TMP=str(own))
         try:
             proc = subprocess.run(
                 [sys.executable, "-I", str(script)],
@@ -80,6 +93,7 @@ def run_python(
                 capture_output=True,
                 timeout=timeout,
                 cwd=tmp,
+                env=dict(os.environ, **extra) if extra else None,
             )
         except subprocess.TimeoutExpired:
             return ExecResult(False, "timeout")
@@ -87,7 +101,7 @@ def run_python(
             return ExecResult(False, f"runner-error: {exc}")
     if proc.returncode == 0:
         return ExecResult(True, "")
-    err = (proc.stderr or b"").decode(errors="replace")[-500:]
+    err = (proc.stderr or b"").decode(errors="replace")[-int(tail):]
     return ExecResult(False, err.strip() or f"exit {proc.returncode}")
 
 

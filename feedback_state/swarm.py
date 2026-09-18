@@ -372,6 +372,25 @@ def make_env(db: MarbleDB):
     return SwarmEnv(db)
 
 
+def clipped_memory(agent) -> str:
+    """An agent's memory as its finding shows it: at most MEMORY_CHARS, the middle cut."""
+    memory = agent.memory.get_memory_str()
+    return memory if len(memory) <= MEMORY_CHARS else memory[: MEMORY_CHARS // 2] + " ... " + memory[-MEMORY_CHARS // 2:]
+
+
+def finding_prompt(agent_id: str, profile: str, cause: str, memory: str, answer_line: bool = True) -> str:
+    """What an agent is asked after its investigation: with answer_line (a pool of peers on the same sub-step), the sub-step's
+    yes/no question; else the benchmark swarm's report to the planner with a YES/NO verdict line."""
+    if answer_line:
+        return (f"You are {agent_id}: {profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
+                f"Question: is {cause} a root cause of this database's performance issue? Give the evidence from your investigation in at "
+                f"most six sentences, then end with exactly 'Final answer: yes' or 'Final answer: no'.")
+    return (f"You are {agent_id}: {profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
+            f"Report your finding to the planner. Begin with exactly one line of the form 'Root cause investigated: {cause}. Verdict: YES' "
+            f"or 'Root cause investigated: {cause}. Verdict: NO' (YES if {cause} is a root cause of the performance issue, NO if it is not), "
+            f"then give the evidence in at most six sentences.")
+
+
 def summarize_results(agents_results: list[dict]) -> str:
     """The engine's _summarize_results: every result cut at 1,000 characters."""
     summary = "Agents' Results Summary:\n"
@@ -431,18 +450,7 @@ def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None, an
     findings = []
     for a in agents:
         cause = cause_of(a.profile)
-        memory = a.memory.get_memory_str()
-        if len(memory) > MEMORY_CHARS:
-            memory = memory[: MEMORY_CHARS // 2] + " ... " + memory[-MEMORY_CHARS // 2:]
-        if answer_line:   # a pool of peers on the same sub-step: the finding answers the sub-step's yes/no question
-            prompt = (f"You are {a.agent_id}: {a.profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
-                      f"Question: is {cause} a root cause of this database's performance issue? Give the evidence from your investigation in at "
-                      f"most six sentences, then end with exactly 'Final answer: yes' or 'Final answer: no'.")
-        else:
-            prompt = (f"You are {a.agent_id}: {a.profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
-                      f"Report your finding to the planner. Begin with exactly one line of the form 'Root cause investigated: {cause}. Verdict: YES' "
-                      f"or 'Root cause investigated: {cause}. Verdict: NO' (YES if {cause} is a root cause of the performance issue, NO if it is not), "
-                      f"then give the evidence in at most six sentences.")
+        prompt = finding_prompt(a.agent_id, a.profile, cause, clipped_memory(a), answer_line)
         try:
             text = model_prompting(llm_model=a.llm, messages=[{"role": "user", "content": prompt}], return_num=1,
                                    max_token_num=2048 if reasoning else 400, temperature=0.0)[0].content or ""   # the agent reports with its own model

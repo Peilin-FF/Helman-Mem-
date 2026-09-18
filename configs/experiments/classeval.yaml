@@ -1,0 +1,36 @@
+# The swarm on ClassEval (docs/experiments/classeval.md): Qwen3-4B builds every class one method at a time. For each method the
+# six peers of the QA streams work as agents on the class as it stands (they write the method, run its docstring's examples in
+# the class, and revise on the failure); Qwen3-4B reads their methods and commits one, which is the class the next methods are
+# written against. As soon as a method is done its hidden tests verify every answer (each put into the gold class: a peer is
+# judged on its own method only), and the labels go into the record before the next method is read. One stream of methods
+# across the classes, no task boundary given to the record, which starts cold.
+# Every condition is a track of the one run, with its own committed classes: question alone, question + peers, peers + memory
+# (the tilt) and combination (per method either, by the reading line); the record tracks keep their own record.
+base: ../base.yaml
+name: classeval
+steps: [questions, online, diagnose, table]
+central: [q3_4b]
+datasets: [classeval_q]            # the methods (built from the pinned ClassEval data) and the pool that answers them
+record: {design: qc, dim: 256, lam: 100.0}   # the paper's record: 256 PCA components per part
+online:
+  conditions: [online_solo, online_peers, online_tilt, online_combination]
+  fit: train6                      # the addresses (PCA, label-free) fit on the judge's features of train6, as in the paper; its
+                                   # feature shards are reused from the main experiment (made first if missing). Alternatives:
+                                   # fit: warmup (the swarm's own first `warmup` methods, their labels written once it is fit)
+  warmup: 64
+  lanes: 1                         # one class at a time: every method's labels are in the record before the next method is read
+  turns: 3                         # a peer's answers per method
+  port: 8300                       # the peers' vLLM servers: 8300 ... 8305
+  smoke_classes: 2
+conditions:
+  online_solo:        {mode: online, kind: solo, label: question alone}
+  online_peers:       {mode: online, kind: peers, label: question + peers}
+  online_tilt:        {mode: online, kind: tilt, gamma: 3.0, label: peers + memory}
+  online_combination: {mode: online, kind: combination, gamma: 3.0, label: combination}
+evaluation: {max_new_tokens: 1024}
+
+table:
+  rows: models
+  columns: [online_solo, online_peers, online_tilt, online_combination]
+
+smoke: {events: 12, dim: 8}        # two classes end to end, under outputs/smoke/

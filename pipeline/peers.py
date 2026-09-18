@@ -1,6 +1,9 @@
 """Peers: a peer model answers every event of a stream, and each answer is graded.
 
     --mode honest       the task's peer prompt, sampled as the released peers were (temperature 0.2, top-p 0.95)
+                        --turns N (N > 1): the peer is an agent -- after each answer it observes the task's visible check
+                        (its feedback_fn, e.g. the docstring's examples run on its code) and revises, up to N answers; the
+                        last one is graded (feedback_state.peer_generation.agentic_answers)
     --mode misleading   a confident, relevant, verified-wrong answer: generated, graded and re-generated until usable
                         (feedback_state.adversarial: acceptance rules, escalating retries, a target value for math,
                         a rewritten conclusion only as the last resort, flagged ``forced``)
@@ -42,6 +45,7 @@ def parse_args(argv=None):
     p.add_argument("--reasoning", action="store_true", help="a thinking peer: 4096-token budget, graded after the last </think>")
     p.add_argument("--no-context", action="store_true", help="reading tasks without the passage")
     p.add_argument("--temperature", type=float, default=0.2, help="honest mode")
+    p.add_argument("--turns", type=int, default=1, help="honest mode: answers per event, revising on the task's visible check")
     p.add_argument("--top-p", type=float, default=0.95)
     p.add_argument("--max-attempts", type=int, default=3, help="misleading mode: generations per event before the forcing pass")
     p.add_argument("--temperatures", default="0.2,0.7,1.0", help="misleading mode: one per attempt")
@@ -87,7 +91,7 @@ def main(argv=None) -> None:
     llm = LLM(model=args.model, tokenizer=args.model, dtype="bfloat16", gpu_memory_utilization=args.gpu_memory_utilization,
               max_model_len=args.max_model_len, enable_prefix_caching=not args.no_prefix_caching,
               trust_remote_code=args.trust_remote_code, enforce_eager=args.enforce_eager, seed=0)
-    run = honest if args.mode == "honest" else misleading
+    run = misleading if args.mode == "misleading" else agentic if args.turns > 1 else honest
     rows, extra = run(args, records, tok, llm)
     del llm
     name = f"shard{args.shard}of{args.shards}"
@@ -102,7 +106,7 @@ def main(argv=None) -> None:
                "generation_params": {"temperature": args.temperature if args.mode == "honest" else args.temperatures,
                                      "top_p": args.top_p, "max_new_tokens": "reasoning 4096" if args.reasoning else budgets(args.max_tokens, args.mode),
                                      "context": not args.no_context, "reasoning": args.reasoning, "backend": "vllm",
-                                     "prompt": "chat template as token ids, no special tokens added"},
+                                     "prompt": "chat template as token ids, no special tokens added", "turns": args.turns},
                "accuracy_pct": 100 * sum(r["correct"] for r in rows) / n,
                "by_source": {s: {"n": c, "accuracy_pct": 100 * k / c} for s, (c, k) in by_source.items()},
                "seconds": time.time() - t0, **extra}
@@ -127,6 +131,45 @@ def honest(args, records, tok, llm):
     rows = [{"id": r.get("id"), "source": r.get("source"), "task_type": task_type_of(r), "response": t, "target": v,
              "correct": int(round(v))} for r, t, v in zip(records, texts, values)]
     return rows, {}
+
+
+def agentic(args, records, tok, llm):
+    """Honest answers from a peer that revises on the task's visible check (--turns N): each turn batches the events still
+    revising; the last answer is graded by the hidden rule, the visible checks are kept with it."""
+    from vllm import SamplingParams
+
+    from feedback_state.memory_generator import strip_thinking
+    from feedback_state.peer_generation import agentic_answers, grade_all, max_tokens, messages_ids
+    from feedback_state.tasks import get_task, task_type_of
+
+    b = budgets(args.max_tokens, "honest")
+    missing = sorted({task_type_of(r) for r in records if get_task(task_type_of(r)).feedback_fn is None})
+    if missing:
+        raise SystemExit(f"--turns {args.turns}: task(s) {missing} have no visible check (TaskSpec.feedback_fn) to revise on")
+    answer_of = (lambda t: strip_thinking(t)) if args.reasoning else (lambda t: t)
+    turn = [0]
+
+    def generate(items):
+        prompts = [messages_ids(tok, conv) for _, conv in items]
+        params = [SamplingParams(temperature=args.temperature, top_p=args.top_p, max_tokens=max_tokens(records[i], b, args.reasoning),
+                                 seed=turn[0]) for i, _ in items]
+        turn[0] += 1
+        print(f"[peers] turn {turn[0]}: {len(items)} events", flush=True)
+        return [o.outputs[0].text for o in llm.generate(prompts, params, use_tqdm=True)]
+
+    feedback = lambda r, text: get_task(task_type_of(r)).feedback_fn(r, text)
+    answers = agentic_answers(records, generate, feedback, args.turns, answer_of, workers=args.grade_workers)
+    values = grade_all([(r, answer_of(a["response"])) for r, a in zip(records, answers)], args.grade_workers)
+    rows = [{"id": r.get("id"), "source": r.get("source"), "task_type": task_type_of(r), "response": a["response"], "target": v,
+             "correct": int(round(v)), "turns": a["turns"], "visible": a["visible"]} for r, a, v in zip(records, answers, values)]
+    n = max(1, len(rows))
+    first = sum(a["visible"][0]["passed"] for a in answers if a["visible"])
+    last = sum(a["visible"][-1]["passed"] for a in answers if a["visible"])
+    extra = {"agentic": {"turns": args.turns, "mean_turns": sum(a["turns"] for a in answers) / n,
+                         "visible_passed_first_pct": 100 * first / n, "visible_passed_last_pct": 100 * last / n,
+                         "hidden_passed_by_turns": {str(k): 100 * sum(r["correct"] for r in rows if r["turns"] == k) / max(1, sum(r["turns"] == k for r in rows))
+                                                    for k in sorted({r["turns"] for r in rows})}}}
+    return rows, extra
 
 
 def misleading(args, records, tok, llm):

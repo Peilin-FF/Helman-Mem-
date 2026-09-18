@@ -108,6 +108,9 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 | `baselines` | multi-agent baselines on the combination streams: majority vote (peers; peers + own answer) and multi-agent debate (1 and 2 rounds; debate + vote) | [docs/experiments/baselines.md](docs/experiments/baselines.md) |
 | `baselines_families` | the baselines for Qwen3-8B, Qwen3-14B, Llama-3.1-8B, Ministral-8B, phi-4 and Qwen2.5-7B, each its own judge; runs the missing combination steps first (a guide for running it elsewhere) | [docs/experiments/baselines_families.md](docs/experiments/baselines_families.md) |
 | `swarm` | a real agent swarm: MultiAgentBench's database diagnosis (five agents, star coordination) run with Qwen3-4B; the agents' findings are the answers, so the record, peers + memory and combination apply against the benchmark's own decision | [docs/experiments/swarm.md](docs/experiments/swarm.md) |
+| `classeval` | a swarm with open-ended sub-tasks: Qwen3-4B builds ClassEval's 100 classes one method at a time; the six peers work on every method as agents (they run the docstring's examples and revise), Qwen3-4B commits a method (alone, reading the peers, with the tilt, or by combination), every answer is verified by the method's hidden tests as soon as it is done and the record is written before the next method | [docs/experiments/classeval.md](docs/experiments/classeval.md) |
+| `classeval_offline` | the teacher-forced ablation: every method sees the gold methods before it, so the peers' answers are generated once and the offline steps apply | [docs/experiments/classeval.md](docs/experiments/classeval.md) |
+| `marble_db_online` | the database swarm online: one planner (Qwen3-4B) per condition, every root cause it assigns investigated by the same six peers (MARBLE agents querying the injected database), Qwen3-4B committing the verdict the planner reads; every finding labelled against the injected anomaly at once, the record written before the next planner iteration | [docs/experiments/marble_db_online.md](docs/experiments/marble_db_online.md) |
 | `train_combination` | GRPO of Qwen3-4B under combination: per question, before its rollouts, combination picks peers + memory or question alone from its online state; one epoch | [docs/experiments/train_combination.md](docs/experiments/train_combination.md) |
 | `train_tilt` | GRPO of the central model with and without the tilt | [docs/experiments/train_tilt.md](docs/experiments/train_tilt.md) |
 
@@ -115,7 +118,8 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 
 | stage | entry point | does |
 |---|---|---|
-| peers | `pipeline/peers.py` | a peer model answers every event of a stream, honestly or with verified misleading answers |
+| questions | `pipeline/classeval.py` | a benchmark's own sub-tasks as a question stream (ClassEval's methods, each gold method checked by its hidden tests); `online` runs the ClassEval swarm |
+| peers | `pipeline/peers.py` | a peer model answers every event of a stream, honestly or with verified misleading answers; `--turns N`: as an agent revising on the task's visible check |
 | streams | `pipeline/streams.py` | a derived stream: peers added, or answers replaced under a regime |
 | features | `pipeline/features.py` | the frozen judge reads question + answers; its hidden states address the record |
 | record | `pipeline/record.py` | the Bayesian record along the stream, read before write, and its quality |

@@ -1,0 +1,11 @@
+# ClassEval's methods as a stream of sub-steps (docs/experiments/classeval.md): one event per method, 100 classes in a seeded
+# order, each class's methods in the benchmark's order. An event is "implement method m" with the class so far as its context
+# (the gold methods before it -- teacher forcing -- and the later ones as signature + docstring). Built by `pipeline.classeval
+# build` from the pinned ClassEval_data.json, which runs every gold method through its own hidden tests and drops the events
+# whose gold fails in this environment. No answers yet: the pool below answers it (classeval_answers).
+path: classeval_q/test.jsonl
+peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5, the QA streams' pool
+events: 410
+built: classeval
+source: datasets/classeval/ClassEval_data.json
+class_order: shuffled0
