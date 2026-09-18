@@ -28,10 +28,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _selected_layers(count: int) -> list[int]:
-    return sorted({max(1, count // 3), max(1, 2 * count // 3), count - 1})
-
-
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--stream", type=Path, required=True)
@@ -53,7 +49,8 @@ def main(argv=None) -> None:
     import torch
 
     from feedback_state.data import JsonlDataset
-    from feedback_state.judge_prompt import context_text, judge_batch, yes_no_token_ids
+    from feedback_state.judge_features import event_features
+    from feedback_state.judge_prompt import yes_no_token_ids
     from feedback_state.newarch_loader import apply_torch_fp8_shim, dtype_from_name, load_central_model
     from feedback_state.permutations import canonical_peer_view
 
@@ -87,35 +84,19 @@ def main(argv=None) -> None:
             real = int(view["real"])
             if real < 1:
                 continue
-            question = str(record.get("problem", record.get("question", "")))
-            enc = tokenizer(question if question.strip() else " ", return_tensors="pt", truncation=True, max_length=int(args.question_max_length))
-            out = model(**{k: v.to(device) for k, v in enc.items()}, output_hidden_states=True, use_cache=False, return_dict=True)
-            if layers is None:
-                layers = _selected_layers(len(out.hidden_states))
-            q_mean = torch.cat([out.hidden_states[l][0].float().mean(0) for l in layers])
-            q_last = torch.cat([out.hidden_states[l][0, -1].float() for l in layers])
-
-            input_ids, attention_mask = judge_batch(tokenizer, question, view["texts"][:real], context=context_text(record) or None,
-                                                    max_length=args.max_length, device=device)
-            out = model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True, use_cache=False, return_dict=True)
-            last = attention_mask.long().sum(dim=1).clamp_min(1) - 1
-            rows = torch.arange(real, device=device)
-            logp = torch.log_softmax(out.logits[rows, last, :].float(), dim=-1)
-            margins = logp[:, int(yes_ids[0])] - logp[:, int(no_ids[0])]
-            hidden = torch.stack([out.hidden_states[l][rows, last, :].float() for l in layers])   # [layers, peers, H]
-            padded = torch.zeros(args.peers, dtype=torch.float32, device=device)
-            padded[:real] = margins
-            per_peer = torch.zeros(args.peers, hidden.shape[0] * hidden.shape[2], device=device)
-            per_peer[:real] = hidden.permute(1, 0, 2).reshape(real, -1)
+            f = event_features(model, tokenizer, record, view["texts"][:real], num_peers=args.peers, yes_id=int(yes_ids[0]),
+                               no_id=int(no_ids[0]), max_length=args.max_length, question_max_length=args.question_max_length,
+                               device=device, layers=layers)
+            layers = f["layers"]
 
             ids.append(str(record.get("id") or record.get("uid") or record_index + 1))
             original.append(record_index)
-            q_mean_rows.append(q_mean.cpu().to(torch.float16))
-            q_last_rows.append(q_last.cpu().to(torch.float16))
-            sem_rows.append(hidden.mean(dim=1).reshape(-1).cpu().to(torch.float16))
-            spread_rows.append(hidden.std(dim=1, unbiased=False).reshape(-1).cpu().to(torch.float16))
-            margin_rows.append(padded.cpu().to(torch.float16))
-            peer_hidden_rows.append(per_peer.cpu().to(torch.float16))
+            q_mean_rows.append(f["q_mean"].cpu().to(torch.float16))
+            q_last_rows.append(f["q_last"].cpu().to(torch.float16))
+            sem_rows.append(f["sem"].cpu().to(torch.float16))
+            spread_rows.append(f["spread"].cpu().to(torch.float16))
+            margin_rows.append(f["margins"].cpu().to(torch.float16))
+            peer_hidden_rows.append(f["peer_hidden"].cpu().to(torch.float16))
             if local_index % args.progress_every == 0 or local_index == len(indices):
                 print(f"[features] shard {args.shard}/{args.shards}: {local_index}/{len(indices)}", flush=True)
     if not ids:

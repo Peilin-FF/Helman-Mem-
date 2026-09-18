@@ -50,6 +50,7 @@ Frozen Qwen3-4B, thinking off, on whole streams (answers graded by the streams' 
 git clone https://github.com/Peilin-FF/Helman-Mem-.git sigma-mem && cd sigma-mem
 conda create -n sigma python=3.12 && conda activate sigma
 pip install -r requirements_qwen3.txt          # torch 2.6.0 (CUDA 12.4), transformers 4.56.2, vLLM 0.8.5 (exact)
+pip install -r requirements_classeval.txt      # only for ClassEval: what its classes and their tests import (the grader runs them here)
 bash training/setup_env.sh                     # only for training: hydra, tensordict, flash-attn for the vendored verl
 python datasets/download.py                    # the released datasets from Hugging Face -> data/ (streams, misleading answers and streams)
 pytest tests/unit                              # CPU only: the rules, the record, the configs and job expansion

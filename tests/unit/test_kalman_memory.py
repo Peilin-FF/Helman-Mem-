@@ -87,3 +87,14 @@ def test_the_pca_addresses_are_the_same_on_every_run():
 
     small = Projection(X[:4], dim=8)                 # a smoke run fits on a handful of events: fewer components than asked
     assert small.dim == small.basis.shape[1] == 4 and small(X[:2]).shape == (2, 4)
+
+
+def test_the_judges_features_of_one_event_are_a_function_the_features_step_and_an_online_run_share():
+    import inspect
+
+    import pipeline.features as step
+    from feedback_state.judge_features import event_features, selected_layers
+
+    assert selected_layers(37) == [12, 24, 36] and selected_layers(29) == [9, 19, 28] and selected_layers(2) == [1]     # a third, two thirds, the last
+    assert "event_features(" in inspect.getsource(step.main) and not hasattr(step, "_selected_layers")                 # one implementation
+    assert list(inspect.signature(event_features).parameters)[:4] == ["model", "tokenizer", "record", "texts"]

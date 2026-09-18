@@ -42,7 +42,7 @@ def parse_args(argv=None):
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--merge", action="store_true", help="join <output>/shard*/ into <output> and stop")
     p.add_argument("--regrade", action="store_true", help="re-grade <output>/generations.jsonl with the current rules and rewrite its metrics; "
-                   "code rows keep their stored label (programs are not executed again)")
+                   "code and classeval rows keep their stored label (programs are not executed again)")
     p.add_argument("--model", help="the central model's directory (its tokenizer is always used)")
     p.add_argument("--checkpoint", type=Path, default=None, help="an HF checkpoint directory of a trained central model")
     p.add_argument("--record", type=Path, help="the record file of the stream (pipeline.record output); optional with --mode solo")
@@ -143,7 +143,7 @@ def regrade(output: Path, stream: Path | None, windows: int) -> dict:
     rows = [json.loads(l) for l in (output / "generations.jsonl").open()]
     changed = 0
     for r in rows:
-        if r["task_type"] == "code":
+        if r["task_type"] in ("code", "classeval"):
             continue
         ok = int(grade(records[str(r["id"])], r["generation"]))
         changed += ok != int(r["correct"])
