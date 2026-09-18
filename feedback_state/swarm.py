@@ -80,8 +80,13 @@ def exact(text: str, root_causes: list[str], allowed: int) -> bool:
 
 
 def verdict_of(finding: str) -> str | None:
-    m = re.search(r"Verdict:\s*\**\s*(YES|NO)\b", str(finding or ""), flags=re.IGNORECASE)
-    return m.group(1).upper() if m else None
+    """A finding's verdict: its 'Verdict: YES|NO' line, or the last 'Final answer: yes|no' (after a think block, if any)."""
+    text = str(finding or "").rsplit("</think>", 1)[-1]
+    m = re.search(r"Verdict:\s*\**\s*(YES|NO)\b", text, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    finals = re.findall(r"final\s+answer\s*(?:is|:)?\s*\**\s*(yes|no)\b", text, flags=re.IGNORECASE)
+    return finals[-1].upper() if finals else None
 
 
 def finding_correct(finding: str, cause: str, root_causes: list[str]) -> int:
@@ -219,7 +224,8 @@ def route_for(model: str, routes: dict | None, default: str) -> str:
     return (routes or {}).get(str(model or "").split("/", 1)[-1], default)
 
 
-def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, timeout: int = 300, routes: dict | None = None) -> None:
+def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, timeout: int = 300, routes: dict | None = None,
+              force_tool: str | None = None) -> None:
     """Route the benchmark's litellm calls to local OpenAI-compatible servers, thinking off: every model to api_base, or, with
     routes (served name -> base URL), each model to its own server (a team whose agents are different models)."""
     for k in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -234,6 +240,12 @@ def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, tim
 
     def completion(*args, **kwargs):
         kwargs.setdefault("api_base", route_for(kwargs.get("model", args[0] if args else ""), routes, api_base))
+        if force_tool and kwargs.get("tools"):
+            # An agent's action: name the tool, so the server constrains the output to valid arguments for it (guided decoding).
+            # Left to choose, several models answer in prose and never call the tool; named, every model queries the database.
+            named = [t for t in kwargs["tools"] if t.get("function", {}).get("name") == force_tool]
+            if named:
+                kwargs["tools"], kwargs["tool_choice"] = named, {"type": "function", "function": {"name": force_tool}}
         kwargs.setdefault("api_key", api_key)
         kwargs.setdefault("timeout", timeout)
         if not thinking:
@@ -248,12 +260,17 @@ def patch_llm(api_base: str, api_key: str = "EMPTY", thinking: bool = False, tim
 
 
 def start_vllm(model_path: str, served_name: str, port: int, log: Path, gpu_memory_utilization: float = 0.6, max_model_len: int = 16384,
-               tool_parser: str = "hermes", gpu: str | None = None):
-    """Start vLLM's OpenAI server for one model (tool calling on, with the model's parser), on `gpu` if given, else the visible GPU."""
+               tool_parser: str = "hermes", gpu: str | None = None, env_vars: dict | None = None, prefix_caching: bool = True,
+               trust_remote_code: bool = False):
+    """Start vLLM's OpenAI server for one model (tool calling on, with the model's parser), on `gpu` if given, else the visible GPU.
+    env_vars, prefix_caching and trust_remote_code are the model's registered settings (configs/models/)."""
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["vllm", "serve", model_path, "--served-model-name", served_name, "--port", str(port), "--max-model-len", str(max_model_len),
            "--gpu-memory-utilization", str(gpu_memory_utilization), "--enable-auto-tool-choice", "--tool-call-parser", tool_parser]
+    cmd += [] if prefix_caching else ["--no-enable-prefix-caching"]
+    cmd += ["--trust-remote-code"] if trust_remote_code else []
     env = {k: v for k, v in os.environ.items() if k.lower() not in ("all_proxy", "https_proxy", "http_proxy")}
+    env.update({str(k): str(v) for k, v in (env_vars or {}).items()})
     if gpu is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)
@@ -324,7 +341,8 @@ def summarize_results(agents_results: list[dict]) -> str:
     return summary
 
 
-def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None) -> dict:
+def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None, answer_line: bool = False, reasoning: bool = False,
+              tag: str = "") -> dict:
     """The benchmark's star coordination on one task: the planner assigns, the agents act, the planner summarises and
     decides, for up to max_iterations. Returns the planner's final decision, the iterations, and each agent's finding.
     llm is the planner's model; agent_llms (agent id -> model) gives an agent its own, as the benchmark's per-agent `llm` does."""
@@ -368,7 +386,7 @@ def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None) ->
             log(f"    planner failed: {type(e).__name__}: {str(e)[:120]}")
             cont = True
         iterations.append({"iteration": it + 1, "assignments": tasks, "results": results, "decision": final, "continue": bool(cont)})
-        log(f"    iteration {it + 1}: {len(tasks)} assigned, {len(results)} acted, continue={cont}")
+        log(f"    {tag}iteration {it + 1}: {len(tasks)} assigned, {len(results)} acted, continue={cont}")
         if not cont:
             break
     findings = []
@@ -377,19 +395,43 @@ def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None) ->
         memory = a.memory.get_memory_str()
         if len(memory) > MEMORY_CHARS:
             memory = memory[: MEMORY_CHARS // 2] + " ... " + memory[-MEMORY_CHARS // 2:]
-        prompt = (f"You are {a.agent_id}: {a.profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
-                  f"Report your finding to the planner. Begin with exactly one line of the form 'Root cause investigated: {cause}. Verdict: YES' "
-                  f"or 'Root cause investigated: {cause}. Verdict: NO' (YES if {cause} is a root cause of the performance issue, NO if it is not), "
-                  f"then give the evidence in at most six sentences.")
+        if answer_line:   # a pool of peers on the same sub-step: the finding answers the sub-step's yes/no question
+            prompt = (f"You are {a.agent_id}: {a.profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
+                      f"Question: is {cause} a root cause of this database's performance issue? Give the evidence from your investigation in at "
+                      f"most six sentences, then end with exactly 'Final answer: yes' or 'Final answer: no'.")
+        else:
+            prompt = (f"You are {a.agent_id}: {a.profile}\nYour investigation so far (your tool calls and their results): {memory}\n\n"
+                      f"Report your finding to the planner. Begin with exactly one line of the form 'Root cause investigated: {cause}. Verdict: YES' "
+                      f"or 'Root cause investigated: {cause}. Verdict: NO' (YES if {cause} is a root cause of the performance issue, NO if it is not), "
+                      f"then give the evidence in at most six sentences.")
         try:
-            text = model_prompting(llm_model=a.llm, messages=[{"role": "user", "content": prompt}], return_num=1, max_token_num=400,
-                                   temperature=0.0)[0].content or ""               # the agent reports with its own model
+            text = model_prompting(llm_model=a.llm, messages=[{"role": "user", "content": prompt}], return_num=1,
+                                   max_token_num=2048 if reasoning else 400, temperature=0.0)[0].content or ""   # the agent reports with its own model
         except Exception as e:
             errors.append(f"finding {a.agent_id}: {type(e).__name__}: {str(e)[:300]}")
             text = f"Root cause investigated: {cause}. Verdict: NO\n(The agent failed to report: {type(e).__name__}.)"
         findings.append({"agent_id": a.agent_id, "cause": cause, "model": str(a.llm).split("/", 1)[-1], "text": text, "verdict": verdict_of(text),
                          "correct": finding_correct(text, cause, task["root_causes"])})
     return {"final": final, "iterations": iterations, "findings": findings, "errors": errors}
+
+
+def run_pool(task: dict, llm: str, teams: dict, make_team_env, log) -> dict:
+    """A pool of peers on every sub-step: each team is the benchmark's star loop with the planner's model `llm` and one model
+    behind all five agents (teams: name -> {"llm", "reasoning"}); the teams investigate the same injected database at the same
+    time, so every sub-step ("is X a root cause?") gets one finding per team, each from that model's own queries."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(item):
+        name, spec = item
+        try:
+            return name, run_swarm(task, llm, make_team_env(), log, agent_llms={a["agent_id"]: spec["llm"] for a in task["agents"]},
+                                   answer_line=True, reasoning=bool(spec.get("reasoning")), tag=f"[{name}] ")
+        except Exception as e:   # one team failing must not lose the others' work on this task
+            log(f"    [{name}] team failed: {type(e).__name__}: {str(e)[:160]}")
+            return name, {"final": "", "iterations": [], "findings": [], "errors": [f"team: {type(e).__name__}: {str(e)[:300]}"]}
+
+    with ThreadPoolExecutor(max_workers=len(teams)) as ex:
+        return dict(ex.map(one, teams.items()))
 
 
 def run_solo(task: dict, llm: str, env, iterations: int, log) -> dict:

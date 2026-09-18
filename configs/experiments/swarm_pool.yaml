@@ -1,0 +1,33 @@
+# The agent swarm with a pool of peers investigating every sub-step (docs/experiments/swarm.md): the original method on a real
+# multi-agent system. Qwen3-4B is the planner and the central model. For every task the anomaly is injected once and seven teams
+# investigate that database at the same time: the benchmark's star loop with one model behind all five agents, the six peers of the
+# QA streams and Qwen3-4B itself (its own answer). Every sub-step ("is X a root cause?") so has six peers' findings, each from its
+# own queries; the injected anomaly verifies them, the record tracks every peer, Qwen3-4B consults the pool with the tilt or
+# answers alone (combination), and a task's diagnosis is the causes it answers yes to (pipeline.swarm diagnose).
+base: ../base.yaml
+name: swarm_pool
+steps: [swarm, own, features, record, evaluate, combination, diagnose, table]
+central: [q3_4b]
+datasets: [marble_db_pool]
+own_answer: true
+record: {fit: self}
+eval_conditions: [tilt, peers]
+swarm:
+  tasks: datasets/marble_db/tasks.jsonl
+  force_tool: query_db                           # an agent's action names the tool, so every model makes the call (guided decoding);
+                                                 # left to choose, several of the peers answer in prose and never query
+  workers: 5                                     # task loops sharing the seven servers, each with its own PostgreSQL cluster
+  port: 8180                                     # +i per served model
+  pg_port: 5470                                  # +k per worker; clusters under pg_data/<port>
+  pg_data: /mnt/data/peilin/pg
+  iterations: 5
+  anomaly_duration: 60
+  gpu_memory_utilization: 0.6
+  max_model_len: 16384
+combination: {peers_memory: tilt, prior: [0.5, 0.0], lam: 1.0}
+
+table:
+  rows: models
+  columns: [solo, peers, tilt, combination]
+
+smoke: {events: 4, dim: 8}                       # four tasks (twenty sub-steps) end to end, under outputs/smoke/

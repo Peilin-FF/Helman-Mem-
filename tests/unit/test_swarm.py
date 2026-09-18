@@ -172,6 +172,47 @@ def test_the_steps_experiment_has_the_pool_answer_then_the_usual_steps_then_the_
     assert sj.cmd.endswith("--limit 4") and f"--events {tmp_path}/out/swarm/q3_4b/marble_db " in sj.cmd and str(sj.done).startswith(f"{tmp_path}/out/smoke/data/")
 
 
+def test_a_pool_of_peers_investigates_every_sub_step_and_becomes_a_stream(tmp_path):
+    from feedback_state.swarm import verdict_of
+    from pipeline.swarm import cmd_merge_pool
+
+    assert verdict_of("pg_locks shows no waits.\nFinal answer: no") == "NO" and verdict_of("<think>maybe no</think>Waits found. Final answer: yes") == "YES"
+    assert verdict_of("Root cause investigated: VACUUM. Verdict: YES\nFinal answer: no") == "YES" and verdict_of("unsure") is None
+    cfg = load(EXPERIMENTS / "swarm_pool.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
+    assert Layout(cfg).registry.problems() == []
+    plan = Plan(cfg, "swarm_pool.yaml", smoke=False, gpus=list(range(8)))
+    job = plan.swarm()[0]
+    assert job.name == "swarm_q3_4b_marble_db_pool" and job.gpus == 7 and "--force-tool query_db --workers 5 --port 8180 --pg-port 5470" in job.cmd
+    teams = json.loads(job.cmd.split("--teams '")[1].split("' --force-tool")[0])
+    assert list(teams) == ["Qwen3-4B", "gemma-3-4b-it", "Phi-4-mini-instruct", "Qwen2.5-Coder-7B-Instruct", "Meta-Llama-3.1-8B-Instruct",
+                           "DeepSeek-Coder-V2-Lite-Instruct", "DeepSeek-R1-Distill-Qwen-7B"]
+    assert teams["DeepSeek-R1-Distill-Qwen-7B"]["reasoning"] and teams["DeepSeek-Coder-V2-Lite-Instruct"]["prefix_caching"] is False
+    assert teams["DeepSeek-Coder-V2-Lite-Instruct"]["env_vars"] == {"VLLM_USE_V1": 0}
+    assert "merge-pool" in job.cmd and "--peers gemma-3-4b-it,Phi-4-mini-instruct," in job.cmd and f"--solo {tmp_path}/out/eval/q3_4b/marble_db_pool/solo" in job.cmd
+    assert f"--events {tmp_path}/out/swarm/q3_4b/marble_db_pool " in plan.diagnose()[0].cmd and all("--peers 7 " in j.cmd for j in plan.features())
+
+    tasks = [json.loads(l) for l in TASKS.open()][:2]
+    pool = ["A", "B"]
+    shard = tmp_path / "run" / "shard0"; shard.mkdir(parents=True)
+    with (shard / "events.jsonl").open("w") as f:
+        for t in tasks:
+            def team(always):
+                fs = [{"agent_id": a["agent_id"], "cause": c, "text": f"evidence\nFinal answer: {always}", "verdict": always.upper(),
+                       "correct": int((always == "yes") == (c in t["root_causes"]))} for a, c in zip(t["agents"], ["INSERT_LARGE_DATA", "LOCK_CONTENTION", "VACUUM", "REDUNDANT_INDEX", "FETCH_LARGE_DATA"])]
+                return {"final": "", "findings": fs, "errors": [], "correct": 0, "exact": 0}
+            f.write(json.dumps({"id": t["id"], "teams": {"Qwen3-4B": team("no"), "A": team("yes"), "B": team("no")}}) + "\n")
+    ns = type("A", (), {"out": tmp_path / "run", "tasks": TASKS, "stream": tmp_path / "s" / "test.jsonl", "solo": tmp_path / "solo", "peers": ",".join(pool),
+                        "model": "/models/Qwen3-4B", "served_name": "Qwen3-4B", "max_new_tokens": 768, "windows": 10, "partial": True})()
+    cmd_merge_pool(ns)
+    rows = [json.loads(l) for l in ns.stream.open()]
+    assert len(rows) == 10 and rows[0]["task_type"] == "boolqa" and sorted(rows[0]["peer_responses"]) == ["peer_0", "peer_1"]
+    first = rows[[r["cause"] for r in rows[:5]].index(tasks[0]["root_causes"][0])]
+    assert first["answer"] == "yes" and first["peer_correct"] == {"peer_0": 1.0, "peer_1": 0.0} and first["peer_metadata"]["peer_0"]["model"] == "A"
+    own = [json.loads(l) for l in (ns.solo / "generations.jsonl").open()]
+    assert len(own) == 10 and sum(r["correct"] for r in own) == 10 - sum(len(t["root_causes"]) for t in tasks)      # the own team says no everywhere
+    assert json.load((ns.solo / "eval_metrics.json").open())["mode"] == "solo" and json.load((ns.stream.parent / "teams.json").open())["A"]["yes_rate"] == 1.0
+
+
 def test_shards_claim_tasks_and_a_stopped_shard_gives_its_unfinished_ones_back(tmp_path):
     from pipeline.swarm import all_done_ids, claim, release_stale_claims
 

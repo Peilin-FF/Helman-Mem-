@@ -133,6 +133,27 @@ configs/experiments/swarm_qwen3_8b.yaml       base: swarm.yaml; central [qwen3_8
 bash run.sh configs/experiments/swarm_qwen3_8b.yaml --gpus 0,5,6,7
 ```
 
+## A pool of peers investigating every sub-step (`swarm_pool`)
+
+The original method on a real multi-agent system. Qwen3-4B is the planner and the central model. For every task the anomaly is
+injected once and seven teams investigate that database at the same time, each the benchmark's star loop with one model behind all
+five agents: the six peers of the QA streams (Gemma-3-4B, Phi-4-mini, Qwen2.5-Coder-7B, Llama-3.1-8B, DeepSeek-Coder-V2-Lite,
+R1-Distill-Qwen-7B) and Qwen3-4B itself (its own answer). Every sub-step, "is X a root cause?", so has six peers' findings, each
+from that peer's own queries, ending `Final answer: yes|no`; the injected anomaly verifies every one, the record tracks every peer,
+and Qwen3-4B consults the pool with the tilt or answers alone. A task's diagnosis is the causes it answers yes to.
+
+Every model can make the benchmark's tool call when the call is named: `swarm.force_tool: query_db` sets a named tool choice on an
+agent's action, and vLLM constrains the output to valid arguments by guided decoding, no tool-call parser needed. Left to choose
+(`tool_choice: auto`, the benchmark's default), Phi-4-mini and Qwen2.5-Coder answer in prose and never query.
+
+```bash
+bash run.sh configs/experiments/swarm_pool.yaml --smoke --gpus 0,1,2,3,4,5,6
+bash run.sh configs/experiments/swarm_pool.yaml --gpus 0,1,2,3,4,5,6        # seven servers, five task loops; outputs/tables/swarm_pool*.md
+```
+
+`data/marble_db_pool/teams.json` has each team as a swarm of its own (the planner's accuracy with that model behind the agents, how
+often its findings are right, how often it says yes).
+
 ## A pool of peers on every sub-step (`swarm_steps`)
 
 The original method on the swarm's sub-steps. The benchmark's planner splits a task into five sub-steps, "is X a root cause?", one

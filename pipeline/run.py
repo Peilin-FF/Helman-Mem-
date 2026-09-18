@@ -112,7 +112,7 @@ class Plan:
         jobs = []
         for d in self.eval_datasets():            # a stream of sub-step questions: built from a finished swarm run's events (CPU)
             q = self.steps_source(d)
-            if q is not None and q["name"] not in [j.name[len("steps_"):] for j in jobs]:
+            if q is not None and not q.get("pool") and q["name"] not in [j.name[len("steps_"):] for j in jobs]:
                 jobs.append(Job("swarm", f"steps_{q['name']}", f"python -m pipeline.swarm steps --events {q['events']} --tasks {q['tasks']} "
                                 f"--out {q['path']}" + (f" --limit {self.events}" if self.events else ""), gpus=0, done=q["path"]))
         for m in self.cfg.get("central", []):
@@ -121,7 +121,7 @@ class Plan:
                 continue
             for d in self.eval_datasets():
                 ds = self.L.stream(d)
-                if ds.get("built") != "swarm":
+                if ds.get("built") not in ("swarm", "pool"):
                     continue
                 if ck is not None:
                     raise SystemExit(f"{m}: the swarm step runs a released model, not a trained checkpoint")
@@ -140,6 +140,23 @@ class Plan:
                 shards = 1 if self.smoke else max(1, min(int(sw.get("shards", 1)), len(self.gpus)))
                 pre = self.model_env(spec)
                 peers = self.L.peer_models(ds["peer_names"])
+                if ds.get("built") == "pool":
+                    # a pool of peers on every sub-step: one team per peer model (it is behind all five agents; the planner stays the
+                    # central model), plus the central model's own team; all teams investigate each injected database at once.
+                    def team_of(x):
+                        return {"path": str(x["path"]), "parser": x.get("tool_parser", "hermes"), "reasoning": bool(x.get("reasoning")),
+                                "env_vars": x.get("env_vars"), "prefix_caching": x.get("prefix_caching", True), "trust_remote_code": bool(x.get("trust_remote_code"))}
+                    teams = {served: team_of(spec), **{pm["name"]: team_of(pm) for pm in peers}}
+                    workers = 1 if self.smoke else max(1, int(sw.get("workers", 4)))
+                    force = f" --force-tool {sw['force_tool']}" if sw.get("force_tool") else ""
+                    run = (f"{pre}python -m pipeline.swarm team {base} --teams {shlex.quote(json.dumps(teams))}{force} --workers {workers} "
+                           f"--port {port} --pg-port {pg_port} --pg-data {pg_data}")
+                    merge_pool = (f"python -m pipeline.swarm merge-pool --tasks {tasks} --out {out} --stream {stream} "
+                                  f"--solo {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --peers {','.join(pm['name'] for pm in peers)} "
+                                  f"--model {spec['path']} --served-name {served} --max-new-tokens {ev.get('max_new_tokens', 768)}"
+                                  + (" --partial" if self.events else ""))
+                    jobs.append(Job("swarm", f"swarm_{m}_{d}", f"{run} && {merge_pool}", gpus=max(1, min(len(self.gpus), len(teams))), done=stream))
+                    continue
                 if any(pm["model"] != m for pm in peers):
                     # a team: the dataset's registered peers are other models than the central one. agent<i> is peer_<i-1>'s model
                     # (the benchmark's per-agent `llm`); every distinct model is served once and the workers share the servers.
@@ -162,10 +179,14 @@ class Plan:
                     jobs.append(Job("swarm", f"swarm_merge_{m}_{d}", merge, gpus=0, done=stream, wave=1))
         return jobs
 
-    def steps_source(self, d: str) -> dict | None:
-        """For a stream built from generated answers on a swarm run's sub-step questions: the question stream, the run's events
-        (always the real outputs, a smoke run included: they are an input) and the benchmark's tasks."""
+    def steps_source(self, d: str, m: str | None = None) -> dict | None:
+        """For a stream of a swarm's sub-steps: the run's events and the benchmark's tasks. Built from generated answers on a finished
+        run's questions: the question stream, and that run's events (always the real outputs, a smoke run included: they are an
+        input). Built by a pool run (`built: pool`): this experiment's own events for central model m."""
         ds = self.L.stream(d)
+        tasks = self.L._abs(Path(self.cfg.get("swarm", {}).get("tasks", "datasets/marble_db/tasks.jsonl")))
+        if ds.get("built") == "pool":
+            return {"name": d, "path": ds["path"], "pool": True, "tasks": tasks, "events": self.L.outputs / "swarm" / str(m) / d}
         if ds.get("built") != "answers":
             return None
         q = self.L.stream(ds["base"])
@@ -219,7 +240,7 @@ class Plan:
         jobs = []
         for m in self.cfg.get("central", []):
             for d in self.eval_datasets():
-                q = self.steps_source(d)
+                q = self.steps_source(d, m)
                 if q is None:
                     continue
                 conds = ["solo"] + list(self.cfg.get("eval_conditions", [])) + (["combination"] if "combination" in self.cfg.get("steps", []) else [])
