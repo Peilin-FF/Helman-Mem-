@@ -132,9 +132,10 @@ def cmd_run(args) -> None:
             log(f"    injected {[x['anomaly'] for x in task['anomalies']]} in {sum(x['seconds'] for x in inject):.0f}s")
             t1 = time.time()
             if teams:   # a pool of peers on every sub-step: one team per model, all on this injected database at once
-                from feedback_state.swarm import run_pool
+                from feedback_state.swarm import run_pool, run_solvers
 
-                pool = run_pool(task, llm, teams, lambda: make_env(db), log)
+                pool = (run_solvers(task, teams, lambda: make_env(db), args.iterations, log) if args.whole_problem
+                        else run_pool(task, llm, teams, lambda: make_env(db), log))
                 for res in pool.values():
                     res.update(graded(res["final"], task))
                 t2 = time.time()
@@ -143,8 +144,8 @@ def cmd_run(args) -> None:
                        "injection": inject, "teams": pool, "model": args.served_name, "seconds": {"inject": round(t1 - t0, 1), "pool": round(t2 - t1, 1)}}
                 with events.open("a") as f:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                log("    " + " | ".join(f"{n}: hit {r['correct']} findings {sum(x['correct'] for x in r['findings'])}/5" for n, r in pool.items())
-                    + f" | {t2 - t0:.0f}s")
+                log("    " + " | ".join(f"{n}: hit {r['correct']}" + ("" if args.whole_problem else f" findings {sum(x['correct'] for x in r['findings'])}/5")
+                                        for n, r in pool.items()) + f" | {t2 - t0:.0f}s")
                 continue
             swarm = run_swarm(task, llm, env, log, agent_llms)
             swarm.update(graded(swarm["final"], task))
@@ -211,6 +212,7 @@ def cmd_team(args) -> None:
         common += ["--teams", json.dumps({n: {"reasoning": bool(v.get("reasoning"))} for n, v in teams.items()})] if teams else \
                   ["--agent-models", json.dumps({a: v["name"] for a, v in agents.items()})]
         common += ["--force-tool", args.force_tool] if args.force_tool else []
+        common += ["--whole-problem"] if args.whole_problem else []
         if args.limit:
             common += ["--limit", str(args.limit)]
         workers = []
@@ -425,6 +427,79 @@ def cmd_merge_pool(args) -> None:
         print(f"[swarm]   {team:34s} swarm {100 * v['swarm_accuracy']:5.1f} | findings right {100 * v['findings_right']:5.1f} | says yes {100 * v['yes_rate']:5.1f}% | no verdict {v['no_verdict']}")
 
 
+def cmd_merge_solvers(args) -> None:
+    """A run where every model handles the whole problem alone, as a stream: one event per task, the peers' diagnoses as peer_0 ...
+    in --peers order, each labelled by the benchmark's rule; the central model's own diagnosis as the question-alone evaluation the
+    `own` step reads; and every solver's scores (solvers.json)."""
+    from feedback_state.swarm import graded, problem_text
+    from pipeline.evaluate import summarise
+    from pipeline.streams import peer_text
+
+    events = load_events(args.out)
+    every = load_tasks(args.tasks)
+    tasks = [t for t in every if t["id"] in events]
+    missing = [t["id"] for t in every if t["id"] not in events]
+    if not tasks:
+        raise SystemExit(f"no events under {args.out}")
+    if missing and not args.partial:
+        raise SystemExit(f"{len(missing)} tasks have no event (e.g. {missing[:3]}); pass --partial to merge what is there")
+    peers = args.peers.split(",")
+
+    def diagnosis(ev, name):
+        return peer_text(ev["teams"].get(name, {}).get("final", "")) or "(this solver gave no diagnosis)"
+
+    args.stream.parent.mkdir(parents=True, exist_ok=True)
+    tmp = args.stream.with_name(args.stream.name + ".tmp")
+    own_rows = []
+    with tmp.open("w") as out:
+        for pos, t in enumerate(tasks):
+            ev = events[t["id"]]
+            rec = {"id": t["id"], "task_type": "dbdiag", "source": t["scenario"], "problem": problem_text(t), "answer": list(t["root_causes"]),
+                   "number_of_labels_pred": int(t["number_of_labels_pred"]), "labels": list(t["labels"]),
+                   "peer_responses": {}, "peer_correct": {}, "correctness_by_peer": {}, "peer_metadata": {}}
+            for k, name in enumerate(peers):
+                text = diagnosis(ev, name); g = graded(text, t)
+                rec["peer_responses"][f"peer_{k}"] = text
+                rec["peer_correct"][f"peer_{k}"] = float(g["correct"]); rec["correctness_by_peer"][f"peer_{k}"] = int(g["correct"])
+                rec["peer_metadata"][f"peer_{k}"] = {"model": name, "predicted": g["predicted"], "exact": g["exact"], "received_context": True, "num_samples": 1}
+            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            text = diagnosis(ev, args.served_name); g = graded(text, t)
+            own_rows.append({"pos": pos, "id": t["id"], "task_type": "dbdiag", "source": t["scenario"], "correct": g["correct"], "exact": g["exact"],
+                             "predicted": g["predicted"], "peer_correct": [rec["correctness_by_peer"][f"peer_{k}"] for k in range(len(peers))],
+                             "memory_prob": None, "generation": text})
+    tmp.replace(args.stream)
+    (args.stream.parent / "manifest.json").write_text(json.dumps({"kind": "solvers", "events": len(tasks), "missing": missing, "peers": peers,
+                                                                   "central": args.served_name, "source": shown(args.out)}, indent=1))
+    metrics = {"condition": "solo", "mode": "solo", "gamma": 0.0, "swap_record": False, "bias_form": None, "max_new_tokens": int(args.max_new_tokens),
+               "engine": "vllm-openai", "central_model": args.model, "checkpoint": None, "record": None, "stream": shown(args.stream), "every": 1,
+               "max_examples": None, "shard": None, "note": "the central model's own diagnosis from its own investigation"}
+    metrics.update(summarise(own_rows, args.windows))
+    metrics["exact_accuracy"] = sum(r["exact"] for r in own_rows) / len(own_rows)
+    args.solo.mkdir(parents=True, exist_ok=True)
+    with (args.solo / "generations.jsonl").open("w") as f:
+        for r in own_rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    (args.solo / "eval_metrics.json").write_text(json.dumps(metrics, indent=1))
+
+    def f1(pred, truth):
+        pred, truth = set(pred), set(truth)
+        return 0.0 if not pred else 2 * len(pred & truth) / (len(pred) + len(truth))
+
+    solvers = {}
+    for name in [args.served_name] + peers:
+        gs = [(graded(diagnosis(events[t["id"]], name), t), t) for t in tasks]
+        acts = [str(a) for t in tasks for a in events[t["id"]]["teams"].get(name, {}).get("acts", [])]
+        ran = [a for a in acts if "Result from the function" in a]
+        solvers[name] = {"accuracy": sum(g["correct"] for g, _ in gs) / len(gs), "exact": sum(g["exact"] for g, _ in gs) / len(gs),
+                         "set_f1": sum(f1(g["predicted"], t["root_causes"]) for g, t in gs) / len(gs), "guesses": sum(len(g["predicted"]) for g, _ in gs) / len(gs),
+                         "queries": len(ran), "queries_ok": sum("status\": \"success" in a for a in ran) / max(1, len(ran)),
+                         "no_diagnosis": sum(not g["predicted"] for g, _ in gs)}
+    (args.stream.parent / "solvers.json").write_text(json.dumps(solvers, indent=1))
+    print(f"[swarm] solvers stream {shown(args.stream)}: {len(tasks)} events; own diagnosis right {100 * metrics['accuracy']:.1f}%")
+    for name, v in solvers.items():
+        print(f"[swarm]   {name:34s} accuracy {100 * v['accuracy']:5.1f} | exact {100 * v['exact']:5.1f} | set F1 {100 * v['set_f1']:5.1f} | guesses {v['guesses']:.2f} | queries ok {100 * v['queries_ok']:.0f}%")
+
+
 def cmd_merge(args) -> None:
     from feedback_state.swarm import stream_record, verdict_answer
     from pipeline.evaluate import summarise
@@ -505,12 +580,13 @@ def main(argv=None) -> None:
     r.add_argument("--routes", default=None, help="JSON, served name -> base URL: the servers of a team (started by `team`)")
     r.add_argument("--agent-models", default=None, help="JSON, agent id -> served name: an agent's own model (default: the planner's)")
     r.add_argument("--teams", default=None, help="JSON, served name -> {reasoning}: a pool of peers, one team (all five agents) per model")
+    r.add_argument("--whole-problem", action="store_true", help="with --teams: every model handles the whole task alone (its own investigation and diagnosis)")
     r.add_argument("--force-tool", default=None, help="an agent's action is this tool, asked for as one SQL statement in a code block and parsed here: every model can query (e.g. query_db)")
     t = sub.add_parser("team")
     for a, kw in (("--tasks", dict(type=Path, required=True)), ("--model", dict(required=True)), ("--served-name", dict(required=True)),
                   ("--tool-parser", dict(default="hermes")), ("--agents", dict(default=None, help="JSON, agent id -> {name, path, parser}")),
                   ("--teams", dict(default=None, help="JSON, served name -> {path, parser, reasoning, env_vars, prefix_caching, trust_remote_code}")),
-                  ("--force-tool", dict(default=None)),
+                  ("--force-tool", dict(default=None)), ("--whole-problem", dict(action="store_true")),
                   ("--workers", dict(type=int, default=4)), ("--port", dict(type=int, default=8170)), ("--pg-port", dict(type=int, default=5460)),
                   ("--pg-data", dict(type=Path, required=True)), ("--iterations", dict(type=int, default=5)),
                   ("--anomaly-duration", dict(type=int, default=60)), ("--gpu-memory-utilization", dict(type=float, default=0.6)),
@@ -523,6 +599,13 @@ def main(argv=None) -> None:
                   ("--windows", dict(type=int, default=10))):
         mp.add_argument(a, **kw)
     mp.add_argument("--partial", action="store_true")
+    ms = sub.add_parser("merge-solvers")
+    for a, kw in (("--tasks", dict(type=Path, required=True)), ("--out", dict(type=Path, required=True)), ("--stream", dict(type=Path, required=True)),
+                  ("--solo", dict(type=Path, required=True)), ("--peers", dict(required=True, help="the peers' served names, in peer_0, peer_1, ... order")),
+                  ("--model", dict(required=True)), ("--served-name", dict(required=True)), ("--max-new-tokens", dict(type=int, default=768)),
+                  ("--windows", dict(type=int, default=10))):
+        ms.add_argument(a, **kw)
+    ms.add_argument("--partial", action="store_true")
     st = sub.add_parser("steps")
     st.add_argument("--events", type=Path, required=True, help="a finished swarm run: the directory holding shard*/events.jsonl")
     st.add_argument("--tasks", type=Path, required=True)
@@ -549,7 +632,7 @@ def main(argv=None) -> None:
     m.add_argument("--partial", action="store_true")
     args = ap.parse_args(argv)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    {"run": cmd_run, "team": cmd_team, "merge": cmd_merge, "steps": cmd_steps, "diagnose": cmd_diagnose, "merge-pool": cmd_merge_pool}[args.cmd](args)
+    {"run": cmd_run, "team": cmd_team, "merge": cmd_merge, "steps": cmd_steps, "diagnose": cmd_diagnose, "merge-pool": cmd_merge_pool, "merge-solvers": cmd_merge_solvers}[args.cmd](args)
 
 
 if __name__ == "__main__":

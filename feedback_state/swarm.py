@@ -454,6 +454,24 @@ def run_swarm(task: dict, llm: str, env, log, agent_llms: dict | None = None, an
     return {"final": final, "iterations": iterations, "findings": findings, "errors": errors}
 
 
+def run_solvers(task: dict, solvers: dict, make_env_, iterations: int, log) -> dict:
+    """Every model handles the whole problem by itself (solvers: name -> {"llm", "reasoning"}): each investigates the same injected
+    database alone with the same tool budget and gives its diagnosis, all at the same time. The diagnoses are the task's candidate
+    answers, one per peer, and the central model's own."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(item):
+        name, spec = item
+        try:
+            return name, run_solo(task, spec["llm"], make_env_(), iterations, log, reasoning=bool(spec.get("reasoning")), tag=f"[{name}] ")
+        except Exception as e:
+            log(f"    [{name}] failed: {type(e).__name__}: {str(e)[:160]}")
+            return name, {"final": "", "acts": [], "errors": [f"solver: {type(e).__name__}: {str(e)[:300]}"]}
+
+    with ThreadPoolExecutor(max_workers=len(solvers)) as ex:
+        return dict(ex.map(one, solvers.items()))
+
+
 def run_pool(task: dict, llm: str, teams: dict, make_team_env, log) -> dict:
     """A pool of peers on every sub-step: each team is the benchmark's star loop with the planner's model `llm` and one model
     behind all five agents (teams: name -> {"llm", "reasoning"}); the teams investigate the same injected database at the same
@@ -473,8 +491,9 @@ def run_pool(task: dict, llm: str, teams: dict, make_team_env, log) -> dict:
         return dict(ex.map(one, teams.items()))
 
 
-def run_solo(task: dict, llm: str, env, iterations: int, log) -> dict:
-    """The central model alone with the same tool budget: one action per iteration, then its diagnosis."""
+def run_solo(task: dict, llm: str, env, iterations: int, log, reasoning: bool = False, tag: str = "") -> dict:
+    """A model alone with the same tool budget: one action per iteration, then its diagnosis (a reasoning model gets room to think,
+    and its diagnosis is what follows its think block)."""
     marble_on_path()
     from feedback_state.memory_generator import INSTRUCTIONS
     from marble.agent.base_agent import BaseAgent
@@ -493,15 +512,16 @@ def run_solo(task: dict, llm: str, env, iterations: int, log) -> dict:
             acts.append(result)
         except Exception as e:
             errors.append(f"step {it + 1}: {type(e).__name__}: {str(e)[:300]}")
-            log(f"    solo step {it + 1} failed: {type(e).__name__}: {str(e)[:120]}")
+            log(f"    {tag}solo step {it + 1} failed: {type(e).__name__}: {str(e)[:120]}")
     memory = agent.memory.get_memory_str()
     if len(memory) > MEMORY_CHARS:
         memory = memory[: MEMORY_CHARS // 2] + " ... " + memory[-MEMORY_CHARS // 2:]
     prompt = (f"{task['task']}\nYour investigation (your queries and their results): {memory}\n\n"
               f"Possible root causes: {', '.join(task['labels'])}.\nInstruction: {INSTRUCTIONS['dbdiag']}")
     try:
-        final = model_prompting(llm_model=llm, messages=[{"role": "user", "content": prompt}], return_num=1, max_token_num=600,
-                                temperature=0.0)[0].content or ""
+        final = model_prompting(llm_model=llm, messages=[{"role": "user", "content": prompt}], return_num=1,
+                                max_token_num=3072 if reasoning else 600, temperature=0.0)[0].content or ""
+        final = final.rsplit("</think>", 1)[-1].strip()
     except Exception as e:
         errors.append(f"diagnosis: {type(e).__name__}: {str(e)[:300]}")
         final = ""

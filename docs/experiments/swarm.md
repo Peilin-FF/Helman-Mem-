@@ -133,6 +133,23 @@ configs/experiments/swarm_qwen3_8b.yaml       base: swarm.yaml; central [qwen3_8
 bash run.sh configs/experiments/swarm_qwen3_8b.yaml --gpus 0,5,6,7
 ```
 
+## Every model a whole-problem solver (`swarm_solvers`)
+
+The original method, unchanged, on the benchmark's environment. For every task the anomaly is injected once, and the six peers of
+the QA streams and Qwen3-4B each handle the whole problem by themselves: each investigates that live database alone (the
+benchmark's tool, five queries, read-only sessions, the prompted query protocol below) and gives a full diagnosis. A task is one
+event, the six diagnoses are its candidate answers, the benchmark's rule verifies every one, the record tracks every peer, and
+Qwen3-4B consults the six with the tilt or keeps its own diagnosis (combination). Unlike the sub-step designs, every candidate
+answers the same complete question, so the labels measure what the reader needs, and there is no base-rate artefact of per-cause
+yes/no questions (where always answering no is right 70% of the time).
+
+```bash
+bash run.sh configs/experiments/swarm_solvers.yaml --smoke --gpus 0,1,2,3,4,5,6
+bash run.sh configs/experiments/swarm_solvers.yaml --gpus 0,1,2,3,4,5,6       # seven servers, six task loops
+```
+
+`data/marble_db_solvers/solvers.json` has every solver's accuracy, exact set, set F1, guesses per task and share of queries that ran.
+
 ## A pool of peers investigating every sub-step (`swarm_pool`)
 
 The original method on a real multi-agent system. Qwen3-4B is the planner and the central model. For every task the anomaly is

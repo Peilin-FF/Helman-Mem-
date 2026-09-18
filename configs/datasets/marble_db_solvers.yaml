@@ -1,0 +1,8 @@
+# MultiAgentBench's database diagnosis with every model handling the whole problem alone: for each of the 100 tasks the anomaly is
+# injected once, and the six peers below and the experiment's central model each investigate that database by themselves (the same
+# tool, five queries) and give a diagnosis. A task is one event; its candidate answers are the peers' diagnoses, each labelled by
+# the benchmark's rule; the central model's own diagnosis is its own answer.
+path: marble_db_solvers/test.jsonl
+peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5, the QA streams' pool
+events: 100
+built: solvers

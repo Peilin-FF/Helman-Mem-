@@ -121,7 +121,7 @@ class Plan:
                 continue
             for d in self.eval_datasets():
                 ds = self.L.stream(d)
-                if ds.get("built") not in ("swarm", "pool"):
+                if ds.get("built") not in ("swarm", "pool", "solvers"):
                     continue
                 if ck is not None:
                     raise SystemExit(f"{m}: the swarm step runs a released model, not a trained checkpoint")
@@ -140,7 +140,7 @@ class Plan:
                 shards = 1 if self.smoke else max(1, min(int(sw.get("shards", 1)), len(self.gpus)))
                 pre = self.model_env(spec)
                 peers = self.L.peer_models(ds["peer_names"])
-                if ds.get("built") == "pool":
+                if ds.get("built") in ("pool", "solvers"):
                     # a pool of peers on every sub-step: one team per peer model (it is behind all five agents; the planner stays the
                     # central model), plus the central model's own team; all teams investigate each injected database at once.
                     def team_of(x):
@@ -149,9 +149,10 @@ class Plan:
                     teams = {served: team_of(spec), **{pm["name"]: team_of(pm) for pm in peers}}
                     workers = 1 if self.smoke else max(1, int(sw.get("workers", 4)))
                     force = f" --force-tool {sw['force_tool']}" if sw.get("force_tool") else ""
-                    run = (f"{pre}python -m pipeline.swarm team {base} --teams {shlex.quote(json.dumps(teams))}{force} --workers {workers} "
-                           f"--port {port} --pg-port {pg_port} --pg-data {pg_data}")
-                    merge_pool = (f"python -m pipeline.swarm merge-pool --tasks {tasks} --out {out} --stream {stream} "
+                    whole = ds.get("built") == "solvers"      # every model handles the whole problem alone, not as the planner's sub-agents
+                    run = (f"{pre}python -m pipeline.swarm team {base} --teams {shlex.quote(json.dumps(teams))}{force}{' --whole-problem' if whole else ''} "
+                           f"--workers {workers} --port {port} --pg-port {pg_port} --pg-data {pg_data}")
+                    merge_pool = (f"python -m pipeline.swarm {'merge-solvers' if whole else 'merge-pool'} --tasks {tasks} --out {out} --stream {stream} "
                                   f"--solo {self.L.eval_dir(m, self.L.eval_dataset(d, {'mode': 'solo'}), 'solo')} --peers {','.join(pm['name'] for pm in peers)} "
                                   f"--model {spec['path']} --served-name {served} --max-new-tokens {ev.get('max_new_tokens', 768)}"
                                   + (" --partial" if self.events else ""))

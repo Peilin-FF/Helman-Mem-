@@ -225,6 +225,36 @@ def test_a_pool_of_peers_investigates_every_sub_step_and_becomes_a_stream(tmp_pa
     assert json.load((ns.solo / "eval_metrics.json").open())["mode"] == "solo" and json.load((ns.stream.parent / "teams.json").open())["A"]["yes_rate"] == 1.0
 
 
+def test_every_model_handles_the_whole_problem_alone_and_the_diagnoses_become_a_stream(tmp_path):
+    from pipeline.swarm import cmd_merge_solvers
+
+    cfg = load(EXPERIMENTS / "swarm_solvers.yaml", [f"paths.outputs={tmp_path}/out", f"paths.data={tmp_path}/data", "paths.models_root=/models"])
+    assert Layout(cfg).registry.problems() == []
+    plan = Plan(cfg, "swarm_solvers.yaml", smoke=False, gpus=list(range(7)))
+    job = plan.swarm()[0]
+    assert job.gpus == 7 and "--force-tool query_db --whole-problem --workers 6 --port 8190 --pg-port 5480" in job.cmd and "merge-solvers" in job.cmd
+    assert plan.diagnose() == [] and all("--peers 7 " in j.cmd for j in plan.features()) and plan.record()[0].cmd.endswith("--own-slot 6")
+
+    tasks = [json.loads(l) for l in TASKS.open()][:3]
+    shard = tmp_path / "run" / "shard0"; shard.mkdir(parents=True)
+    with (shard / "events.jsonl").open("w") as f:
+        for t in tasks:
+            right = "Reasoning.\nFinal answer: " + ", ".join(t["root_causes"]); wrong = "<think>hm</think>Final answer: " + next(c for c in t["labels"] if c not in t["root_causes"])
+            f.write(json.dumps({"id": t["id"], "teams": {"Qwen3-4B": {"final": wrong, "acts": []}, "A": {"final": right, "acts": ["Result from the function:{\"status\": \"success\"}"]},
+                                                        "B": {"final": wrong, "acts": []}}}) + "\n")
+    ns = type("A", (), {"out": tmp_path / "run", "tasks": TASKS, "stream": tmp_path / "s" / "test.jsonl", "solo": tmp_path / "solo", "peers": "A,B",
+                        "model": "/models/Qwen3-4B", "served_name": "Qwen3-4B", "max_new_tokens": 768, "windows": 10, "partial": True})()
+    cmd_merge_solvers(ns)
+    rows = [json.loads(l) for l in ns.stream.open()]
+    assert len(rows) == 3 and rows[0]["task_type"] == "dbdiag" and rows[0]["answer"] == tasks[0]["root_causes"] and "Possible root causes:" in rows[0]["problem"]
+    assert all(r["peer_correct"] == {"peer_0": 1.0, "peer_1": 0.0} for r in rows) and rows[0]["peer_responses"]["peer_1"].startswith("Final answer:")   # think block dropped
+    assert peer_is_correct(rows[0], "peer_0", "anything") and not peer_is_correct(rows[0], "peer_1", "anything")
+    solvers = json.load((ns.stream.parent / "solvers.json").open())
+    assert solvers["A"]["accuracy"] == 1.0 and solvers["A"]["exact"] == 1.0 and solvers["Qwen3-4B"]["accuracy"] == 0.0 and solvers["A"]["queries_ok"] == 1.0
+    own = json.load((ns.solo / "eval_metrics.json").open())
+    assert own["mode"] == "solo" and own["accuracy"] == 0.0 and own["exact_accuracy"] == 0.0
+
+
 def test_shards_claim_tasks_and_a_stopped_shard_gives_its_unfinished_ones_back(tmp_path):
     from pipeline.swarm import all_done_ids, claim, release_stale_claims
 
