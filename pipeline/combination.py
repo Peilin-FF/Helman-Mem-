@@ -34,14 +34,17 @@ def load_generations(directory: Path) -> dict[str, dict]:
 
 
 def combine(rows: list[dict], peers_memory: dict[str, dict], question_alone: dict[str, dict], prior: tuple[float, float],
-            lam: float) -> tuple[list[dict], dict]:
+            lam: float, skip_missing: bool = False) -> tuple[list[dict], dict]:
     from feedback_state.reading_line import ReadingLine
 
     lines: dict[str, ReadingLine] = {}
-    out, mismatched = [], 0
+    out, mismatched, skipped = [], 0, 0
     for r in sorted(rows, key=lambda r: int(r["pos"])):
         rid = str(r["id"])
         if rid not in peers_memory or rid not in question_alone:
+            if skip_missing:      # the record walks the whole stream; only a subsample was generated
+                skipped += 1
+                continue
             raise SystemExit(f"event {rid} has no {'peers + memory' if rid not in peers_memory else 'question-alone'} answer")
         trust, kappa = max(float(p) for p in r["memory_prob"]), float(r["own_prob"])
         line = lines.setdefault(r["task_type"], ReadingLine(prior, lam))
@@ -60,7 +63,7 @@ def combine(rows: list[dict], peers_memory: dict[str, dict], question_alone: dic
     by_task = collections.defaultdict(list)
     for o in out:
         by_task[o["task_type"]].append(o)
-    summary = {"own_labels_mismatched": mismatched, "reading_line": {}}
+    summary = {"own_labels_mismatched": mismatched, "skipped_without_answer": skipped, "reading_line": {}}
     for task, line in sorted(lines.items()):
         rho, delta = line.estimate()
         mean_own = float(np.mean([o["own_prob"] for o in by_task[task]]))
@@ -78,11 +81,14 @@ def main(argv=None) -> None:
     ap.add_argument("--prior", default="0.5,0.0", help="rho, delta before any event")
     ap.add_argument("--lam", type=float, default=1.0, help="the prior's precision")
     ap.add_argument("--windows", type=int, default=10)
+    ap.add_argument("--skip-missing", action="store_true",
+                    help="ignore record events with no generation (the record walked the whole stream, a subsample was answered)")
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args(argv)
     prior = tuple(float(x) for x in args.prior.split(","))
     rows = [json.loads(line) for line in args.record.open()]
-    out, summary = combine(rows, load_generations(args.peers_memory), load_generations(args.question_alone), prior, args.lam)
+    out, summary = combine(rows, load_generations(args.peers_memory), load_generations(args.question_alone), prior, args.lam,
+                           skip_missing=args.skip_missing)
     mean = lambda key, sel=out: float(np.mean([o[key] for o in sel])) if sel else None
     share = lambda sel: float(np.mean([o["choice"] == PEERS_MEMORY for o in sel]))
     bands = collections.defaultdict(list)
