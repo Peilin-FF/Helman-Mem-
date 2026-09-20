@@ -98,3 +98,14 @@ def test_the_judges_features_of_one_event_are_a_function_the_features_step_and_a
     assert selected_layers(37) == [12, 24, 36] and selected_layers(29) == [9, 19, 28] and selected_layers(2) == [1]     # a third, two thirds, the last
     assert "event_features(" in inspect.getsource(step.main) and not hasattr(step, "_selected_layers")                 # one implementation
     assert list(inspect.signature(event_features).parameters)[:4] == ["model", "tokenizer", "record", "texts"]
+
+
+def test_sparse_feedback_picks_a_nested_share_of_the_stream():
+    from pipeline.record import feedback
+
+    ids = [f"e{i}" for i in range(4000)]
+    share = lambda r: sum(feedback(i, r, 0) for i in ids) / len(ids)
+    assert abs(share(0.01) - 0.01) < 0.005 and abs(share(0.1) - 0.1) < 0.015 and share(1.0) == 1.0 and share(0.0) == 0.0
+    small = {i for i in ids if feedback(i, 0.02, 0)}
+    assert small and small <= {i for i in ids if feedback(i, 0.05, 0)}          # nested: 2% is inside 5%
+    assert {i for i in ids if feedback(i, 0.05, 1)} != {i for i in ids if feedback(i, 0.05, 0)}   # a different mask per seed

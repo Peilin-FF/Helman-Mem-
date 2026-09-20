@@ -2,7 +2,8 @@
 
 The record is run exactly as at test time: cold start; for every event, in the stream order, the estimate p_i of every
 peer is read from the state built by the earlier events, the event's row is written, and only then are its verified
-peer labels written into the state. The PCA addresses are fit on --fit-features (label-free; the stream's own features
+peer labels written into the state. --feedback-ratio r keeps the reads and writes only a share r of the events (sparse
+feedback; the events are nested in r and fixed by --feedback-seed, so every question is still answered and scored). The PCA addresses are fit on --fit-features (label-free; the stream's own features
 when omitted). Peer slots are permuted per event (the record is identity-indexed, the prompt is not).
 
 With --own-slot K the answer in slot K is the central model's own question-only answer (pipeline.streams add --eval): the
@@ -58,6 +59,8 @@ def build(args) -> list[dict]:
     rng = np.random.default_rng(args.seed)
     labels = fs.labels.numpy()
     own = getattr(args, "own_slot", None)
+    ratio = float(getattr(args, "feedback_ratio", 1.0) or 0.0)
+    fb_seed = int(getattr(args, "feedback_seed", 0) or 0)
     rows = []
     for pos, t in enumerate(order.tolist()):
         r = int(fs.real[t])
@@ -80,9 +83,26 @@ def build(args) -> list[dict]:
         }
         if own is not None:
             row.update(own_prob=round(prob_from_logit(float(ell[own])), 4), own_correct=int(y[own]), own_evidence=round(float(n_eff[own]), 1))
+        fed = feedback(fs.ids[t], ratio, fb_seed)
+        if ratio < 1.0:
+            row["feedback"] = int(fed)
         rows.append(row)
-        runtime.write(t, X, y)   # every answer's label, the own answer's included
+        if fed:
+            runtime.write(t, X, y)   # every answer's label, the own answer's included
     return rows
+
+
+def feedback(event_id, ratio: float, seed: int) -> bool:
+    """Does this event's outcome reach the record? A fixed share of the stream, the same events for every run of the same
+    seed and nested in the ratio: an event fed at ratio r is fed at every larger ratio (u < r implies u < r')."""
+    if ratio >= 1.0:
+        return True
+    if ratio <= 0.0:
+        return False
+    import hashlib
+
+    h = hashlib.sha256(f"{seed}:{event_id}".encode()).digest()[:8]
+    return int.from_bytes(h, "big") / float(1 << 64) < ratio
 
 
 def prompt_slots(real: int, own: int | None, seed: int) -> list[int]:
@@ -107,6 +127,9 @@ def main(argv=None) -> None:
     ap.add_argument("--seed", type=int, default=0, help="the per-event peer-slot permutation")
     ap.add_argument("--own-slot", type=int, default=None, help="the slot of the central model's own answer: recorded, not shown")
     ap.add_argument("--save-addresses", type=Path, default=None, help="also write every event's projected address (torch file)")
+    ap.add_argument("--feedback-ratio", type=float, default=1.0, help="the share of events whose verified labels reach the record "
+                    "(read happens for every event; nested in the ratio, fixed by --feedback-seed)")
+    ap.add_argument("--feedback-seed", type=int, default=0)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--windows", type=int, default=8)
     ap.add_argument("--device", default="cuda:0")
