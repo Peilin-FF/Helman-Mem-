@@ -4,10 +4,12 @@ Reliability-weighted voting (Nitzan-Paroush) needs to know which candidates
 agree.  Agreement is defined per task type with the repository's own graders so
 that a vote never uses information the evaluator does not have:
 
-* mcqa / boolqa / shortqa: the frozen OOD canonicalisation (``canonical_answer`` below);
+Each registered task names its rule (``agreement:`` in configs/tasks/<name>.yaml):
+
+* canonical (mcqa / boolqa / shortqa): the frozen OOD canonicalisation (``canonical_answer`` below);
 * math: pairwise ``math_equal`` on the extracted final answers;
-* rag: SQuAD-normalised extracted short answers;
-* code: no agreement is measurable (every program is its own group).
+* qa (rag, subqa): SQuAD-normalised extracted short answers;
+* none (code): no agreement is measurable (every answer is its own group).
 
 Correctness labels are never consulted here.
 """
@@ -17,6 +19,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from feedback_state.tasks import (
+    TASK_CONFIGS,
     _mcqa_pred_label,
     _normalise_label,
     _normalize_bool_label,
@@ -77,10 +80,11 @@ def answer_groups(record: dict[str, Any], texts: Sequence[str]) -> list[int]:
     """Return group ids (0..k-1) per candidate; equal ids = same answer."""
     n = len(texts)
     task = task_type_of(record)
-    if task in ("mcqa", "boolqa", "shortqa"):
+    rule = TASK_CONFIGS.get(task, {}).get("agreement", "none")     # the task's agreement rule (configs/tasks/<task>.yaml)
+    if rule == "canonical":
         keys = [canonical_answer(record, t) for t in texts]
         return _ids([None if k == INVALID_ANSWER else k for k in keys])
-    if task == "math":
+    if rule == "math":
         finals = [extract_final_answer(t) for t in texts]
         ids = [-1] * n
         nxt = 0
@@ -94,7 +98,7 @@ def answer_groups(record: dict[str, Any], texts: Sequence[str]) -> list[int]:
                         ids[j] = nxt
             nxt += 1
         return ids
-    if task == "rag":
+    if rule == "qa":
         keys = [_normalize_qa(qa_extract_answer(t)) for t in texts]
         return _ids([k or None for k in keys])
     return list(range(n))  # code and unknown task types: no measurable agreement

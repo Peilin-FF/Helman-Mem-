@@ -24,7 +24,8 @@ from __future__ import annotations
 import re
 import string
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Callable
 
 from feedback_state.utils import extract_final_answer, math_equal
@@ -482,68 +483,25 @@ def _code_prompt(record: dict[str, Any], with_context: bool) -> str:
     )
 
 
-def _dbdiag_correct(text: str, record: dict[str, Any]) -> bool:
-    """The benchmark's rule (MultiAgentBench, database): one of the allowed number of predicted root causes is a true one."""
-    from feedback_state.swarm import hit
-
-    return hit(str(text), [str(c) for c in (record.get("answer") or [])], int(record.get("number_of_labels_pred", 3)))
-
-
-def _dbdiag_target(text: str, record: dict[str, Any]) -> float:
-    return 1.0 if _dbdiag_correct(text, record) else 0.0
-
-
-def _dbdiag_extract(text: str) -> str:
-    from feedback_state.swarm import predicted_causes
-
-    return ", ".join(predicted_causes(str(text)))
+# A worker's report on a sub-question (pipeline.team): a sentence that carries the gold entity is right.
+def _subqa_target(text: str, record: dict[str, Any]) -> float:
+    golds = _qa_gold_answers(record)
+    f1 = qa_f1(qa_extract_answer(text), golds)
+    if f1 >= 0.5:
+        return f1
+    words = f" {_normalize_qa(text)} "
+    held = len(words.split()) <= 20 and any(f" {_normalize_qa(g)} " in words for g in golds if _normalize_qa(g))
+    return 1.0 if held else f1
 
 
-def _dbdiag_prompt(record: dict[str, Any], with_context: bool) -> str:
-    return (f"{record.get('problem', '')}\n\nName the most likely root causes, most likely first (one to three), and end with a line "
-            "of the form 'Final answer: <CAUSE_1>, <CAUSE_2>' using the exact names.")
+def _subqa_correct(text: str, record: dict[str, Any]) -> bool:
+    return _subqa_target(text, record) >= 0.5
 
 
-# ClassEval's methods, one sub-step each (feedback_state.classeval): graded by the method's hidden tests in the gold class
-def _classeval_target(text: str, record: dict[str, Any]) -> float:
-    from feedback_state.classeval import target
-
-    return target(text, record)
-
-
-def _classeval_correct(text: str, record: dict[str, Any]) -> bool:
-    return _classeval_target(text, record) >= 0.5
-
-
-def _classeval_extract(text: str) -> str:
-    from feedback_state.classeval import extract
-
-    return extract(text)
-
-
-def _classeval_prompt(record: dict[str, Any], with_context: bool) -> str:
-    from feedback_state.classeval import prompt
-
-    return prompt(record, with_context)
-
-
-def _classeval_feedback(record: dict[str, Any], text: str) -> tuple[bool, str]:
-    from feedback_state.classeval import visible_check
-
-    return visible_check(record, text)
-
-
-def _classeval_display(record: dict[str, Any], text: str) -> str:
-    from feedback_state.classeval import display
-
-    return display(record, text)
-
-
-REGISTRY: dict[str, TaskSpec] = {
-    "classeval": TaskSpec("classeval", _classeval_target, _classeval_correct, _classeval_extract, _classeval_prompt,
-                          feedback_fn=_classeval_feedback, display_fn=_classeval_display),
-    # database diagnosis (the swarm): the agents' findings carry their own verdict labels, the central model's diagnosis is graded
-    "dbdiag": TaskSpec("dbdiag", _dbdiag_target, _dbdiag_correct, _dbdiag_extract, _dbdiag_prompt, precomputed=True),
+# The grading rules. A task type is registered by a file, configs/tasks/<name>.yaml, that names its rule here (`grader:`) and
+# carries what is not code: the central model's instruction, the peers' answer budget, whether a passage is shown, the vote's
+# agreement rule. A new task over an existing rule is a new file; a new rule is a function here plus its file.
+GRADERS: dict[str, TaskSpec] = {
     "math": TaskSpec("math", _math_target, _math_correct, extract_final_answer, _math_prompt),
     "rag": TaskSpec("rag", _rag_target, _rag_correct, qa_extract_answer, _rag_prompt),
     "boolqa": TaskSpec(
@@ -556,13 +514,42 @@ REGISTRY: dict[str, TaskSpec] = {
     "code": TaskSpec(
         "code", _code_target, _code_correct, code_extract_answer, _code_prompt, precomputed=True
     ),
+    "subqa": TaskSpec("subqa", _subqa_target, _subqa_correct, qa_extract_answer, _rag_prompt),
 }
+
+TASKS_DIR = Path(__file__).resolve().parents[1] / "configs" / "tasks"
+
+
+def load_task_configs(folder: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Every registered task type: configs/tasks/<name>.yaml -> {grader, instruction, max_tokens, ...}, by file name."""
+    import yaml
+
+    out = {}
+    for f in sorted(Path(folder or TASKS_DIR).glob("*.yaml")):
+        if not f.name.startswith("_"):
+            out[f.stem.lower()] = dict(yaml.safe_load(f.read_text()) or {}, name=f.stem.lower(), file=str(f))
+    return out
+
+
+TASK_CONFIGS: dict[str, dict[str, Any]] = load_task_configs()
+unknown = {n: c.get("grader") for n, c in TASK_CONFIGS.items() if c.get("grader") not in GRADERS}
+if unknown:
+    raise KeyError(f"configs/tasks: no grading rule for {unknown}; rules: {sorted(GRADERS)}")
+REGISTRY: dict[str, TaskSpec] = {n: replace(GRADERS[c["grader"]], name=n) for n, c in TASK_CONFIGS.items()}
+
+
+def task_config(name: str) -> dict[str, Any]:
+    """A registered task's settings (configs/tasks/<name>.yaml)."""
+    key = str(name or DEFAULT_TASK_TYPE).lower()
+    if key not in TASK_CONFIGS:
+        raise KeyError(f"Unknown task_type {name!r}. Registered (configs/tasks/): {sorted(TASK_CONFIGS)}")
+    return TASK_CONFIGS[key]
 
 
 def get_task(name: str) -> TaskSpec:
     key = str(name or DEFAULT_TASK_TYPE).lower()
     if key not in REGISTRY:
-        raise KeyError(f"Unknown task_type {name!r}. Registered: {sorted(REGISTRY)}")
+        raise KeyError(f"Unknown task_type {name!r}. Registered (configs/tasks/): {sorted(REGISTRY)}")
     return REGISTRY[key]
 
 

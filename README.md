@@ -50,7 +50,6 @@ Frozen Qwen3-4B, thinking off, on whole streams (answers graded by the streams' 
 git clone https://github.com/Peilin-FF/Helman-Mem-.git sigma-mem && cd sigma-mem
 conda create -n sigma python=3.12 && conda activate sigma
 pip install -r requirements_qwen3.txt          # torch 2.6.0 (CUDA 12.4), transformers 4.56.2, vLLM 0.8.5 (exact)
-pip install -r requirements_classeval.txt      # only for ClassEval: what its classes and their tests import (the grader runs them here)
 bash training/setup_env.sh                     # only for training: hydra, tensordict, flash-attn for the vendored verl
 python datasets/download.py                    # the released datasets from Hugging Face -> data/ (streams, misleading answers and streams)
 pytest tests/unit                              # CPU only: the rules, the record, the configs and job expansion
@@ -107,10 +106,8 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 | `combination_families` | combination for Llama-3.1-8B, Ministral-8B, Qwen2.5-7B, phi-4 and Qwen3-14B, each its own judge (a guide for running it elsewhere) | [docs/experiments/combination_families.md](docs/experiments/combination_families.md) |
 | `baselines` | multi-agent baselines on the combination streams: majority vote (peers; peers + own answer) and multi-agent debate (1 and 2 rounds; debate + vote) | [docs/experiments/baselines.md](docs/experiments/baselines.md) |
 | `baselines_families` | the baselines for Qwen3-8B, Qwen3-14B, Llama-3.1-8B, Ministral-8B, phi-4 and Qwen2.5-7B, each its own judge; runs the missing combination steps first (a guide for running it elsewhere) | [docs/experiments/baselines_families.md](docs/experiments/baselines_families.md) |
-| `swarm` | a real agent swarm: MultiAgentBench's database diagnosis (five agents, star coordination) run with Qwen3-4B; the agents' findings are the answers, so the record, peers + memory and combination apply against the benchmark's own decision | [docs/experiments/swarm.md](docs/experiments/swarm.md) |
-| `classeval` | a swarm with open-ended sub-tasks: Qwen3-4B builds ClassEval's 100 classes one method at a time; the six peers work on every method as agents (they run the docstring's examples and revise), Qwen3-4B commits a method (alone, reading the peers, with the tilt, or by combination), every answer is verified by the method's hidden tests as soon as it is done and the record is written before the next method | [docs/experiments/classeval.md](docs/experiments/classeval.md) |
-| `classeval_offline` | the teacher-forced ablation: every method sees the gold methods before it, so the peers' answers are generated once and the offline steps apply | [docs/experiments/classeval.md](docs/experiments/classeval.md) |
-| `marble_db_online` | the database swarm online: one planner (Qwen3-4B) per condition, every root cause it assigns investigated by the same six peers (MARBLE agents querying the injected database), Qwen3-4B committing the verdict the planner reads; every finding labelled against the injected anomaly at once, the record written before the next planner iteration | [docs/experiments/marble_db_online.md](docs/experiments/marble_db_online.md) |
+| `agent_team` | the record inside a lead-worker team: Qwen3-4B hands every sub-task (a hop of a MuSiQue question) to ONE source of a pool (six models with different retrieval tools, or itself), in the order the record gives from the sub-task alone; the report is verified by the lead's own check (does it meet what I expected?) or, as a second illustration, by the dataset's evaluator, and a report that fails sends the sub-task to the next source; after the commit the gold labels of every report that was produced, the failed ones included, are written, and no others; against an order by success counts and a random order | [docs/experiments/agent_team.md](docs/experiments/agent_team.md) |
+| `agent_team_qwen3_8b`, `agent_team_qwen3_14b`, `agent_team_qwen25`, `agent_team_llama31`, `agent_team_ministral`, `agent_team_phi4` | the same team with another lead (Qwen3-8B, Qwen3-14B, Qwen2.5-7B, Llama-3.1-8B, Ministral-8B, phi-4): its own answers, its check of the reports and its record; the workers' reports are reused | [docs/experiments/agent_team.md](docs/experiments/agent_team.md) |
 | `train_combination` | GRPO of Qwen3-4B under combination: per question, before its rollouts, combination picks peers + memory or question alone from its online state; one epoch | [docs/experiments/train_combination.md](docs/experiments/train_combination.md) |
 | `train_tilt` | GRPO of the central model with and without the tilt | [docs/experiments/train_tilt.md](docs/experiments/train_tilt.md) |
 
@@ -118,21 +115,24 @@ bash run.sh configs/experiments/main.yaml --steps evaluate --gpus 4,5,6,7 --set 
 
 | stage | entry point | does |
 |---|---|---|
-| questions | `pipeline/classeval.py` | a benchmark's own sub-tasks as a question stream (ClassEval's methods, each gold method checked by its hidden tests); `online` runs the ClassEval swarm |
+| questions | `pipeline/team.py build` | a benchmark's own sub-tasks as a stream with one view per tool (`built: musique`: MuSiQue's hops, teacher-forced) |
 | peers | `pipeline/peers.py` | a peer model answers every event of a stream, honestly or with verified misleading answers; `--turns N`: as an agent revising on the task's visible check |
 | streams | `pipeline/streams.py` | a derived stream: peers added, or answers replaced under a regime |
 | features | `pipeline/features.py` | the frozen judge reads question + answers; its hidden states address the record |
 | record | `pipeline/record.py` | the Bayesian record along the stream, read before write, and its quality |
 | train | `pipeline/train.py` | GRPO of the central model (`training/`) |
 | evaluate | `pipeline/evaluate.py` | the central model answers each event under a condition; answers graded |
+| direct | `pipeline/evaluate.py` (question alone) | the baseline without a team: the lead answers every whole task of `team.direct` directly, alone |
+| verify | `pipeline/review.py` | the lead's check of every report of a team's stream: does it meet what the lead expected of it? |
+| team | `pipeline/team.py replay` | the lead's choice of source per sub-task (`feedback_state/agent_team.py`) replayed along a stream: the record against success counts and a random order, with and without the lead's check |
 | table | `pipeline/table.py` | the experiment's result table |
 
 Each entry point is a plain command with explicit paths (`python -m pipeline.<stage> --help`); `pipeline/run.py` derives
 the paths from the config and schedules the jobs on the GPUs, one GPU each (a training run takes `gpus_per_run`).
 
-### Registering datasets and models
+### Registering datasets, models, peers and tasks
 
-Datasets, models and peers are registered one YAML file each, and experiments refer to them by file name, so
+Datasets, models, peers and task types are registered one YAML file each, and experiments refer to them by file name, so
 adding one is adding a file (`python -m pipeline.registry` lists everything and checks every reference):
 
 ```
@@ -140,7 +140,12 @@ configs/datasets/<name>.yaml   kind stream: {path, peers: [peer names, in peer_0
                                kind misleading: {base, answers, regime};
                                or a group: {group: [names]}. `include: _misleading.yaml` pulls in a template.
 configs/models/<name>.yaml     {hf_id, path (under paths.models_root), engine, env_vars, prefix_caching, ...}
-configs/peers/<name>.yaml      {model: a registered model, reasoning, ...}: one peer; a new peer is a new file
+configs/peers/<name>.yaml      {model: a registered model, reasoning, tool, ...}: one peer; a new peer is a new file. `tool:` names
+                               the view of the stream the peer answers from (a stream's `views:`, e.g. what a searcher retrieves)
+configs/tasks/<name>.yaml      {grader, agreement, context, instruction, max_tokens}: one task type. `grader:` names a grading rule
+                               in feedback_state/tasks.py (GRADERS); the rest is what is not code: the central model's instruction,
+                               the peers' answer budget, whether the passage is shown, when two answers agree in a vote. A new task
+                               over an existing rule is a new file; a new rule is one function plus its file
 ```
 
 For example a new regime, two peers that always lie, is `configs/datasets/indist6_saboteurs.yaml`:
@@ -157,7 +162,7 @@ and `--set "datasets=[indist6_saboteurs]"` runs it (the streams step builds it f
 
 Copy the closest file in `configs/experiments/` and change what differs. What a file can set:
 
-- `steps`: any of swarm, peers, streams, own, features, record, train, evaluate, vote, combination, table.
+- `steps`: any of questions, peers, streams, own, direct, verify, features, record, train, evaluate, vote, combination, team, table.
 - `central`: the models that answer (registered names).
 - `datasets`: registered datasets or groups. The steps follow from their kinds: `peers` generates the answers datasets
   the named misleading datasets need, `streams` builds those, and features, record and evaluate run on each.
@@ -165,6 +170,7 @@ Copy the closest file in `configs/experiments/` and change what differs. What a 
   because results are stored by condition name). A condition with `mode: debate` answers after `round` debate rounds and
   reads its `previous` condition's answers; `vote_conditions` (`mode: vote`, optional `own`) are majority votes, step `vote`.
 - `record`: design, dim, lam, order, fit (a dataset name, or `self`).
+- `team`: dim, orders, checker, calls, dataset_check, direct (the lead's choice of source and the verification before the commit, docs/experiments/agent_team.md).
 - `own_answer: true`: the central model's question-only answer joins every stream as one more answer, recorded like the
   peers' but kept out of the prompt (step `own`); `combination` then picks peers + memory or question alone per event.
 - `arms`, `overrides`, `tilt_overrides`, `train_data`, `val_data`: training (docs/experiments/train_tilt.md; any key of
@@ -196,10 +202,10 @@ that needs it.
 
 ```
 run.sh               the one command
-configs/             base.yaml (paths, defaults, conditions), datasets/, models/, peers/ (the registries), experiments/,
+configs/             base.yaml (paths, defaults, conditions), datasets/, models/, peers/, tasks/ (the registries), experiments/,
                      train/grpo.yaml
 pipeline/            the stages, the runner (run.py), config loading and the output layout
-feedback_state/      the method: kalman_memory.py (the record), addresses.py, memory_runtime.py, attn_bias.py +
+feedback_state/      the method: kalman_memory.py (the record), addresses.py, memory_runtime.py, agent_team.py (the lead-worker loop), attn_bias.py +
                      vllm_attn_bias.py (the tilt), judge_prompt.py, memory_generator.py (prompts, grading), tasks.py,
                      adversarial.py (misleading answers and regimes), peer_generation.py
 training/            kalman_rl/ (the GRPO code), scripts/train_grpo.sh, verl/ (vendored, patched)

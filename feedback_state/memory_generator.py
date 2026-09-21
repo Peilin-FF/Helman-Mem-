@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any, Sequence
 
-from feedback_state.tasks import _choice_labels, _rag_context_text, code_extract_answer, peer_is_correct, task_type_of
+from feedback_state.tasks import TASK_CONFIGS, _choice_labels, _rag_context_text, code_extract_answer, peer_is_correct, task_type_of
 
 # The system prompts of every stored result (records built 2026-09-07). A reminder against long reasoning was appended
 # to both on 2026-09-09 for thinking mode, which was dropped; it is not part of them, so rebuilt records match the stored ones.
@@ -19,18 +19,8 @@ SYSTEM_PEERS = (
 )
 SYSTEM_SOLO = "Answer the question."
 
-INSTRUCTIONS = {
-    "math": "Solve the problem. Reason briefly, then end with a line of the form 'Final answer: <number>'.",
-    "rag": "Answer the question using the evidence. End with a line of the form 'Final answer: <short answer>'.",
-    "mcqa": "Choose the correct option. End with a line of the form 'Final answer: (<letter>)'.",
-    "boolqa": "Decide. End with a line of the form 'Final answer: <yes or no>'.",
-    "shortqa": "Answer briefly. End with a line of the form 'Final answer: <answer>'.",
-    "code": "Write a complete Python program that reads from standard input and writes the answer to standard "
-            "output (use input()/sys.stdin and print()). Return the program inside a single ```python code block.",
-    "dbdiag": "Decide which of the possible root causes explain the database's performance issue, most likely first (one to three). "
-              "Reason briefly from the evidence, then end with a line of the form 'Final answer: <CAUSE_1>, <CAUSE_2>' using the exact names.",
-    "classeval": "Write the complete method (its def line and body) in a single ```python code block. Do not repeat the rest of the class.",
-}
+# The central model's instruction line per task type: each registered task carries its own (configs/tasks/<name>.yaml).
+INSTRUCTIONS = {name: str(cfg["instruction"]) for name, cfg in TASK_CONFIGS.items() if cfg.get("instruction")}
 
 
 def _clip(text: str, limit: int) -> str:
@@ -53,12 +43,10 @@ def build_messages(record: dict[str, Any], texts: Sequence[str], *, mode: str, i
         choices = record.get("choices") or []
         if choices:
             parts.append("Options:\n" + "\n".join(f"({labels[i] if i < len(labels) else chr(65 + i)}) {c}" for i, c in enumerate(choices)))
-    if include_context and task == "rag":
+    if include_context and TASK_CONFIGS.get(task, {}).get("context"):   # the task shows its passage (configs/tasks/<task>.yaml)
         ctx = _rag_context_text(record)
         if ctx:
             parts.append(f"Context / Evidence:\n{ctx}")
-    if include_context and task == "classeval":   # the class so far; methods with a body of `...` exist and may be called
-        parts.append(f"The class so far (methods whose body is `...` are implemented elsewhere):\n```python\n{str(record.get('context', '')).rstrip()}\n```")
     if mode == "peers":
         parts.append("Peer answers:\n\n" + "\n\n".join(peer_block(i, t, char_limit=char_limit) for i, t in enumerate(texts)))
     parts.append("Instruction: " + INSTRUCTIONS.get(task, INSTRUCTIONS["shortqa"]))
@@ -109,9 +97,6 @@ def grade(record: dict[str, Any], text: str, *, code_timeout: float = 10.0) -> b
             return False
         from data.builders.common.code_grading import score_code_record  # sandboxed subprocess execution
         return bool(score_code_record(record, program, timeout=code_timeout).passed)
-    if task == "classeval":   # the method's hidden tests, the answer put into the gold class
-        from feedback_state.classeval import hidden_test
-        return bool(hidden_test(record, text).passed)
     return bool(peer_is_correct(record, None, text))
 
 

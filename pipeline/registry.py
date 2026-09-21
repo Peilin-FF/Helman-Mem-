@@ -7,11 +7,15 @@
                                      misleading   a stream whose answers are replaced under a regime (base, answers, regime)
                                    or a group: `group: [names]`, which experiments can name instead of its members
     configs/models/<name>.yaml     a model: its directory under paths.models_root and how to run it
-    configs/peers/<name>.yaml      a peer: the registered model that answers, and peer-only settings (reasoning)
+    configs/peers/<name>.yaml      a peer: the registered model that answers, and peer-only settings (reasoning; tool: the
+                                   view of a stream with `views` it answers from, e.g. a searcher's retrieval)
+    configs/tasks/<name>.yaml      a task type: its grading rule (grader: a rule of feedback_state/tasks.py), the central
+                                   model's instruction, the peers' answer budget, whether a passage is shown, the vote's
+                                   agreement rule
 
 The file name is the registered name. Files starting with "_" are templates, not registered: `include: _misleading.yaml`
 merges one under a file, and string values may use {name} and {base}. Experiments refer to registered names only, so
-adding a dataset or a model is adding a file.
+adding a dataset, a model, a peer or a task is adding a file.
 
     python -m pipeline.registry            list everything and check every reference (exit 1 on a problem)
 """
@@ -81,6 +85,7 @@ class Registry:
         self.datasets = {k: dict(v, kind=v.get("kind", "stream")) for k, v in entries.items() if "group" not in v}
         self.models = _scan(root / "models")
         self.peers = _scan(root / "peers")
+        self.tasks = _scan(root / "tasks")
 
     # --- lookups ------------------------------------------------------------------------------------------------------
     def dataset(self, name: str) -> dict:
@@ -99,6 +104,11 @@ class Registry:
         if name not in self.peers:
             raise _unknown("peer", name, self.peers)
         return self.peers[name]
+
+    def task(self, name: str) -> dict:
+        if name not in self.tasks:
+            raise _unknown("task", name, self.tasks)
+        return self.tasks[name]
 
     def expand(self, names) -> list[str]:
         """Dataset names with every group replaced by its members, in order, each once."""
@@ -135,12 +145,17 @@ class Registry:
             where = d["file"]
             kind = d["kind"]
             need(kind in KINDS, f"{where}: kind {kind!r} is not one of {KINDS}")
+            need("task" not in d or d["task"] in self.tasks, f"{where}: task {d.get('task')!r} is not registered (configs/tasks/{d.get('task')}.yaml)")
             if kind == "stream":
                 need("path" in d, f"{where}: a stream needs path (under paths.data)")
                 listed = d.get("peers")
-                need(isinstance(listed, list) and listed, f"{where}: peers must list the stream's peers in peer_0, peer_1, ... order")
+                need(isinstance(listed, list) and (listed or d.get("solo_only")), f"{where}: peers must list the stream's peers in peer_0, peer_1, ... order "
+                     f"(an empty list only with solo_only: true, a stream a model answers alone)")
                 for p in listed if isinstance(listed, list) else []:
                     need(p in self.peers, f"{where}: peer {p!r} is not registered (configs/peers/{p}.yaml)")
+                    tool = self.peers.get(p, {}).get("tool")
+                    views = d.get("views") or self.datasets.get(d.get("base"), {}).get("views") or {}
+                    need(tool is None or tool in views, f"{where}: peer {p!r} answers from the view {tool!r}, which the stream (or its base) does not list under views")
                 continue
             base = self.datasets.get(d.get("base"))
             need(base is not None and base["kind"] == "stream", f"{where}: base {d.get('base')!r} is not a registered stream")
@@ -161,6 +176,12 @@ class Registry:
             need("path" in m, f"{m['file']}: a model needs path (under paths.models_root, or absolute)")
         for name, p in self.peers.items():
             need(p.get("model") in self.models, f"{p['file']}: model {p.get('model')!r} is not registered")
+        from feedback_state.tasks import GRADERS
+
+        for name, t in self.tasks.items():
+            need(t.get("grader") in GRADERS, f"{t['file']}: grader {t.get('grader')!r} is not a grading rule of feedback_state/tasks.py ({', '.join(sorted(GRADERS))})")
+            need(isinstance(t.get("instruction"), str) and t["instruction"].strip(), f"{t['file']}: a task needs the central model's instruction")
+            need(t.get("agreement", "none") in ("canonical", "math", "qa", "none"), f"{t['file']}: agreement must be canonical, math, qa or none")
         return bad
 
 
@@ -191,7 +212,11 @@ def main(argv=None) -> None:
         print(f"  {n:34s} {m.get('hf_id', m['path'])}" + "".join(f"  {k}={m[k]}" for k in ("engine", "reasoning", "env_vars") if k in m))
     print("peers")
     for n, p in reg.peers.items():
-        print(f"  {n:34s} model {p.get('model')}" + ("  reasoning" if p.get("reasoning") else ""))
+        print(f"  {n:34s} model {p.get('model')}" + ("  reasoning" if p.get("reasoning") else "") + (f"  tool {p['tool']}" if p.get("tool") else ""))
+    print("tasks")
+    for n, t in reg.tasks.items():
+        print(f"  {n:34s} grader {t.get('grader')}  agreement {t.get('agreement', 'none')}" + (f"  max_tokens {t['max_tokens']}" if "max_tokens" in t else "")
+              + ("  context" if t.get("context") else ""))
     bad = reg.problems()
     for b in bad:
         print(f"PROBLEM {b}")

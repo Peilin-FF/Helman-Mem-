@@ -11,7 +11,9 @@ import os
 
 MODELS = [("q3_4b", "Qwen3-4B"), ("qwen3_8b", "Qwen3-8B")]
 RATIOS = ["p000", "p025", "p050", "p075", "p100"]
-NBINS = 10
+NBINS = 24            # the pooled curves
+PANEL_BINS = 16       # one misleading rate on its own
+STREAM_BINS = 24      # kappa along the stream
 
 
 def rows(path):
@@ -43,25 +45,27 @@ def consulted(r):
 # ---------------------------------------------------------------- 1
 exp1 = {}
 for tag, name in MODELS:
-    per_ratio = {}
+    per_ratio, per_ratio_panel = {}, {}
     for ratio in RATIOS:
         g = comb(tag, ratio)
         if not g:
             continue
         per_ratio[ratio] = bins([(r["own_prob"], r["question_alone_correct"]) for r in g])
+        per_ratio_panel[ratio] = bins([(r["own_prob"], r["question_alone_correct"]) for r in g], PANEL_BINS)
     g0 = comb(tag, "p000")
     if not g0:
         continue
     # kappa along the stream, in 20 position bins, against the autonomous accuracy there
     g0 = sorted(g0, key=lambda r: r["pos"])
-    n, nb = len(g0), 20
+    n, nb = len(g0), STREAM_BINS
     along = []
     for i in range(nb):
         chunk = g0[n * i // nb:n * (i + 1) // nb]
         along.append({"pos": sum(r["pos"] for r in chunk) / len(chunk),
                       "kappa": sum(r["own_prob"] for r in chunk) / len(chunk),
                       "acc": sum(r["question_alone_correct"] for r in chunk) / len(chunk), "n": len(chunk)})
-    exp1[tag] = {"model": name, "n": n, "bins": per_ratio["p000"], "by_ratio": per_ratio, "along": along,
+    exp1[tag] = {"model": name, "n": n, "bins": per_ratio["p000"], "by_ratio": per_ratio,
+                 "by_ratio_panel": per_ratio_panel, "along": along,
                  "overall_acc": sum(r["question_alone_correct"] for r in g0) / n,
                  "overall_kappa": sum(r["own_prob"] for r in g0) / n}
 
@@ -75,7 +79,7 @@ for tag, name in MODELS:
             continue
         pts = [(r["peers_memory_value"] - r["own_prob"], r["peers_memory_correct"] - r["question_alone_correct"]) for r in g]
         pooled += pts
-        per_ratio[ratio] = {"bins": bins(pts), "n": len(pts)}
+        per_ratio[ratio] = {"bins": bins(pts, PANEL_BINS), "n": len(pts)}
         help_c = [r for r in g if r["peers_memory_correct"] and not r["question_alone_correct"]]
         help_a = [r for r in g if r["question_alone_correct"] and not r["peers_memory_correct"]]
         sel[ratio] = {"consult_cases": len(help_c), "consult_picked": sum(1 for r in help_c if consulted(r)),

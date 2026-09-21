@@ -93,6 +93,10 @@ class Layout:
     def features_dir(self, model: str, stream: str) -> Path:
         return self.outputs / "features" / model / self._own(stream)
 
+    def review_dir(self, model: str, stream: str) -> Path:
+        """The lead's checks of a team's reports (pipeline.review)."""
+        return self.outputs / "review" / model / self._own(stream)
+
     def record_file(self, model: str, stream: str) -> Path:
         rec = self.cfg.get("record", {})
         fit = rec.get("fit", "self")

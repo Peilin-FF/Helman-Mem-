@@ -11,12 +11,14 @@ import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
-from feedback_state.tasks import get_task, task_type_of
+from feedback_state.tasks import TASK_CONFIGS, get_task, task_type_of
 
-DEFAULT_MAX_TOKENS = {"math": 512, "rag": 256, "code": 768, "boolqa": 96, "mcqa": 96, "shortqa": 96, "classeval": 1024}
+# A peer's answer budget per task type, from the task's registration (configs/tasks/<name>.yaml: max_tokens).
+DEFAULT_MAX_TOKENS = {name: int(cfg["max_tokens"]) for name, cfg in TASK_CONFIGS.items() if "max_tokens" in cfg}
 # A misleading answer argues for its conclusion: 96 tokens cut most arguments off before the final line (the
-# 2026-09-13 run had 37% of one peer's OOD answers rewritten for that reason), so the short-answer tasks get 256.
-MISLEADING_MAX_TOKENS = {**DEFAULT_MAX_TOKENS, "boolqa": 256, "mcqa": 256, "shortqa": 256}
+# 2026-09-13 run had 37% of one peer's OOD answers rewritten for that reason), so the short-answer tasks get 256
+# (misleading_max_tokens).
+MISLEADING_MAX_TOKENS = {**DEFAULT_MAX_TOKENS, **{name: int(cfg["misleading_max_tokens"]) for name, cfg in TASK_CONFIGS.items() if "misleading_max_tokens" in cfg}}
 REASONING_MAX_TOKENS = 4096
 
 

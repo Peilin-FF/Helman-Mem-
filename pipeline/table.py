@@ -141,9 +141,6 @@ def build(cfg: dict, smoke: bool) -> str:
             notes.append("combination: per event peers + memory or question alone, chosen by the reading line")
             continue
         cd = cfg.get("conditions", {}).get(c, {})
-        if cd.get("mode") == "swarm":
-            notes.append(f"{cond_label(c)} (`{c}`): {cd.get('note', 'produced by the swarm step')}")
-            continue
         if cd.get("mode") == "vote":
             notes.append(f"{cond_label(c)} (`{c}`): majority vote over the peers' answers" + (f" and the central model's answer in `{cd['own']}`" if cd.get("own") else ""))
             continue

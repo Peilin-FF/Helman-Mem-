@@ -42,7 +42,7 @@ def parse_args(argv=None):
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--merge", action="store_true", help="join <output>/shard*/ into <output> and stop")
     p.add_argument("--regrade", action="store_true", help="re-grade <output>/generations.jsonl with the current rules and rewrite its metrics; "
-                   "code and classeval rows keep their stored label (programs are not executed again)")
+                   "code rows keep their stored label (programs are not executed again)")
     p.add_argument("--model", help="the central model's directory (its tokenizer is always used)")
     p.add_argument("--checkpoint", type=Path, default=None, help="an HF checkpoint directory of a trained central model")
     p.add_argument("--record", type=Path, help="the record file of the stream (pipeline.record output); optional with --mode solo")
@@ -97,7 +97,7 @@ def curve(hits: np.ndarray, windows: int) -> dict:
 def summarise(rows: list[dict], windows: int) -> dict:
     """The metrics of graded rows ({correct, peer_correct, task_type} per event, in stream order)."""
     hits = np.array([int(r["correct"]) for r in rows])
-    oracle = np.array([int(max(r["peer_correct"])) for r in rows])
+    oracle = np.array([int(max(r["peer_correct"], default=0)) for r in rows])       # a stream nobody reports on (answered alone) has no peers
     majority = np.array([int(sum(r["peer_correct"]) * 2 > len(r["peer_correct"])) for r in rows])
     return {"accuracy": float(hits.mean()), "num_samples": int(len(hits)),
             "generated": curve(hits, windows), "oracle_any_peer": curve(oracle, windows),
@@ -143,7 +143,7 @@ def regrade(output: Path, stream: Path | None, windows: int) -> dict:
     rows = [json.loads(l) for l in (output / "generations.jsonl").open()]
     changed = 0
     for r in rows:
-        if r["task_type"] in ("code", "classeval"):
+        if r["task_type"] == "code":
             continue
         ok = int(grade(records[str(r["id"])], r["generation"]))
         changed += ok != int(r["correct"])
@@ -332,12 +332,6 @@ def write_results(args, rows, records, outputs, t0) -> None:
                          "peer_correct": r["peer_correct"], "memory_prob": r.get("memory_prob"), "generation": text})
         if "history" in r:   # debate: every answer of the central model so far, this round's last
             out_rows[-1]["history"] = r["history"] + [text]
-        if r["task_type"] == "dbdiag":   # the swarm's diagnoses: the benchmark's hit rule is `correct`; the exact set is kept too
-            from feedback_state.swarm import exact, predicted_causes
-
-            rec = records[str(r["id"])]
-            k = int(rec.get("number_of_labels_pred", 3))
-            out_rows[-1].update(exact=int(exact(text, list(rec.get("answer") or []), k)), predicted=predicted_causes(text)[:k])
     metrics = {"condition": args.condition, "mode": args.mode, "gamma": args.gamma, "swap_record": bool(args.swap),
                "bias_form": args.bias_form if args.gamma > 0 else None,
                "max_new_tokens": args.max_new_tokens, "engine": args.engine, "central_model": args.model,
