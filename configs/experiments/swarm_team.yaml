@@ -1,7 +1,0 @@
-# The agent swarm as a team of different models (docs/experiments/swarm.md): Qwen3-4B is the planner and the central model, the
-# five agents are the models registered as the dataset's peers. Every distinct model is served once (one GPU each when there
-# are enough) and `workers` task loops, each with its own PostgreSQL cluster, share the servers.
-base: swarm.yaml
-name: swarm_team
-datasets: [marble_db_team]
-swarm: {port: 8170, pg_port: 5460, workers: 5}

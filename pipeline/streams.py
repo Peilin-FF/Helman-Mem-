@@ -39,8 +39,8 @@ def peer_text(response: str) -> str:
 
 
 def shown_text(record: dict, response: str) -> str:
-    """An answer as the stream shows it to the judge and the central model: the task's display (TaskSpec.display_fn, e.g.
-    ClassEval's extracted method) where it has one, else peer_text."""
+    """An answer as the stream shows it to the judge and the central model: the task's display (TaskSpec.display_fn) where it
+    has one, else peer_text."""
     from feedback_state.tasks import get_task, task_type_of
 
     try:

@@ -1,3 +1,0 @@
-# agent5 of MultiAgentBench's database diagnosis when Qwen3-8B runs the swarm: the central model as the agent investigating FETCH_LARGE_DATA.
-model: qwen3_8b
-role: FETCH_LARGE_DATA

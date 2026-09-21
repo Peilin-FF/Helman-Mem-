@@ -1,8 +1,0 @@
-# The agent swarm's sub-steps, every one investigated by a pool of peers: 100 tasks x 5 root causes = 500 yes/no events ("is X a
-# root cause?"). For every task the benchmark's star loop runs once per peer below, that model behind all five agents and the
-# experiment's central model as the planner, all on the same injected database; a sub-step's candidate answers are the peers'
-# findings, each from its own queries, labelled against the injected anomaly. The central model's own team gives its own answer.
-path: marble_db_pool/test.jsonl
-peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5, the QA streams' pool
-events: 500
-built: pool

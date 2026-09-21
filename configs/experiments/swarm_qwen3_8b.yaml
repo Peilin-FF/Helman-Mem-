@@ -1,7 +1,0 @@
-# The agent swarm with Qwen3-8B as the planner, every agent and the central model (docs/experiments/swarm.md): the swarm
-# experiment on the 8B's own stream. Its ports and clusters are separate from the Qwen3-4B run's, so the two can run side by side.
-base: swarm.yaml
-name: swarm_qwen3_8b
-central: [qwen3_8b]
-datasets: [marble_db_qwen3_8b]
-swarm: {port: 8150, pg_port: 5450, shards: 4}

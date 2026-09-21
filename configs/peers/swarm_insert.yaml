@@ -1,3 +1,0 @@
-# agent1 of MultiAgentBench's database diagnosis: the central model, as the agent investigating INSERT_LARGE_DATA (pipeline.swarm).
-model: q3_4b
-role: INSERT_LARGE_DATA

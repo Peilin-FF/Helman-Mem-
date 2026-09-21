@@ -1,3 +1,0 @@
-# agent2 of MultiAgentBench's database diagnosis when Qwen3-8B runs the swarm: the central model as the agent investigating LOCK_CONTENTION.
-model: qwen3_8b
-role: LOCK_CONTENTION

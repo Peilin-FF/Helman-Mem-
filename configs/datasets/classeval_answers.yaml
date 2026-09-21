@@ -1,7 +1,0 @@
-# The pool's answers to every method of classeval_q (pipeline.peers --mode honest --turns 3), one directory per peer. Each peer is
-# an agent: it writes the method, the docstring's examples run on the class with its method in place (the visible check), and
-# it revises on the failure, up to three answers; the last one is labelled by the method's hidden tests.
-kind: answers
-base: classeval_q
-mode: honest
-turns: 3

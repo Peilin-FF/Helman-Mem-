@@ -1,3 +1,0 @@
-# agent3 of MultiAgentBench's database diagnosis in the team of different models: qwen25 as the agent investigating VACUUM.
-model: qwen25
-role: VACUUM

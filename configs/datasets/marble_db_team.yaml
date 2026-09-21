@@ -1,8 +1,0 @@
-# MultiAgentBench's database diagnosis run by a team of different models (see marble_db.yaml): the same 100 tasks, the planner and
-# central model is the experiment's (Qwen3-4B), and agent1 ... agent5 are the models of the five peers below, through the
-# benchmark's per-agent `llm`. Every one of them makes the benchmark's query_db tool call through vLLM (probed 2026-09-18:
-# Qwen2.5-7B 3/3, Mistral-7B-v0.3 3/3, Llama-3.1-8B 2/3, Ministral-8B 2/3; Phi-4-mini and Qwen2.5-Coder-7B never call it).
-path: marble_db_team/test.jsonl
-peers: [swarm_team_insert, swarm_team_lock, swarm_team_vacuum, swarm_team_index, swarm_team_fetch]   # peer_0 ... peer_4: agent1 ... agent5
-events: 100
-built: swarm

@@ -2,4 +2,3 @@
 hf_id: Qwen/Qwen3-8B
 path: Qwen3-8B
 engine: vllm
-tool_parser: hermes               # vLLM's tool-call parser, for the agent swarm (pipeline.swarm)

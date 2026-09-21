@@ -2,4 +2,3 @@
 hf_id: mistralai/Ministral-8B-Instruct-2410
 path: Ministral-8B-Instruct-2410
 engine: vllm
-tool_parser: mistral               # vLLM's tool-call parser, for the agent swarm (pipeline.swarm)

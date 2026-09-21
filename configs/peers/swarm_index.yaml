@@ -1,3 +1,0 @@
-# agent4 of MultiAgentBench's database diagnosis: the central model, as the agent investigating REDUNDANT_INDEX (pipeline.swarm).
-model: q3_4b
-role: REDUNDANT_INDEX

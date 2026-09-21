@@ -1,9 +1,0 @@
-# The agent swarm's sub-steps answered by a pool of peers (Qwen3-4B's agents gathered the evidence): 500 events, 100 tasks x 5 root
-# causes, each a yes/no question with the six peers' answers, labelled against the injected anomaly. The central model consults
-# the pool on every sub-step, and a task's diagnosis is the causes it answers yes to (pipeline.swarm diagnose).
-path: marble_db_steps/test.jsonl
-peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5
-events: 500
-built: answers                  # pipeline.streams add: the base's questions with the peers' generated answers
-base: marble_db_steps_q
-answers: marble_db_steps_answers

@@ -1,3 +1,0 @@
-# agent4 of MultiAgentBench's database diagnosis in the team of different models: mistral7b as the agent investigating REDUNDANT_INDEX.
-model: mistral7b
-role: REDUNDANT_INDEX

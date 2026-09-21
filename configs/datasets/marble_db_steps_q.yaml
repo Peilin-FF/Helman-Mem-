@@ -1,9 +1,0 @@
-# The sub-steps of the Qwen3-4B swarm run on MultiAgentBench's database diagnosis, as yes/no questions: one event per task and root
-# cause ("is X a root cause of this database's performance issue?"), the passage being the task and what the agent assigned to X
-# gathered (its queries and their results). Built by `pipeline.swarm steps` from outputs/swarm/q3_4b/marble_db; no answers yet:
-# the peers below answer it (marble_db_steps_answers), and the verifier is the injected anomaly.
-path: marble_db_steps_q/test.jsonl
-peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5, the QA streams' pool
-events: 500
-built: steps
-source: {model: q3_4b, dataset: marble_db}

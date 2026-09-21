@@ -1,9 +1,0 @@
-# ClassEval with the six peers on every method (docs/experiments/classeval.md): classeval_q's events with the pool's final
-# answers, each shown as its method in one code block, labelled by the method's hidden tests with the answer put into the gold
-# class (a peer is judged on its own method only).
-path: classeval6/test.jsonl
-peers: [gemma3_4b, phi4_mini, qwen25_coder_7b, llama31, deepseek_coder_v2_lite, r1_distill_qwen_7b]   # peer_0 ... peer_5
-events: 410
-built: answers                  # pipeline.streams add: the base's questions with the peers' generated answers
-base: classeval_q
-answers: classeval_answers
